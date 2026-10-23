@@ -11,6 +11,7 @@ export interface E2EFixtures {
   readonly owner: { readonly id: string; readonly email: string; readonly password: string };
   readonly pending: { readonly id: string; readonly email: string; readonly password: string };
   readonly approved: { readonly id: string; readonly email: string; readonly password: string };
+  readonly admin: { readonly id: string; readonly email: string; readonly password: string };
   readonly delegate: { readonly id: string; readonly email: string; readonly password: string };
 }
 
@@ -58,6 +59,7 @@ export default async function globalSetup(): Promise<void> {
   );
   const pending = await createAccount(admin, `pending-${runId}@example.com`, randomPassword());
   const approved = await createAccount(admin, `approved-${runId}@example.com`, randomPassword());
+  const ordinaryAdmin = await createAccount(admin, `admin-${runId}@example.com`, randomPassword());
   const delegate = await createAccount(admin, `delegate-${runId}@example.com`, randomPassword());
 
   await assertFirstUserIsOwner(admin, owner.id);
@@ -70,6 +72,18 @@ export default async function globalSetup(): Promise<void> {
   if (approvalError) {
     throw new Error(
       `Could not prepare the approved password-reset fixture: ${approvalError.message}`,
+    );
+  }
+
+  const { error: adminApprovalError } = await admin.rpc('admin_approve_user', {
+    p_user_id: ordinaryAdmin.id,
+    p_action: 'approve',
+    p_executor_id: owner.id,
+    p_target_role: 'admin',
+  });
+  if (adminApprovalError) {
+    throw new Error(
+      `Could not prepare the ordinary-admin project-settings fixture: ${adminApprovalError.message}`,
     );
   }
 
@@ -103,6 +117,7 @@ export default async function globalSetup(): Promise<void> {
     owner,
     pending,
     approved,
+    admin: ordinaryAdmin,
     delegate,
   };
 
@@ -117,6 +132,8 @@ export default async function globalSetup(): Promise<void> {
   process.env.E2E_PENDING_PASSWORD = pending.password;
   process.env.E2E_APPROVED_EMAIL = approved.email;
   process.env.E2E_APPROVED_PASSWORD = approved.password;
+  process.env.E2E_ADMIN_EMAIL = ordinaryAdmin.email;
+  process.env.E2E_ADMIN_PASSWORD = ordinaryAdmin.password;
 }
 
 async function createFirstOwner(

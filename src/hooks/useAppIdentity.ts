@@ -130,6 +130,8 @@ async function uploadBrandingAsset(
   return { path, hash };
 }
 
+export type AppIdentityAdminScope = 'general' | 'project';
+
 export interface AppIdentityAdminApi {
   readonly identity: AppIdentity;
   readonly logoUrl: string | null;
@@ -144,18 +146,19 @@ export interface AppIdentityAdminApi {
   readonly save: (input: SaveAppIdentityInput) => Promise<SaveAppIdentityResult>;
 }
 
-export function useAppIdentityAdmin(): AppIdentityAdminApi {
+export function useAppIdentityAdmin(scope: AppIdentityAdminScope = 'general'): AppIdentityAdminApi {
   const queryClient = useQueryClient();
   const { session, configured, loading: authLoading } = useAuth();
   const branding = useBranding();
 
   const accessQuery = useQuery({
-    queryKey: ['app-identity-can-manage', session?.user.id],
+    queryKey: ['app-identity-can-manage', scope, session?.user.id],
     enabled: Boolean(session?.user.id) && configured,
     retry: false,
     queryFn: async (): Promise<boolean> => {
-      const response: { data: unknown; error: PostgrestError | null } =
-        await clientOrThrow().rpc('can_manage_app_identity');
+      const response: { data: unknown; error: PostgrestError | null } = await clientOrThrow().rpc(
+        scope === 'project' ? 'can_manage_project_settings' : 'can_manage_app_identity',
+      );
       if (response.error !== null) {
         throw new AppIdentityError(toErrorCode(response.error));
       }
@@ -184,7 +187,7 @@ export function useAppIdentityAdmin(): AppIdentityAdminApi {
           ? null
           : input.expectedUpdatedAt;
       const response: { data: unknown; error: PostgrestError | null } = await clientOrThrow().rpc(
-        'admin_update_app_identity',
+        scope === 'project' ? 'admin_update_project_settings' : 'admin_update_app_identity',
         {
           p_name_ar: input.nameAr,
           p_name_en: input.nameEn,

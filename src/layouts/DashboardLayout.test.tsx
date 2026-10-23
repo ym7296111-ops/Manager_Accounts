@@ -29,7 +29,7 @@ import { I18nProvider, LOCALE_STORAGE_KEY } from '@/i18n/I18nContext';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import DashboardPage from '@/pages/DashboardPage';
 import SettingsPage from '@/pages/SettingsPage';
-import WorkspacePage from '@/pages/WorkspacePage';
+import WorkspacePage from '@/pages/workspaces/WorkspacePage';
 
 function renderLayout(initialPath = '/') {
   return render(
@@ -45,7 +45,7 @@ function renderLayout(initialPath = '/') {
                 <Routes>
                   <Route element={<DashboardLayout />}>
                     <Route index element={<DashboardPage />} />
-                    <Route path="workspaces/:workspaceId" element={<WorkspacePage />} />
+                    <Route path="workspaces/:workspaceSlug" element={<WorkspacePage />} />
                     <Route path="settings/:family/:section" element={<SettingsPage />} />
                   </Route>
                 </Routes>
@@ -100,15 +100,19 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
     expect(nav.getByRole('link', { name: 'الشاشة الرئيسية' })).toBeTruthy();
 
     /* Three workspace groups (each with an expand chevron) */
-    expect(nav.getByRole('link', { name: 'مساحة عمل 1' })).toBeTruthy();
-    expect(nav.getByRole('link', { name: 'مساحة عمل 2' })).toBeTruthy();
-    expect(nav.getByRole('link', { name: 'مساحة عمل 3' })).toBeTruthy();
+    expect(nav.getByRole('link', { name: 'APS' }).getAttribute('href')).toBe('/workspaces/aps');
+    expect(nav.getByRole('link', { name: 'المنتج التام — ورش العاشر' }).getAttribute('href')).toBe(
+      '/workspaces/workshops-10th',
+    );
+    expect(nav.getByRole('link', { name: 'التقارير والاستعلامات' }).getAttribute('href')).toBe(
+      '/workspaces/reports',
+    );
 
     /* Settings root group */
     expect(nav.getByRole('button', { name: 'الضبط والتحكم' })).toBeTruthy();
   });
 
-  it('expands the settings branch down to its four system items and three app items', () => {
+  it('expands settings to system items, app items, and the final project-settings item', () => {
     renderLayout();
     const nav = within(sidebar());
 
@@ -141,13 +145,18 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
     expect(nav.getByRole('link', { name: 'الإعدادات الإدارية العامة' })).toBeTruthy();
     expect(nav.getByRole('link', { name: 'التحكم بالمظهر' })).toBeTruthy();
     expect(nav.getByRole('link', { name: 'التنبيهات' })).toBeTruthy();
+
+    /* Direct final child of الضبط والتحكم, after both grouped branches. */
+    expect(nav.getByRole('link', { name: 'ضبط المشروع' }).getAttribute('href')).toBe(
+      '/settings/project',
+    );
   });
 
   it('opens a workspace group into its empty, prepared state', () => {
     renderLayout();
     const nav = within(sidebar());
 
-    const chevron = nav.getByRole('button', { name: 'فتح مساحة عمل 1' });
+    const chevron = nav.getByRole('button', { name: 'فتح APS' });
     expect(chevron.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(chevron);
 
@@ -160,11 +169,13 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
   it('navigates to a workspace screen when its header is clicked', () => {
     renderLayout();
 
-    const workspaceTwoLinks = screen.getAllByRole('link', { name: 'مساحة عمل 2' });
+    const workspaceTwoLinks = screen.getAllByRole('link', {
+      name: 'المنتج التام — ورش العاشر',
+    });
     fireEvent.click(workspaceTwoLinks[0]!);
 
-    expect(screen.getByRole('heading', { name: 'مساحة عمل 2' })).toBeTruthy();
-    expect(screen.getByText('مساحة عمل فارغة')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'المنتج التام — ورش العاشر' })).toBeTruthy();
+    expect(screen.getByText('مساحة عمل جاهزة')).toBeTruthy();
   });
 
   it('renders the settings screen for a deep leaf route with breadcrumb', () => {

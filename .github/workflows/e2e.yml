@@ -132,16 +132,26 @@ jobs:
           details="$(printf '%s' "$details" | sed 's/%/%25/g; s/::/%3A%3A/g')"
           printf '::error title=Playwright failure diagnostic::%s\n' "$details"
 
-      - name: Upload Playwright report and traces on failure
-        if: failure()
+      - name: Upload Playwright report, screenshots and traces
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-e2e-failure
+          name: playwright-e2e-evidence
           path: |
             playwright-report/
             test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Add successful visual evidence to the job summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            printf '### Playwright E2E evidence\n\n'
+            printf 'The `playwright-e2e-evidence` artifact contains the HTML report and these successful workspace screenshots:\n\n'
+            find test-results -type f -name 'workspace-*.png' -print | sort
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Stop local Supabase stack
         if: always()

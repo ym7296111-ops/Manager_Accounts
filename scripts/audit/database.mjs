@@ -507,6 +507,133 @@ try {
   const roleRows = (await db.query('select id,slug from public.roles')).rows;
   const roles = Object.fromEntries(roleRows.map((row) => [row.slug, row.id]));
 
+  await test('project settings permission has explicit owner and super_admin grants only', async () => {
+    const grants = await db.query(
+      `select r.slug
+         from public.role_permissions rp
+         join public.roles r on r.id = rp.role_id
+         join public.permissions p on p.id = rp.permission_id
+        where p.slug = 'project.settings:manage'
+        order by r.slug`,
+    );
+    assert.deepEqual(
+      grants.rows.map((row) => row.slug),
+      ['owner', 'super_admin'],
+    );
+  });
+
+  await test('ordinary admin keeps legacy identity access but project settings RPC returns 42501', async () => {
+    await db.query(
+      "insert into public.user_roles(user_id,role_id) select $1,id from public.roles where slug='admin' on conflict do nothing",
+      [V],
+    );
+    try {
+      const access = await asRole('authenticated', V, (c) =>
+        c.query(
+          `select public.can_manage_app_identity() as legacy_access,
+                  public.can_manage_project_settings() as project_access`,
+        ),
+      );
+      assert.equal(access.rows[0].legacy_access, true);
+      assert.equal(access.rows[0].project_access, false);
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query("select public.admin_update_project_settings('تحديث ممنوع','Denied Admin')"),
+        ),
+      );
+    } finally {
+      await db.query('delete from public.user_roles where user_id=$1 and role_id=$2', [
+        V,
+        roles.admin,
+      ]);
+    }
+  });
+
+  await test('anonymous caller cannot execute project settings update RPC', async () => {
+    await expectCode('42501', () =>
+      asRole('anon', null, (c) =>
+        c.query("select public.admin_update_project_settings('تحديث ممنوع','Denied Anonymous')"),
+      ),
+    );
+  });
+
+  await test('owner updates project settings and writes audit_logs atomically', async () => {
+    const owner = await db.query(
+      "select ur.user_id from public.user_roles ur join public.roles r on r.id=ur.role_id where r.slug='owner' order by ur.granted_at limit 1",
+    );
+    assert.equal(owner.rowCount, 1);
+    const ownerId = owner.rows[0].user_id;
+
+    await asRole(
+      'authenticated',
+      ownerId,
+      async (c) => {
+        const before = await c.query(
+          'select updated_at from public.app_identity_settings where id=true',
+        );
+        const updated = await c.query(
+          `select public.admin_update_project_settings(
+             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+           ) as identity`,
+          [
+            'هوية المشروع المحدّثة',
+            'Project Settings Audit',
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            false,
+            false,
+            before.rows[0].updated_at,
+          ],
+        );
+        assert.equal(updated.rows[0].identity.name_ar, 'هوية المشروع المحدّثة');
+        assert.equal(updated.rows[0].identity.name_en, 'Project Settings Audit');
+
+        const audit = await c.query(
+          `select actor_id,action,entity,entity_id,metadata
+             from public.audit_logs
+            where actor_id=$1
+              and entity='app_identity_settings'
+              and entity_id='singleton'
+              and metadata->>'event'='project.settings_updated'
+            order by created_at desc
+            limit 1`,
+          [ownerId],
+        );
+        assert.equal(audit.rowCount, 1);
+        assert.equal(audit.rows[0].action, 'settings.updated');
+        assert.equal(audit.rows[0].metadata.after.name_ar, 'هوية المشروع المحدّثة');
+        assert.ok(audit.rows[0].metadata.changed_fields.includes('name_ar'));
+        assert.ok(audit.rows[0].metadata.changed_fields.includes('name_en'));
+      },
+      true,
+    );
+  });
+
+  await test('project settings execute grants allow authenticated only', async () => {
+    const privileges = await db.query(
+      `select has_function_privilege('authenticated',p.oid,'execute') as authenticated_execute,
+              has_function_privilege('anon',p.oid,'execute') as anon_execute,
+              has_function_privilege('service_role',p.oid,'execute') as service_role_execute,
+              exists(
+                select 1 from aclexplode(p.proacl) as acl
+                 where acl.grantee=0 and acl.privilege_type='EXECUTE'
+              ) as public_execute
+         from pg_proc p
+         join pg_namespace n on n.oid=p.pronamespace
+        where n.nspname='public'
+          and p.proname='admin_update_project_settings'`,
+    );
+    assert.equal(privileges.rowCount, 1);
+    assert.equal(privileges.rows[0].authenticated_execute, true);
+    assert.equal(privileges.rows[0].anon_execute, false);
+    assert.equal(privileges.rows[0].service_role_execute, false);
+    assert.equal(privileges.rows[0].public_execute, false);
+  });
+
   await test('owner role cannot be granted to a second user via RPC or SQL', async () => {
     const firstOwnerId = randomUUID();
     const secondId = randomUUID();
@@ -1689,7 +1816,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 40);
+    assert.equal(migrations.length, 42);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1704,6 +1831,8 @@ try {
     assert.ok(migrations.includes('20261101000000_delegation_notifications_and_profile.sql'));
     assert.ok(migrations.includes('20261102000000_fix_password_reset_notification_recipients.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
+    assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
+    assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));

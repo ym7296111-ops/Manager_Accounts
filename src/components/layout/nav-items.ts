@@ -1,7 +1,6 @@
 import {
   Bell,
   DatabaseBackup,
-  FolderKanban,
   KeyRound,
   KeySquare,
   LayoutDashboard,
@@ -9,6 +8,7 @@ import {
   LifeBuoy,
   Palette,
   Settings,
+  Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Users,
@@ -16,6 +16,9 @@ import {
 } from 'lucide-react';
 import type { CapabilityRequirement } from '@/hooks/useAuthCapabilities';
 import type { TranslationKey } from '@/i18n/locales/ar';
+import { WORKSPACES } from '@/lib/workspaces';
+
+export const PROJECT_SETTINGS_CAPABILITY = 'project.settings:manage';
 
 /*
  * Capability map for protected settings routes:
@@ -29,6 +32,7 @@ import type { TranslationKey } from '@/i18n/locales/ar';
  *                                           accept is_admin OR settings.manage;
  *                                           `appearance.manage` is seeded but unused)
  *   notifications        → notifications.manage OR settings.manage (templates vs SMTP)
+ *   project              → project.settings:manage (dedicated project identity RPCs)
  *
  * `'*'` is implicit in every requirement, so it is not repeated here.
  */
@@ -37,9 +41,10 @@ import type { TranslationKey } from '@/i18n/locales/ar';
  * Sidebar navigation tree.
  *
  * The structure mirrors the product spec exactly:
- *   Dashboard · Workspace 1..3 (empty, collapsible) · Settings & Control
+ *   Dashboard · APS / Workshops / Reports (empty, collapsible) · Settings & Control
  *     ├── System & Users   (users, roles, password-resets, backup, support)
- *     └── App Settings     (general, appearance, notifications)
+ *     ├── App Settings     (general, appearance, notifications)
+ *     └── Project Settings (last direct child, dedicated capability)
  *
  * Labels are translation keys, so the same tree renders in Arabic or English.
  */
@@ -94,30 +99,14 @@ export const NAV_ITEMS: NavNode[] = [
     icon: LayoutDashboard,
     end: true,
   },
-  {
+  ...WORKSPACES.map((workspace): NavGroupNode => ({
     kind: 'group',
-    id: 'workspace-1',
-    to: '/workspaces/1',
-    labelKey: 'nav.workspace1',
-    icon: FolderKanban,
+    id: `workspace-${workspace.slug}`,
+    to: workspace.path,
+    labelKey: workspace.labelKey,
+    icon: workspace.icon,
     children: [],
-  },
-  {
-    kind: 'group',
-    id: 'workspace-2',
-    to: '/workspaces/2',
-    labelKey: 'nav.workspace2',
-    icon: FolderKanban,
-    children: [],
-  },
-  {
-    kind: 'group',
-    id: 'workspace-3',
-    to: '/workspaces/3',
-    labelKey: 'nav.workspace3',
-    icon: FolderKanban,
-    children: [],
-  },
+  })),
   {
     kind: 'group',
     id: 'settings',
@@ -203,6 +192,14 @@ export const NAV_ITEMS: NavNode[] = [
             capability: ['notifications.manage', 'settings.manage'],
           },
         ],
+      },
+      {
+        kind: 'link',
+        id: 'settings-project',
+        to: '/settings/project',
+        labelKey: 'nav.projectSettings',
+        icon: Settings2,
+        capability: PROJECT_SETTINGS_CAPABILITY,
       },
     ],
   },

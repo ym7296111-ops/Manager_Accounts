@@ -3,7 +3,6 @@ import {
   AlertCircle,
   ArrowUpLeft,
   ArrowUpRight,
-  FolderKanban,
   KeyRound,
   LayoutDashboard,
   Loader2,
@@ -36,6 +35,7 @@ import {
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import { formatDashboardDateTime, formatDashboardNumber } from '@/lib/dashboardFormat';
 import { env } from '@/lib/env';
+import { WORKSPACES } from '@/lib/workspaces';
 
 /**
  * Landing screen of the dashboard.
@@ -76,9 +76,11 @@ export default function DashboardPage() {
   const Arrow = isRtl ? ArrowUpLeft : ArrowUpRight;
 
   const quickLinks = [
-    { to: '/workspaces/1', labelKey: 'nav.workspace1', icon: FolderKanban },
-    { to: '/workspaces/2', labelKey: 'nav.workspace2', icon: FolderKanban },
-    { to: '/workspaces/3', labelKey: 'nav.workspace3', icon: FolderKanban },
+    ...WORKSPACES.map((workspace) => ({
+      to: workspace.path,
+      labelKey: workspace.labelKey,
+      icon: workspace.icon,
+    })),
     { to: '/settings/app/general', labelKey: 'nav.settings', icon: SlidersHorizontal },
   ] as const;
 
