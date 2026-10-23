@@ -1,16 +1,14 @@
 import { Settings2 } from 'lucide-react';
 import { RequireCapability } from '@/components/auth/RequireAuth';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import { useI18n } from '@/i18n/I18nContext';
-import GeneralSettings from '@/pages/settings/GeneralSettings';
 
 /**
- * Project identity administration (`/settings/project`).
+ * Empty project-settings shell (`/settings/project`).
  *
- * The route and the data hook have separate gates: the route provides an
- * immediate accessible 403, while the dedicated server RPCs remain the actual
- * security boundary. Saving reuses the validated branding form and its atomic
- * audit trail without weakening the existing general-settings permission.
+ * The route has its own capability gate and is kept separate from the app
+ * settings screens. Project-specific fields can be added here later.
  */
 export default function ProjectSettings() {
   const { t } = useI18n();
@@ -41,7 +39,11 @@ export default function ProjectSettings() {
           </div>
         </header>
 
-        <GeneralSettings scope="project" />
+        <EmptyState
+          icon={Settings2}
+          title={t('settings.emptyTitle')}
+          description={t('settings.emptyBody')}
+        />
       </div>
     </RequireCapability>
   );
