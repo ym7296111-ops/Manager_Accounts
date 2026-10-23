@@ -1,0 +1,915 @@
+name: Supabase Migrations
+
+# Two isolated jobs:
+#
+#   test_and_lint      every PR / branch push. Boots a throw-away local Supabase
+#                      stack in Docker, replays every migration + seed with
+#                      `supabase db reset`, lints the schema and asserts RLS is
+#                      enabled on every public table.
+#                      Uses NO production secrets, and this is now enforced: the
+#                      job declares no `environment:` and reads no `secrets.` at
+#                      all. The first-signup smoke test runs against a throwaway
+#                      identity generated in-step, so a fork PR or an arbitrary
+#                      branch push is never handed the real owner credentials.
+#
+#   deploy_production  push to main (or manual run on main) only. Bound to the
+#                      protected `Production` GitHub Environment, which is the
+#                      ONLY place the live database secrets exist.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase-migration.yml'
+  pull_request:
+    paths:
+      - 'supabase/**'
+      - '.github/workflows/supabase-migration.yml'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print pending migrations without applying them'
+        type: boolean
+        default: true
+      include_all:
+        description: 'Also apply migrations missing from the remote history table'
+        type: boolean
+        default: false
+      mark_applied:
+        description: 'Comma separated 14-digit versions to mark as applied (history repair)'
+        type: string
+        default: ''
+      mark_reverted:
+        description: 'Comma separated 14-digit versions to mark as reverted (drops phantom rows)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  SUPABASE_CLI_VERSION: 2.118.0
+
+jobs:
+  # -------------------------------------------------------------------------
+  test_and_lint:
+    name: Test migrations on an ephemeral database
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: supabase-test-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Every function under supabase/functions/ must have a matching
+      # `functions deploy <name>` step in the deploy_production job below.
+      # This is the check that was missing when admin-invite-user and
+      # admin-set-password were merged: the app shipped a feature whose Edge
+      # Function nothing deployed, and the only symptom was a generic
+      # "unexpected error" in the UI, because an undeployed function returns no
+      # { error: '<code>' } body for the client to classify.
+      #
+      # It runs here — on every PR, before the expensive stack starts — so the
+      # omission is caught at review time rather than after a deploy to main.
+      - name: Assert every Edge Function has a deploy step
+        run: |
+          set -euo pipefail
+          workflow=".github/workflows/supabase-migration.yml"
+          missing=0
+          shopt -s nullglob
+          for dir in supabase/functions/*/; do
+            name="$(basename "$dir")"
+            # _shared/ holds imported modules, not a deployable function.
+            [ "$name" = "_shared" ] && continue
+            case "$name" in .*) continue ;; esac
+            if ! grep -q "functions deploy $name " "$workflow"; then
+              printf '::error::Edge Function "%s" exists in supabase/functions/ but no step in %s deploys it. Add a "supabase functions deploy %s" step to the deploy_production job.\n' \
+                "$name" "$workflow" "$name"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Setup Node.js for Auth signup smoke test
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Replay all migrations and seed from scratch
+        run: supabase db reset --local
+
+      - name: Lint schema
+        run: supabase db lint --local --level warning --fail-on error
+
+      - name: Assert RLS is enabled on every public table
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          missing="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -c "
+            select c.relname
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'public'
+              and c.relkind in ('r', 'p')
+              and not c.relrowsecurity
+            order by 1;")"
+
+          if [ -n "$missing" ]; then
+            printf '::error::Tables without row level security: %s\n' "$(echo "$missing" | paste -sd, -)"
+            exit 1
+          fi
+          echo 'RLS enabled on all public tables.'
+
+      - name: Assert the RBAC security baseline is delivered by a migration
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          # Regression guard for the incident where a fresh cloud project could
+          # not grant its first protected owner. `supabase db push --linked` (the
+          # production path below) never applies seed.sql, so if the baseline
+          # roles live only in seed.sql the cloud roles table is EMPTY and the
+          # first-signup trigger cannot safely grant the protected role.
+
+          # (a) Static: seed.sql must not own the security baseline any more.
+          if grep -Eqi 'insert[[:space:]]+into[[:space:]]+(public\.)?(roles|permissions|role_permissions)[[:space:]]*\(' supabase/seed.sql; then
+            printf '::error::seed.sql inserts RBAC rows again. `db push --linked` never applies seed.sql, so move them back into supabase/migrations/.\n'
+            exit 1
+          fi
+
+          # (b) Static: no default accounts, ever.
+          if grep -Eqi 'insert[[:space:]]+into[[:space:]]+auth\.users' supabase/seed.sql; then
+            printf '::error::seed.sql must never create auth.users accounts.\n'
+            exit 1
+          fi
+          if grep -Eqi 'insert[[:space:]]+into[[:space:]]+(public\.)?user_roles' supabase/seed.sql; then
+            printf '::error::seed.sql must never assign a role to a hard-coded account.\n'
+            exit 1
+          fi
+
+          # (c) Static: the baseline migration must exist.
+          baseline_files=(supabase/migrations/*_seed_rbac_baseline.sql)
+          if [ ! -f "${baseline_files[0]}" ]; then
+            printf '::error::No supabase/migrations/*_seed_rbac_baseline.sql found; a fresh cloud project would get an empty roles table.\n'
+            exit 1
+          fi
+          if [ "${#baseline_files[@]}" -ne 1 ]; then
+            printf '::error::Expected exactly one *_seed_rbac_baseline.sql migration, found %s.\n' "${#baseline_files[@]}"
+            exit 1
+          fi
+          baseline_migration="${baseline_files[0]}"
+          printf '::notice::RBAC baseline migration: %s\n' "$baseline_migration"
+
+          read_baseline() {
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -At -F '|' -c "
+              select (select count(*)::int from public.roles
+                       where slug in ('owner','super_admin','admin','editor','viewer')) as roles,
+                     (select count(*)::int from public.permissions) as permissions,
+                     (select count(*)::int from public.role_permissions) as matrix,
+                     (select count(*)::int from public.roles where is_super_admin) as protected_roles,
+                     (select count(*)::int from public.roles
+                       where slug = 'owner' and is_super_admin) as owner_flagged,
+                     (select count(*)::int from public.roles
+                       where slug = 'super_admin' and is_super_admin) as super_admin_flagged,
+                     (select not exists (
+                        select 1 from public.permissions p
+                         where not exists (
+                           select 1 from public.role_permissions rp
+                           join public.roles r on r.id = rp.role_id
+                           where r.slug = 'owner' and rp.permission_id = p.id
+                         ))) as owner_all_permissions,
+                     (select count(*)::int from public.roles r
+                        join public.role_permissions rp on rp.role_id = r.id
+                        join public.permissions p on p.id = rp.permission_id
+                       where r.slug = 'owner' and p.slug = '*') as owner_wildcard,
+                     (select count(*)::int from public.roles r
+                        join public.role_permissions rp on rp.role_id = r.id
+                        join public.permissions p on p.id = rp.permission_id
+                       where r.slug = 'super_admin' and p.slug = '*') as super_admin_wildcard;"
+          }
+
+          # (d) Runtime: the legacy roles remain and owner has every permission.
+          if ! before="$(read_baseline)"; then
+            printf '::error::Could not read the RBAC baseline from the local database.\n'
+            exit 1
+          fi
+          IFS='|' read -r roles perms matrix protected owner_flagged super_admin_flagged owner_all_permissions owner_wildcard super_admin_wildcard <<< "$before"
+          printf 'RBAC baseline after reset: roles=%s permissions=%s matrix=%s protected=%s owner_flagged=%s super_admin_flagged=%s owner_all=%s owner_wildcard=%s super_admin_wildcard=%s\n' \
+            "$roles" "$perms" "$matrix" "$protected" "$owner_flagged" "$super_admin_flagged" "$owner_all_permissions" "$owner_wildcard" "$super_admin_wildcard"
+          if [ "$roles" != '5' ] || [ "$protected" != '2' ] \
+            || [ "$owner_flagged" != '1' ] || [ "$super_admin_flagged" != '1' ] \
+            || [ "$owner_all_permissions" != 't' ] || [ "$owner_wildcard" != '1' ] \
+            || [ "$super_admin_wildcard" != '1' ] || [ "$perms" -lt 12 ] || [ "$matrix" -lt 28 ]; then
+            printf '::error::RBAC owner baseline incomplete after db reset: %s\n' "$before"
+            exit 1
+          fi
+
+          # (e) Runtime: replaying the migration must be a pure no-op, so re-running
+          #     it against an already-live project cannot duplicate or clobber data.
+          if ! psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "$baseline_migration"; then
+            printf '::error::%s is not idempotent: replaying it failed.\n' "$baseline_migration"
+            exit 1
+          fi
+          after="$(read_baseline)"
+          if [ "$before" != "$after" ]; then
+            printf '::error::%s changed data on replay (%s -> %s); it must be idempotent.\n' \
+              "$baseline_migration" "$before" "$after"
+            exit 1
+          fi
+          printf '::notice::RBAC baseline is complete and idempotent.\n'
+
+      - name: Verify owner immutability and migration replay
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -euo pipefail
+          # A historical owner-transfer migration cannot be replayed AFTER the
+          # permanent owner lock. The migration was already applied by db reset.
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f supabase/migrations/20261017010000_protect_original_owner.sql
+          owner_id="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -c 'select gen_random_uuid()')"
+          admin_id="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -c 'select gen_random_uuid()')"
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -v owner_id="$owner_id" -v admin_id="$admin_id" <<'SQL'
+          begin;
+          insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+          values (:'owner_id'::uuid,'authenticated','authenticated','owner-immutability@example.com',
+            '{"provider":"email","providers":["email"]}'::jsonb,'{}'::jsonb,now(),now());
+          insert into auth.users (id,aud,role,email,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+          values (:'admin_id'::uuid,'authenticated','authenticated','admin-immutability@example.com',
+            '{"provider":"email","providers":["email"]}'::jsonb,'{}'::jsonb,now(),now());
+          update public.profiles set approval_status='approved' where id=:'admin_id'::uuid;
+          insert into public.user_roles(user_id,role_id)
+          select :'admin_id'::uuid,id from public.roles where slug='super_admin';
+          select set_config('request.jwt.claim.sub', :'admin_id', true);
+          select set_config('request.jwt.claim.role', 'authenticated', true);
+          do $owner_test$
+          declare v_owner uuid;
+          begin
+            select first_user_id into v_owner from public.first_admin_bootstrap_state where singleton;
+            if not public.is_original_owner(v_owner) then raise exception 'owner identity missing'; end if;
+            begin
+              perform public.admin_set_user_status(v_owner,'suspended'::public.user_status);
+              raise exception 'status RPC unexpectedly changed owner';
+            exception when sqlstate '42501' then
+              if sqlerrm not like 'owner_protection:%' then raise; end if;
+            end;
+            begin
+              perform public.admin_set_user_roles(v_owner,array['viewer']::text[]);
+              raise exception 'roles RPC unexpectedly changed owner';
+            exception when sqlstate '42501' then
+              if sqlerrm not like 'owner_protection:%' then raise; end if;
+            end;
+            begin
+              delete from public.user_roles where user_id=v_owner;
+              raise exception 'direct role deletion unexpectedly succeeded';
+            exception when sqlstate '42501' then
+              if sqlerrm not like 'owner_protection:%' then raise; end if;
+            end;
+            begin
+              delete from auth.users where id=v_owner;
+              raise exception 'Auth deletion unexpectedly succeeded';
+            exception when sqlstate '42501' then
+              if sqlerrm not like 'owner_protection:%' then raise; end if;
+            end;
+          end $owner_test$;
+          select set_config('request.jwt.claim.role','service_role',true);
+          do $approval_test$
+          declare v_owner uuid; v_admin uuid;
+          begin
+            select first_user_id into v_owner from public.first_admin_bootstrap_state where singleton;
+            select ur.user_id into v_admin from public.user_roles ur join public.roles r on r.id=ur.role_id where r.slug='super_admin' limit 1;
+            begin
+              perform public.admin_approve_user(v_owner,'reject',v_admin);
+              raise exception 'approval RPC unexpectedly changed owner';
+            exception when sqlstate '42501' then
+              if sqlerrm not like 'owner_protection:%' then raise; end if;
+            end;
+          end $approval_test$;
+          rollback;
+          SQL
+          printf '::notice::Owner protection, direct deletion guards and replay passed.\n'
+
+      - name: Assert anon cannot execute SECURITY DEFINER functions
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          exposed="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -c "
+            select p.proname
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+            where n.nspname = 'public'
+              and p.prosecdef
+              and has_function_privilege('anon', p.oid, 'execute')
+            order by 1;")"
+
+          if [ -n "$exposed" ]; then
+            printf '::error::SECURITY DEFINER functions executable by anon: %s\n' "$(echo "$exposed" | paste -sd, -)"
+            exit 1
+          fi
+          echo 'No SECURITY DEFINER function is exposed to anon.'
+
+      - name: Exercise first signup over local Supabase Auth API
+        env:
+          DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: |
+          set -euo pipefail
+          if ! supabase status --output env > "$RUNNER_TEMP/supabase-local.env"; then
+            printf '::error::Could not read status from the ephemeral Supabase stack.\n'
+            exit 1
+          fi
+          set -a
+          source "$RUNNER_TEMP/supabase-local.env"
+          set +a
+          unset SERVICE_ROLE_KEY
+
+          if [ -z "${API_URL:-}" ] || [ -z "${ANON_KEY:-}" ]; then
+            printf '::error::The local Supabase status output is missing API_URL or ANON_KEY.\n'
+            exit 1
+          fi
+
+          # Fresh random identities only; this job never reads production signup credentials.
+          first_email="first-owner-$(openssl rand -hex 8)@example.com"
+          first_password="$(openssl rand -hex 24)"
+          first_payload="$(jq -cn --arg email "$first_email" --arg password "$first_password" '{email:$email,password:$password}')"
+          first_curl_error="$RUNNER_TEMP/first-signup-curl.stderr"
+          if ! first_response="$(printf '%s' "$first_payload" | curl --silent --show-error --fail-with-body \
+            -H "apikey: $ANON_KEY" -H 'Content-Type: application/json' \
+            --data-binary @- "$API_URL/auth/v1/signup" 2>"$first_curl_error")"; then
+            response_message="$(printf '%s' "$first_response" | jq -r '.msg // .message // .error_description // .' 2>/dev/null | tr '\r\n' ' ' | cut -c1-400 || true)"
+            if [ -z "$response_message" ]; then
+              response_message="$(tr '\r\n' ' ' < "$first_curl_error" | cut -c1-400)"
+            fi
+            printf '::error title=First Auth signup failed::%s\n' "${response_message:-No response body.}"
+            exit 1
+          fi
+          if ! first_user_id="$(printf '%s' "$first_response" | jq -er '.user.id // .id')"; then
+            printf '::error title=Invalid Auth response::First signup response did not include a user id.\n'
+            exit 1
+          fi
+          unset first_password first_payload first_response
+
+          if ! first_ok="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -v user_id="$first_user_id" \
+            2>"$RUNNER_TEMP/first-signup-query.stderr" <<'SQL'
+          select u.email_confirmed_at is not null
+             and profile.status = 'active'
+             and profile.approval_status = 'approved'
+             and exists (
+               select 1 from public.user_roles ur
+               join public.roles r on r.id = ur.role_id
+               where ur.user_id = u.id and r.slug = 'owner' and r.is_super_admin
+             )
+             and (select count(*) = 1 from public.user_roles ur where ur.user_id = u.id)
+             and (select count(*) = (select count(*) from public.permissions)
+                    from public.role_permissions rp
+                    where rp.role_id = (select id from public.roles where slug = 'owner'))
+             and exists (
+               select 1 from public.role_permissions rp
+               join public.roles r on r.id = rp.role_id
+               join public.permissions p on p.id = rp.permission_id
+               where r.slug = 'owner' and p.slug = '*'
+             )
+             and (select first_user_id = u.id and claimed
+                    from public.first_admin_bootstrap_state where singleton)
+            from auth.users u
+            join public.profiles profile on profile.id = u.id
+           where u.id = :'user_id'::uuid;
+          SQL
+          )"; then
+            query_error="$(tr '\r\n' ' ' < "$RUNNER_TEMP/first-signup-query.stderr" | cut -c1-400)"
+            printf '::error title=First signup database check failed::%s\n' "${query_error:-psql returned a failure.}"
+            exit 1
+          fi
+          if [ "$first_ok" != 't' ]; then
+            printf '::error::The first Auth signup was not confirmed and granted the protected owner role with every explicit permission.\n'
+            exit 1
+          fi
+
+          second_email="ordinary-user-$(openssl rand -hex 8)@example.com"
+          second_password="$(openssl rand -hex 24)"
+          second_payload="$(jq -cn --arg email "$second_email" --arg password "$second_password" \
+            '{email:$email,password:$password,data:{role:"owner",is_super_admin:true}}')"
+          second_curl_error="$RUNNER_TEMP/second-signup-curl.stderr"
+          if ! second_response="$(printf '%s' "$second_payload" | curl --silent --show-error --fail-with-body \
+            -H "apikey: $ANON_KEY" -H 'Content-Type: application/json' \
+            --data-binary @- "$API_URL/auth/v1/signup" 2>"$second_curl_error")"; then
+            response_message="$(printf '%s' "$second_response" | jq -r '.msg // .message // .error_description // .' 2>/dev/null | tr '\r\n' ' ' | cut -c1-400 || true)"
+            if [ -z "$response_message" ]; then
+              response_message="$(tr '\r\n' ' ' < "$second_curl_error" | cut -c1-400)"
+            fi
+            printf '::error title=Second Auth signup failed::%s\n' "${response_message:-No response body.}"
+            exit 1
+          fi
+          if ! second_user_id="$(printf '%s' "$second_response" | jq -er '.user.id // .id')"; then
+            printf '::error title=Invalid Auth response::Second signup response did not include a user id.\n'
+            exit 1
+          fi
+          unset second_password second_payload second_response
+
+          if ! second_ok="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -v user_id="$second_user_id" \
+            2>"$RUNNER_TEMP/second-signup-query.stderr" <<'SQL'
+          select u.email_confirmed_at is null
+             and (select approval_status = 'pending' from public.profiles where id=u.id)
+             and not exists (select 1 from public.user_roles ur where ur.user_id=u.id)
+            from auth.users u
+           where u.id = :'user_id'::uuid;
+          SQL
+          )"; then
+            query_error="$(tr '\r\n' ' ' < "$RUNNER_TEMP/second-signup-query.stderr" | cut -c1-400)"
+            printf '::error title=Second signup database check failed::%s\n' "${query_error:-psql returned a failure.}"
+            exit 1
+          fi
+          if [ "$second_ok" != 't' ]; then
+            printf '::error::A later signup did not remain unconfirmed and pending without roles despite forged user metadata.\n'
+            exit 1
+          fi
+
+          for protected_slug in owner super_admin; do
+            protected_role_id="$(psql "$DB_URL" -v ON_ERROR_STOP=1 -At -v protected_slug="$protected_slug" <<'SQL'
+          select id from public.roles where slug = :'protected_slug' and is_super_admin;
+          SQL
+          )"
+            if [ -z "$protected_role_id" ]; then
+              printf '::error::The protected %s role is missing; cannot test direct-write rejection.\n' "$protected_slug"
+              exit 1
+            fi
+            set +e
+            psql "$DB_URL" -v ON_ERROR_STOP=1 -v user_id="$second_user_id" \
+              -v role_id="$protected_role_id" -q \
+              > "$RUNNER_TEMP/service-role-${protected_slug}-write.log" 2>&1 <<'SQL'
+          begin;
+          set local role service_role;
+          insert into public.user_roles(user_id, role_id)
+          values (:'user_id'::uuid, :'role_id'::uuid);
+          rollback;
+          SQL
+            direct_write_status="$?"
+            set -e
+            if [ "$direct_write_status" -eq 0 ]; then
+              printf '::error::service_role unexpectedly wrote a %s assignment directly.\n' "$protected_slug"
+              exit 1
+            fi
+          done
+
+          printf '::notice title=Auth signup trigger::First signup received confirmed owner with every explicit permission; later signup remained pending with no roles; protected service_role writes stayed blocked.\n'
+
+      - name: Stop local database
+        if: ${{ always() }}
+        run: supabase stop --no-backup
+
+  # -------------------------------------------------------------------------
+  deploy_production:
+    name: Deploy migrations to production
+    needs: test_and_lint
+    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: Production
+    concurrency:
+      group: supabase-production
+      cancel-in-progress: false
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify configuration
+        run: |
+          missing=()
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || missing+=('SUPABASE_ACCESS_TOKEN')
+          [ -n "$SUPABASE_DB_PASSWORD" ] || missing+=('SUPABASE_DB_PASSWORD')
+          [ -n "$SUPABASE_PROJECT_REF" ] || missing+=('SUPABASE_PROJECT_REF')
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::Missing values in the "Production" environment: %s\n' "${missing[*]}"
+            printf '::error::Add them once, from a machine signed in to gh as a repository admin:\n'
+            printf '::error::  gh variable set SUPABASE_PROJECT_REF --env Production --body <20-char-project-ref>\n'
+            printf '::error::  gh secret set SUPABASE_ACCESS_TOKEN --env Production --body <token>\n'
+            printf '::error::  gh secret set SUPABASE_DB_PASSWORD --env Production --body <db-password>\n'
+            printf '::error::Or run: scripts/configure-production-environment.sh --apply --project-ref <ref>\n'
+            exit 1
+          fi
+
+          if [[ ! "$SUPABASE_PROJECT_REF" =~ ^[a-z0-9]{20}$ ]]; then
+            printf '::error::SUPABASE_PROJECT_REF does not look like a Supabase project ref.\n'
+            exit 1
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --yes
+
+      - name: Repair migration history
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.mark_applied != '' || inputs.mark_reverted != '') }}
+        env:
+          APPLIED: ${{ inputs.mark_applied }}
+          REVERTED: ${{ inputs.mark_reverted }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          repair() {
+            local status="$1"
+            local raw="$2"
+            local label="$3"
+
+            [ -n "$raw" ] || return 0
+
+            IFS=',' read -r -a requested <<< "$raw"
+            local versions=()
+            local entry version
+
+            for entry in "${requested[@]}"; do
+              version="$(printf '%s' "$entry" | tr -d '[:space:]')"
+              [ -n "$version" ] || continue
+
+              if [[ ! "$version" =~ ^[0-9]{14}$ ]]; then
+                printf '::error::Invalid migration version "%s" in %s. Expected 14 digits.\n' "$version" "$label"
+                exit 1
+              fi
+              versions+=("$version")
+            done
+
+            if [ ${#versions[@]} -eq 0 ]; then
+              printf '::warning::%s was set but contained no usable version.\n' "$label"
+              return 0
+            fi
+
+            printf '::notice::Repairing remote history [%s] => %s\n' "$(printf '%s' "${versions[*]}" | tr ' ' ',')" "$status"
+            supabase migration repair --linked --status "$status" "${versions[@]}" --yes
+          }
+
+          # 🛡️ التصحيح الحاسم: منع تعديل السجل تماماً في وضع dry_run
+          if [ "$DRY_RUN" = 'true' ]; then
+            printf '::error::History repair is STRICTLY FORBIDDEN in dry_run mode. Aborting to protect schema_migrations table.\n'
+            exit 1
+          fi
+
+          repair applied "$APPLIED" 'mark_applied'
+          repair reverted "$REVERTED" 'mark_reverted'
+
+      - name: Push migrations
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+          INCLUDE_ALL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_all }}
+        run: |
+          flags=()
+          if [ "$DRY_RUN" = 'true' ]; then
+            flags+=('--dry-run')
+            printf '::notice::Dry run - reporting pending migrations only.\n'
+          fi
+          [ "$INCLUDE_ALL" = 'true' ] && flags+=('--include-all')
+
+          push_log="$RUNNER_TEMP/db-push.log"
+          set +e
+          supabase db push --linked "${flags[@]}" --yes 2>&1 | tee "$push_log"
+          push_status="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$push_status" -ne 0 ] && [ "$DRY_RUN" != 'true' ]; then
+            # NO AUTOMATIC HISTORY REPAIR. This block used to run
+            # `supabase migration repair --status reverted` followed by
+            # `db push --include-all` against production, triggered by matching a
+            # string in the push log. That was an unsupervised, irreversible write
+            # to schema_migrations decided by a substring match. Diagnosis stays
+            # automatic; the decision to mutate production history is a human one.
+            if grep -q 'relation "public.profiles" does not exist' "$push_log"; then
+              printf '::error title=Phantom migration in the remote history::supabase_migrations records 20260930000000 as applied, but public.profiles does not exist in production. Refusing to rewrite history automatically.\n'
+              printf '::error::Recover manually, following docs/consultations/2026-10-02-migration-history-purge-runbook.md (read-only telemetry first, then a single-version repair):\n'
+              printf '::error::  1. supabase migration list --linked      # confirm which versions are phantom\n'
+              printf '::error::  2. supabase migration repair --linked --status reverted 20260930000000\n'
+              printf '::error::  3. supabase db push --linked --include-all\n'
+              printf '::error::Or rerun this workflow with mark_reverted=20260930000000 to make the repair an explicit, reviewed action.\n'
+            else
+              printf '::error title=Migration push failed::supabase db push --linked exited with status %s. No history was modified and nothing was retried automatically.\n' "$push_status"
+              printf '::error::Inspect the push output in the job summary, then rerun. For history drift use the mark_reverted / mark_applied inputs rather than editing production by hand.\n'
+            fi
+            exit "$push_status"
+          elif [ "$push_status" -ne 0 ]; then
+            exit "$push_status"
+          fi
+
+      - name: Deploy approval service bridge
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: supabase functions deploy approve-user --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy manual password reset service bridge
+        # Depends on the migration above: the request table, safe view and
+        # approval/finalization RPCs must exist before the bridge is live.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: supabase functions deploy admin-reset-password --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy user capability service bridge
+        # Exposes only the service-role capability and sanitized approval-queue RPCs.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: supabase functions deploy admin-user-capabilities --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy admin invite service bridge
+        # Same ordering constraint: admin_invite_user is created by
+        # 20261024000000_admin_invite_and_set_password.sql, which the push above
+        # has just applied.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: supabase functions deploy admin-invite-user --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Deploy admin password set service bridge
+        # Calls admin_verify_password_reset_authority and
+        # admin_record_password_reset from the same migration.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: supabase functions deploy admin-set-password --project-ref "$SUPABASE_PROJECT_REF"
+
+      - name: Install PostgreSQL client
+        # P3: the baseline verify step needs psql. The runner image ships one
+        # today, but its version drifts with the image — install the distro
+        # client explicitly so the verify step can only fail on a real finding
+        # (or a real outage), never on a missing/too-old psql.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+          psql --version
+
+      - name: Verify the production security baseline
+        # A dry run applies nothing, so there is nothing to verify yet.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -uo pipefail
+
+          # This is the gate that turns "the cloud database is silently missing
+          # its security baseline" into a red job instead of a support ticket.
+          #
+          # It matters because `supabase db push --linked` never applies
+          # supabase/seed.sql, so a baseline that lives only in seed data reaches
+          # production as an EMPTY roles table — which is exactly what made
+          # scripts/sql/grant-first-super-admin.sql fail on a fresh project.
+          #
+          # Connection method (P3 follow-up): resolve the project's AUTHORITATIVE
+          # pooler config from the same Management API endpoint the Supabase CLI
+          # uses for its IPv4 fallback (GET /v1/projects/{ref}/config/database/
+          # pooler), then run the SELECT-only probes through it. Building the URL
+          # from the region slug alone (as this step used to) can silently dial
+          # the wrong Supavisor tenant and die with an instant connect error.
+          mkdir -p telemetry
+
+          pooler_json="$(curl -fsS --max-time 20 \
+            -H "Authorization: Bearer ${SUPABASE_ACCESS_TOKEN}" \
+            "https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_REF}/config/database/pooler" \
+            2>telemetry/pooler-api.err || true)"
+          primary_cfg="$(jq -cr 'if type == "array" then (map(select(.database_type == "PRIMARY")) | first) else empty end' \
+            <<<"$pooler_json" 2>/dev/null || true)"
+          api_host="$(jq -r '.db_host // empty' <<<"$primary_cfg" 2>/dev/null || true)"
+          api_port="$(jq -r '.db_port // empty' <<<"$primary_cfg" 2>/dev/null || true)"
+          api_user="$(jq -r '.db_user // empty' <<<"$primary_cfg" 2>/dev/null || true)"
+          api_db="$(jq -r '.db_name // empty' <<<"$primary_cfg" 2>/dev/null || true)"
+          printf '::notice::Pooler API config: db_host=%s db_port=%s db_user=%s db_name=%s pool_mode=%s\n' \
+            "${api_host:-<none>}" "${api_port:-<none>}" "${api_user:-<none>}" "${api_db:-<none>}" \
+            "$(jq -r '.pool_mode // empty' <<<"$primary_cfg" 2>/dev/null || true)"
+          if [ -z "$api_host" ]; then
+            printf '::warning::Pooler API lookup failed (%s); falling back to the region-constructed host.\n' \
+              "$(tr '\n' ' ' < telemetry/pooler-api.err 2>/dev/null | tail -c 240)"
+          fi
+
+          region="$(supabase projects list -o json 2>/dev/null | jq -r --arg ref "$SUPABASE_PROJECT_REF" '
+            (if type == "object" and has("projects") then (.projects // []) else (. // []) end) as $projects
+            | ($projects | map(select((.ref // .id) == $ref)) | first | .region) // "unknown"
+          ')" || region='unknown'
+
+          constructed_host=''
+          if [ -z "$region" ] || [ "$region" = "unknown" ] || [ "$region" = "null" ]; then
+            if [ -z "$api_host" ]; then
+              # FAIL CLOSED. This used to `exit 0`, which turned "we could not
+              # confirm production is safe" into a green job. Migrations have
+              # already been pushed at this point, so an unverified deploy is more
+              # dangerous than a red one: the whole purpose of this gate is to make
+              # a silently incomplete baseline visible.
+              printf '::error title=Baseline verification failed::Could not resolve the pooler endpoint for project %s (neither the pooler API nor the project region answered), so the production security baseline could NOT be confirmed. Migrations were already pushed.\n' "$SUPABASE_PROJECT_REF"
+              printf '::error::Check that SUPABASE_ACCESS_TOKEN in the Production environment is valid and can list projects, then rerun this workflow (or run supabase-production-telemetry.yml) to re-verify. Nothing was rolled back.\n'
+              exit 1
+            fi
+            printf '::warning::Could not resolve the project region; continuing with the API-provided host %s only.\n' "$api_host"
+          else
+            constructed_host="aws-0-${region}.pooler.supabase.com"
+          fi
+          # Candidate endpoints, most-authoritative first. The CLI itself forces
+          # session mode (5432) because "Supavisor transaction mode does not
+          # support prepared statement" (apps/cli-go/internal/utils/connect.go),
+          # so 5432 leads and the API's own transaction port follows. The legacy
+          # Supavisor tenant style (options=reference=<ref> with a bare `postgres`
+          # user) is kept as another candidate — the CLI supports both shapes.
+          # gssencmode=disable and channel_binding=disable suppress libpq-only
+          # handshake negotiations (GSSENCRequest / SCRAM-*-PLUS) that Supavisor
+          # can mishandle and that the Go driver behind `supabase db push` never
+          # sends — prime suspects for a sub-second connect failure against an
+          # endpoint the CLI reaches fine. `?pgbouncer=true` is a driver-level
+          # hint (node-postgres/ORMs), NOT a libpq parameter — deliberately
+          # absent. sslmode=require and connect_timeout=15 stay on every attempt.
+          # PGPASSWORD (from the Production environment) supplies the password;
+          # it never appears in the conninfo, so it can never leak into notices.
+          candidates=()
+          [ -n "$api_host" ] && candidates+=("api-session|${api_host}|5432|${api_user:-postgres.${SUPABASE_PROJECT_REF}}|${api_db:-postgres}|")
+          [ -n "$api_host" ] && [ -n "$api_port" ] && candidates+=("api-native-port|${api_host}|${api_port}|${api_user:-postgres.${SUPABASE_PROJECT_REF}}|${api_db:-postgres}|")
+          [ -n "$api_host" ] && candidates+=("api-legacy-tenant|${api_host}|5432|postgres|${api_db:-postgres}|options=reference=${SUPABASE_PROJECT_REF}")
+          [ -n "$constructed_host" ] && candidates+=("constructed-session|${constructed_host}|5432|postgres.${SUPABASE_PROJECT_REF}|postgres|")
+          [ -n "$constructed_host" ] && candidates+=("constructed-transaction|${constructed_host}|6543|postgres.${SUPABASE_PROJECT_REF}|postgres|")
+
+          # ON_ERROR_STOP=0 on purpose: each probe is independent, so a missing
+          # table or column must not hide the other results. A probe that errors
+          # simply produces no line, which is read as 0 and fails the gate below.
+          cat > telemetry/baseline.sql <<'SQL'
+          \pset tuples_only on
+          \pset format unaligned
+          select 'M roles '    || (select count(*)::int from public.roles where slug in ('owner','super_admin','admin','editor','viewer'));
+          select 'M perms '    || (select count(*)::int from public.permissions);
+          select 'M matrix '   || (select count(*)::int from public.role_permissions);
+          select 'M flagged '  || (select count(*)::int from public.roles where is_super_admin);
+          select 'M owner_flagged ' || (select count(*)::int from public.roles where slug = 'owner' and is_super_admin);
+          select 'M owner_all ' || (select case when exists (select 1 from public.roles where slug = 'owner' and is_super_admin)
+            and not exists (select 1 from public.permissions p where not exists (
+              select 1 from public.role_permissions rp join public.roles r on r.id = rp.role_id
+               where r.slug = 'owner' and rp.permission_id = p.id)) then 1 else 0 end);
+          select 'M owner_wildcard ' || (select count(*)::int from public.roles r join public.role_permissions rp on rp.role_id = r.id join public.permissions p on p.id = rp.permission_id where r.slug = 'owner' and r.is_super_admin and p.slug = '*');
+          select 'M wildcard ' || (select count(*)::int from public.roles r join public.role_permissions rp on rp.role_id = r.id join public.permissions p on p.id = rp.permission_id where r.slug = 'super_admin' and r.is_super_admin and p.slug = '*');
+          select 'M signup_state ' || (select count(*)::int from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'first_admin_bootstrap_state' and c.relkind = 'r');
+          select 'M signup_functions ' || (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('confirm_first_auth_user_email','handle_new_user'));
+          select 'M legacy_bootstrap ' || (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('bootstrap_first_super_admin','check_bootstrap_readiness'));
+          select 'M backup_queue_rpcs ' || (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('admin_trigger_manual_backup','admin_update_backup_settings','admin_claim_next_backup_job','generate_scheduled_backup_requests'));
+          select 'M backup_cron ' || (select count(*)::int from cron.job where jobname in ('generate-scheduled-backup-requests-europe-paris-0100','generate-scheduled-backup-requests-hourly') and database = current_database());
+          select 'M backup_enabled ' || (select count(*)::int from public.backup_settings where singleton and enabled);
+          select 'M backup_active_jobs ' || (select count(*)::int from public.backup_logs where status in ('queued','running'));
+          select 'M backup_storage_policy ' || (select count(*)::int from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'backup_objects_super_admin_read');
+          select 'M backup_realtime ' || (select count(*)::int from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('backup_logs','backup_settings'));
+          select 'M owner_write ' || (select count(*)::int from pg_policies where schemaname = 'public' and tablename = 'user_roles' and policyname = 'Database owners write user_roles');
+          SQL
+
+          try_endpoint() {
+            # $1=label $2=host $3=port $4=user $5=dbname $6=extra conninfo keywords
+            local label="$1" host="$2" port="$3" user="$4" dbname="$5" extra="${6:-}"
+            local conninfo="host=${host} port=${port} user=${user} dbname=${dbname} sslmode=require gssencmode=disable channel_binding=disable connect_timeout=15 ${extra}"
+            printf '::notice::psql attempt [%s]: %s@%s:%s/%s\n' "$label" "$user" "$host" "$port" "$dbname"
+            # Verbose diagnostics: classify any failure directly in the run
+            # annotations (failed-run log download is not always available):
+            # DNS answers, raw TCP reachability, then the exact psql error.
+            printf '    dns: %s\n' "$(getent ahosts "$host" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' -)"
+            if timeout 5 bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+              printf '::notice::TCP %s:%s reachable\n' "$host" "$port"
+            else
+              printf '::warning::TCP %s:%s NOT reachable (DNS/route/firewall level)\n' "$host" "$port"
+            fi
+            if psql "$conninfo" -X -v ON_ERROR_STOP=0 -P pager=off -f telemetry/baseline.sql \
+                  > telemetry/baseline-output.txt 2>&1; then
+              return 0
+            fi
+            printf '::warning::psql attempt [%s] failed: %s\n' "$label" \
+              "$(tr '\n\r' '  ' < telemetry/baseline-output.txt | tail -c 500)"
+            return 1
+          }
+
+          connected=''
+          for candidate in "${candidates[@]}"; do
+            IFS='|' read -r label host port user dbname extra <<<"$candidate"
+            if try_endpoint "$label" "$host" "$port" "$user" "$dbname" "$extra"; then
+              connected='yes'
+              break
+            fi
+          done
+
+          if [ -z "$connected" ]; then
+            # FAIL CLOSED, for the same reason as the endpoint-resolution check
+            # above: a deploy whose security baseline could not be read must not
+            # report success.
+            printf '::error title=Baseline verification failed::Could not query the production database (tried the API-resolved pooler endpoint and the region-constructed fallback), so the security baseline could NOT be confirmed. Migrations were already pushed.\n'
+            printf '::error::Last psql error: %s\n' \
+              "$(tr '\n\r' '  ' < telemetry/baseline-output.txt 2>/dev/null | tail -c 500)"
+            printf '::error::Check SUPABASE_DB_PASSWORD in the Production environment and that the pooler accepts connections from CI, then rerun this workflow to re-verify. Nothing was rolled back.\n'
+            exit 1
+          fi
+
+          metric() {
+            awk -v key="$1" '$1 == "M" && $2 == key { print $3; found = 1 } END { if (!found) print 0 }' \
+              telemetry/baseline-output.txt
+          }
+
+          roles="$(metric roles)"
+          perms="$(metric perms)"
+          matrix="$(metric matrix)"
+          flagged="$(metric flagged)"
+          owner_flagged="$(metric owner_flagged)"
+          owner_all="$(metric owner_all)"
+          owner_wildcard="$(metric owner_wildcard)"
+          wildcard="$(metric wildcard)"
+          signup_state="$(metric signup_state)"
+          signup_functions="$(metric signup_functions)"
+          legacy_bootstrap="$(metric legacy_bootstrap)"
+          backup_queue_rpcs="$(metric backup_queue_rpcs)"
+          backup_cron="$(metric backup_cron)"
+          backup_enabled="$(metric backup_enabled)"
+          backup_active_jobs="$(metric backup_active_jobs)"
+          backup_storage_policy="$(metric backup_storage_policy)"
+          backup_realtime="$(metric backup_realtime)"
+          owner_write="$(metric owner_write)"
+
+          {
+            printf '### Production security baseline\n\n'
+            printf '| Check | Expected | Actual | |\n|---|---|---|---|\n'
+            printf '| Baseline roles (owner, super_admin, admin, editor, viewer) | 5 | %s | |\n' "$roles"
+            printf '| Permissions | >= 12 | %s | |\n' "$perms"
+            printf '| Role/permission matrix | >= 28 | %s | |\n' "$matrix"
+            printf '| Protected roles flagged | 2 | %s | |\n' "$flagged"
+            printf '| owner is protected | 1 | %s | |\n' "$owner_flagged"
+            printf '| owner has every explicit permission | 1 | %s | |\n' "$owner_all"
+            printf "| owner holds the '*' grant | 1 | %s | |\n" "$owner_wildcard"
+            printf "| super_admin retains the '*' grant | 1 | %s | |\n" "$wildcard"
+            printf '| first-signup private state table | 1 | %s | |\n' "$signup_state"
+            printf '| first-signup trigger functions | 2 | %s | |\n' "$signup_functions"
+            printf '| retired bootstrap RPCs | 0 | %s | |\n' "$legacy_bootstrap"
+            printf '| retired backup queue RPCs | 0 | %s | |\n' "$backup_queue_rpcs"
+            printf '| retired backup cron jobs | 0 | %s | |\n' "$backup_cron"
+            printf '| enabled backup settings | 0 | %s | |\n' "$backup_enabled"
+            printf '| active legacy backup queue rows | 0 | %s | |\n' "$backup_active_jobs"
+            printf '| retired backup storage policy | 0 | %s | |\n' "$backup_storage_policy"
+            printf '| retired backup realtime tables | 0 | %s | |\n' "$backup_realtime"
+            printf '| user_roles owner write policy | 1 | %s | |\n' "$owner_write"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          printf 'Production baseline: roles=%s permissions=%s matrix=%s protected=%s owner_flagged=%s owner_all=%s owner_wildcard=%s super_admin_wildcard=%s signup_state=%s signup_functions=%s legacy_bootstrap=%s backup_queue_rpcs=%s backup_cron=%s backup_enabled=%s backup_active_jobs=%s backup_storage_policy=%s backup_realtime=%s owner_write=%s\n' \
+            "$roles" "$perms" "$matrix" "$flagged" "$owner_flagged" "$owner_all" "$owner_wildcard" "$wildcard" "$signup_state" "$signup_functions" "$legacy_bootstrap" "$backup_queue_rpcs" "$backup_cron" "$backup_enabled" "$backup_active_jobs" "$backup_storage_policy" "$backup_realtime" "$owner_write"
+
+          failed=0
+          [ "$roles" = '5' ]      || { printf '::error::Only %s/5 baseline roles exist in production. The owner-role migration is missing.\n' "$roles"; failed=1; }
+          [ "$perms" -ge 12 ]     || { printf '::error::Only %s permissions exist in production (expected at least 12).\n' "$perms"; failed=1; }
+          [ "$matrix" -ge 28 ]    || { printf '::error::Only %s role/permission grants exist in production (expected at least 28).\n' "$matrix"; failed=1; }
+          [ "$flagged" = '2' ]    || { printf '::error::Expected owner and super_admin to be the two protected roles (got %s flagged roles).\n' "$flagged"; failed=1; }
+          [ "$owner_flagged" = '1' ] || { printf '::error::The owner role is not protected (got %s).\n' "$owner_flagged"; failed=1; }
+          [ "$owner_all" = '1' ] || { printf '::error::The owner role is missing one or more explicit permission grants.\n'; failed=1; }
+          [ "$owner_wildcard" = '1' ] || { printf '::error::The owner role does not hold the * permission.\n'; failed=1; }
+          [ "$wildcard" = '1' ] || { printf '::error::The existing super_admin role lost its * permission (got %s).\n' "$wildcard"; failed=1; }
+          [ "$signup_state" = '1' ] || { printf '::error::The durable first-signup state table is missing (got %s).\n' "$signup_state"; failed=1; }
+          [ "$signup_functions" = '2' ] || { printf '::error::The first-signup trigger functions are incomplete (got %s/2).\n' "$signup_functions"; failed=1; }
+          [ "$legacy_bootstrap" = '0' ] || { printf '::error::Legacy first-admin RPCs are still installed (got %s).\n' "$legacy_bootstrap"; failed=1; }
+          [ "$backup_queue_rpcs" = '0' ] || { printf '::error::Retired backup queue RPCs are still installed (got %s).\n' "$backup_queue_rpcs"; failed=1; }
+          [ "$backup_cron" = '0' ] || { printf '::error::Retired backup cron jobs are still scheduled (got %s).\n' "$backup_cron"; failed=1; }
+          [ "$backup_enabled" = '0' ] || { printf '::error::The retired backup scheduler is still enabled (got %s).\n' "$backup_enabled"; failed=1; }
+          [ "$backup_active_jobs" = '0' ] || { printf '::error::Active legacy backup queue rows remain (got %s).\n' "$backup_active_jobs"; failed=1; }
+          [ "$backup_storage_policy" = '0' ] || { printf '::error::The retired backup storage read policy is still installed (got %s).\n' "$backup_storage_policy"; failed=1; }
+          [ "$backup_realtime" = '0' ] || { printf '::error::Retired backup tables remain in supabase_realtime (got %s).\n' "$backup_realtime"; failed=1; }
+          [ "$owner_write" = '1' ] || { printf '::error::user_roles is missing the owner write policy required under FORCE RLS (got %s).\n' "$owner_write"; failed=1; }
+
+          if [ "$failed" -ne 0 ]; then
+            printf '::error::Production is missing part of its security baseline; first-signup elevation is not verified.\n'
+            exit 1
+          fi
+          printf '::notice title=Production baseline::RBAC, first-signup triggers, legacy endpoint removal, and backup queue retirement are verified.\n'
+
+      - name: Publish migration report
+        if: ${{ always() }}
+        env:
+          MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && 'dry run (manual)' || 'apply' }}
+        run: |
+          status_file="$RUNNER_TEMP/migration-status.txt"
+
+          if supabase migration list --linked > "$status_file" 2>&1; then
+            status='ok'
+          else
+            status='failed'
+            printf '::warning::Could not read the remote migration list.\n'
+          fi
+
+          {
+            printf '### Supabase migrations (production)\n\n'
+            printf '| | |\n|---|---|\n'
+            printf '| Mode | %s |\n' "$MODE"
+            printf '| Commit | `%s` |\n' "${GITHUB_SHA::7}"
+            printf '| Migration list | %s |\n\n' "$status"
+            printf '```\n'
+            cat "$status_file"
+            printf '\n```\n'
+            if [ -s "$RUNNER_TEMP/db-push.log" ]; then
+              printf '\n#### Push output\n\n```\n'
+              tail -n 120 "$RUNNER_TEMP/db-push.log"
+              printf '\n```\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

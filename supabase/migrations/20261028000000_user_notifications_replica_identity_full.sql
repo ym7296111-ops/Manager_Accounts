@@ -1,0 +1,24 @@
+-- Deliver filtered DELETE events for the in-app notification feed.
+--
+-- The feed subscription is filtered to `user_id=eq.<uid>` so a notification
+-- for somebody else never wakes this client. Under the DEFAULT replica
+-- identity, the WAL old record of a DELETE carries only the primary key, so
+-- Realtime has no `user_id` value to match the subscription filter against
+-- (nor to evaluate the owner SELECT policy with) and silently skips the
+-- event: a notification deleted at the database (direct SQL, prune, FK
+-- cascade) would linger in an open panel until the next unrelated refetch.
+-- Verified by the Playwright scenario "removes a notification live when it
+-- is deleted at the database", which failed before this migration.
+--
+-- REPLICA IDENTITY FULL makes the old record complete, so DELETEs evaluate
+-- the filter and RLS against the real row and reach exactly the row owner.
+-- Nothing else changes: clients still treat `postgres_changes` as a pure
+-- invalidation signal and never read the payload, and INSERT/UPDATE delivery
+-- is unaffected. The cost is wider WAL records on UPDATE/DELETE of this
+-- small, low-churn table (resolutions and the 90-day prune).
+--
+-- Forward-only. The 20261022000000 migration documents why DEFAULT was
+-- chosen originally (minimal wire data); this migration supersedes that
+-- tradeoff for live DELETE liveness.
+
+alter table public.user_notifications replica identity full;

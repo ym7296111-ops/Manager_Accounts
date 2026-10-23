@@ -1,0 +1,13 @@
+# Build output and dependencies
+dist/
+node_modules/
+coverage/
+
+# Lockfiles are checked as-is
+package-lock.json
+
+# Generated Supabase artifacts
+supabase/.temp/
+
+# JSON tooling metadata
+tsconfig.*.tsbuildinfo

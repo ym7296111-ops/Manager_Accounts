@@ -1,0 +1,114 @@
+-- Local/demo seed data: workspaces and grouped application settings.
+-- Runs on `supabase db reset` (local) via `[db.seed]` in supabase/config.toml.
+--
+-- ⚠️  SECURITY BASELINE IS *NOT* SEEDED HERE ANY MORE.
+--
+-- The four legacy system roles, permission catalogue, and original
+-- role→permission matrix are delivered by
+-- `supabase/migrations/20261010130000_seed_rbac_baseline.sql`; the protected
+-- `owner` role and its explicit all-permissions grant are delivered by
+-- `supabase/migrations/20261016120000_add_owner_role_and_grant_all_permissions.sql`.
+--
+-- That move is deliberate and load-bearing. `[db.seed]` only runs on
+-- `supabase db reset`; the production path used by
+-- .github/workflows/supabase-migration.yml is `supabase db push --linked`, which
+-- never applies seed.sql. If the baseline lived only here, a fresh cloud
+-- project would have an EMPTY roles/permissions table and the first-signup
+-- trigger would fail closed rather than assign a protected role.
+--
+-- Do NOT re-add role, permission or role_permissions rows here: that would
+-- recreate a second source of truth for security-critical reference data, and
+-- the copy in this file would silently never reach production again.
+--
+-- ⚠️  NO DEFAULT ACCOUNTS.
+--
+-- This file must never insert into `auth.users`, and must never assign a role
+-- to a hard-coded email address. A previous revision auto-granted `super_admin`
+-- to a fixed demo address; that block was removed because a well-known address
+-- that is auto-elevated is exactly the account an attacker would try to
+-- register. The first Auth signup on a project that has never had an Auth user
+-- receives the protected `owner` role and every permission through the
+-- database-owned Auth trigger. Existing `super_admin` remains protected with
+-- its original wildcard grant. Subsequent signups receive `viewer`; user
+-- metadata is never used for role assignment.
+
+-- ---------------------------------------------------------------------------
+-- Workspaces referenced by the sidebar tree
+-- ---------------------------------------------------------------------------
+insert into public.workspaces (slug, name_ar, name_en, description, sort_order)
+values
+  ('workspace-1', 'مساحة عمل 1', 'Workspace 1', 'مساحة عمل أولى جاهزة للتهيئة', 1),
+  ('workspace-2', 'مساحة عمل 2', 'Workspace 2', 'مساحة عمل ثانية جاهزة للتهيئة', 2),
+  ('workspace-3', 'مساحة عمل 3', 'Workspace 3', 'مساحة عمل ثالثة جاهزة للتهيئة', 3)
+on conflict (slug) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- Application settings grouped for the settings screens
+-- ---------------------------------------------------------------------------
+insert into public.app_settings (key, group_slug, value, is_public)
+values
+  ('general.system_name', 'general', to_jsonb('نظام الإدارة'::text), true),
+  ('general.support_email', 'general', to_jsonb('support@example.com'::text), false),
+  ('general.maintenance_mode', 'general', to_jsonb(false), false),
+  ('appearance.default_theme', 'appearance', to_jsonb('system'::text), true),
+  ('appearance.default_locale', 'appearance', to_jsonb('ar'::text), true),
+  ('appearance.default_direction', 'appearance', to_jsonb('rtl'::text), true),
+  ('appearance.default_timezone', 'appearance', to_jsonb('Europe/Paris'::text), true),
+  ('appearance.weekend_days', 'appearance', '[6,7]'::jsonb, true),
+  ('appearance.accent_color', 'appearance', to_jsonb('indigo'::text), true),
+  ('appearance.sidebar_state', 'appearance', to_jsonb('expanded'::text), false),
+  ('notifications.enabled', 'notifications', to_jsonb(true), true),
+  ('notifications.channels', 'notifications', to_jsonb('["in_app","email"]'::jsonb), false),
+  ('notifications.retention_days', 'notifications', to_jsonb(30), false)
+on conflict (key) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- Guard: the security baseline must already be in place when this file runs.
+--
+-- On `supabase db reset` the migrations always run first, so this can only fail
+-- if someone deletes or reorders the RBAC baseline migration. Failing here is
+-- far cheaper than discovering an un-bootstrapable project later.
+-- ---------------------------------------------------------------------------
+do $assert_baseline_present$
+declare
+  v_super_admin_flagged integer;
+  v_super_admin_wildcard integer;
+  v_owner_flagged integer;
+  v_owner_missing_permissions integer;
+begin
+  select count(*) into v_super_admin_flagged
+    from public.roles
+   where slug = 'super_admin' and is_super_admin is true;
+
+  select count(*) into v_super_admin_wildcard
+    from public.roles r
+    join public.role_permissions rp on rp.role_id = r.id
+    join public.permissions p on p.id = rp.permission_id
+   where r.slug = 'super_admin' and r.is_super_admin and p.slug = '*';
+
+  select count(*) into v_owner_flagged
+    from public.roles
+   where slug = 'owner' and is_super_admin is true;
+
+  select count(*) into v_owner_missing_permissions
+    from public.permissions p
+   where not exists (
+     select 1
+       from public.roles r
+       join public.role_permissions rp on rp.role_id = r.id
+      where r.slug = 'owner'
+        and r.is_super_admin
+        and rp.permission_id = p.id
+   );
+
+  if v_super_admin_flagged <> 1 or v_super_admin_wildcard <> 1
+     or v_owner_flagged <> 1 or v_owner_missing_permissions <> 0 then
+    raise exception
+      'supabase/seed.sql requires both RBAC migrations to be applied '
+      '(super_admin_flagged=%/1 super_admin_wildcard=%/1 owner_flagged=%/1 owner_missing_permissions=%/0).',
+      v_super_admin_flagged, v_super_admin_wildcard, v_owner_flagged, v_owner_missing_permissions;
+  end if;
+end
+$assert_baseline_present$;
+
+

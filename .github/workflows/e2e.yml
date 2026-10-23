@@ -1,0 +1,148 @@
+name: E2E (Playwright)
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: Chromium against local Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # E2E has passed against the local Supabase stack; failures now fail this check.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: 2.118.0
+
+      - name: Install Playwright Chromium
+        run: |
+          timeout --kill-after=10s 180s npx playwright install --with-deps chromium \
+            || timeout --kill-after=10s 180s npx playwright install --with-deps chromium
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Apply migrations and local seed
+        run: supabase db reset --local
+
+      - name: Export ephemeral local Supabase configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_file="${RUNNER_TEMP}/supabase-e2e.env"
+          supabase status --output env > "$status_file"
+          set -a
+          # This file is emitted by the local CLI; it contains only disposable local keys.
+          source "$status_file"
+          set +a
+
+          {
+            printf 'SUPABASE_URL=%s\n' "$API_URL"
+            printf 'SUPABASE_ANON_KEY=%s\n' "$ANON_KEY"
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SERVICE_ROLE_KEY"
+            printf 'VITE_SUPABASE_URL=%s\n' "$API_URL"
+            printf 'VITE_SUPABASE_ANON_KEY=%s\n' "$ANON_KEY"
+          } >> "$GITHUB_ENV"
+
+          functions_env="${RUNNER_TEMP}/supabase-functions.env"
+          {
+            printf 'SUPABASE_URL=%s\n' "$API_URL"
+            printf 'SUPABASE_ANON_KEY=%s\n' "$ANON_KEY"
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$SERVICE_ROLE_KEY"
+          } > "$functions_env"
+          chmod 600 "$functions_env"
+          echo "SUPABASE_FUNCTIONS_ENV=${functions_env}" >> "$GITHUB_ENV"
+
+      - name: Start local Edge Functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup supabase functions serve --env-file "$SUPABASE_FUNCTIONS_ENV" \
+            > "${RUNNER_TEMP}/supabase-functions.log" 2>&1 &
+          echo "$!" > "${RUNNER_TEMP}/supabase-functions.pid"
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              -H "apikey: ${VITE_SUPABASE_ANON_KEY}" \
+              -H 'Content-Type: application/json' \
+              --data '{}' \
+              'http://127.0.0.1:54321/functions/v1/admin-set-password' || true)"
+            if [ "$status" = '401' ] || [ "$status" = '400' ]; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo '::error::Local Supabase Edge Functions did not become ready.'
+            cat "${RUNNER_TEMP}/supabase-functions.log" || true
+            exit 1
+          fi
+
+      - name: Run Playwright E2E suite
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee "${RUNNER_TEMP}/playwright-e2e.log"
+        env:
+          CI: 'true'
+          E2E_BASE_URL: http://127.0.0.1:5173
+
+      - name: Add Playwright failure details to the job summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            printf '### Playwright E2E failure output\n\n```text\n'
+            tail -n 120 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null || true
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Keep a short diagnostic in the check annotations when log artifacts
+          # cannot be fetched; redact fixture emails before publishing.
+          details="$(tail -n 60 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null \
+            | sed -E 's/[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}/[redacted-email]/g' \
+            | tr '\r\n' ' ' \
+            | cut -c1-3000)"
+          details="$(printf '%s' "$details" | sed 's/%/%25/g; s/::/%3A%3A/g')"
+          printf '::error title=Playwright failure diagnostic::%s\n' "$details"
+
+      - name: Upload Playwright report and traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-e2e-failure
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop --no-backup

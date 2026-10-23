@@ -1,0 +1,1308 @@
+{
+  "recorded_at_utc": "2026-10-01T06:58:51.281343+00:00",
+  "repository": "ym7296111-ops/admin_system",
+  "branch": "arena/01a0f629-admin-system",
+  "base_commit": "0e38400d6e31c2b5b3c3b319b6ac520239583a72",
+  "decision": "NO-GO for unconditional production sign-off",
+  "scope": {
+    "production_writes": false,
+    "live_workflow_dispatched": false,
+    "authenticated_production_ui_tested": false,
+    "live_supabase_admin_connection_available": false
+  },
+  "quality": {
+    "test_status": "passed",
+    "tests_passed": 80,
+    "tests_failed": 0,
+    "test_files": 10,
+    "new_test_cases": 26,
+    "typecheck": "passed",
+    "lint": "passed",
+    "build": "passed",
+    "format_check": "verified separately by npm run format:check",
+    "warning": {
+      "text": "React duplicate child key 0.9",
+      "source": "src/pages/settings/UsersManagement.tsx SkeletonTable",
+      "existing_before_audit": true
+    }
+  },
+  "translations": {
+    "keys_per_locale": 230,
+    "users_keys": 45,
+    "roles_keys": 61,
+    "backup_keys": 38,
+    "missing_keys": 0,
+    "empty_values": 0,
+    "placeholder_set_mismatches": 0,
+    "scope": "in-repository dictionaries and mocked-data screen rendering"
+  },
+  "github_live_metadata": {
+    "ci": {
+      "run_id": 36823326551,
+      "conclusion": "success",
+      "head_sha": "0e38400d6e31c2b5b3c3b319b6ac520239583a72",
+      "url": "https://github.com/ym7296111-ops/admin_system/actions/runs/36823326551"
+    },
+    "migrations": {
+      "run_id": 36823326583,
+      "conclusion": "failure",
+      "head_sha": "0e38400d6e31c2b5b3c3b319b6ac520239583a72",
+      "ephemeral_job": "success",
+      "production_job": "failure",
+      "failed_step": "Verify configuration",
+      "link_and_push": "skipped",
+      "url": "https://github.com/ym7296111-ops/admin_system/actions/runs/36823326583"
+    },
+    "worker_latest_observed": {
+      "run_id": 36795681716,
+      "conclusion": "failure",
+      "head_sha": "7c74d0f5cc4fa6a50651e236f0e58cfa180c8bcd",
+      "failed_step": "Verify configuration",
+      "claim_and_processing": "skipped",
+      "url": "https://github.com/ym7296111-ops/admin_system/actions/runs/36795681716"
+    },
+    "worker_registration": "active",
+    "production_environment": {
+      "name": "Production",
+      "protection_rules": [],
+      "deployment_branch_policy": null,
+      "secret_and_variable_listing": "403 Resource not accessible by integration"
+    },
+    "log_downloads": "unavailable: EOF from Actions log-host download; no particular missing secret asserted",
+    "latest_read_recheck": "2026-10-01T06:50:49Z"
+  },
+  "vercel_live": {
+    "commit_status": "success / Deployment has completed",
+    "deployment_status_url": "https://vercel.com/ym-de61/admin-system/7gexSU2g8GuApR4M7FvFywRjFZFd",
+    "repository_homepage_url": "https://admin-system-sandy.vercel.app",
+    "homepage_to_commit_alias_mapping_verified": false,
+    "read_method": "fetch_page rendered content; direct curl from the workspace could not establish TLS",
+    "observed_pages": [
+      {
+        "path": "/",
+        "result": "login UI rendered, client URL /login"
+      },
+      {
+        "path": "/settings/system/users",
+        "result": "Vercel 404 NOT_FOUND page"
+      },
+      {
+        "path": "/settings/system/roles",
+        "result": "Vercel 404 NOT_FOUND page"
+      },
+      {
+        "path": "/settings/system/backup",
+        "result": "Vercel 404 NOT_FOUND page"
+      },
+      {
+        "path": "/settings/system/users?audit=20261001",
+        "result": "Vercel 404 NOT_FOUND page"
+      },
+      {
+        "path": "/login?audit=20261001",
+        "result": "Vercel 404 NOT_FOUND page"
+      }
+    ]
+  },
+  "offline_database": {
+    "scope": "OFFLINE fixture, not live Supabase",
+    "postgres": "17.10",
+    "migrationFiles": [
+      "20260930000000_init_core_schema.sql",
+      "20260930120000_harden_profiles_and_definer_functions.sql",
+      "20260930150000_enable_profiles_realtime.sql",
+      "20260930160000_rbac_atomic_operations.sql",
+      "20260930170000_backup_system_schema.sql",
+      "20260930180000_backup_atomic_lock.sql"
+    ],
+    "tests": [
+      {
+        "name": "six actual migrations and seed replay on PostgreSQL 17",
+        "status": "passed"
+      },
+      {
+        "name": "RLS on every public table and no anonymous SECURITY DEFINER execution",
+        "status": "passed"
+      },
+      {
+        "name": "users RPC rejects self-suspension and non-admin callers",
+        "status": "passed"
+      },
+      {
+        "name": "roles RPC protects super_admin wildcard and capability-level self-demotion",
+        "status": "passed"
+      },
+      {
+        "name": "atomic role diff is audited; direct role_permissions writes are denied",
+        "status": "passed"
+      },
+      {
+        "name": "backup claim is service-role-only and returns NULL for an empty queue",
+        "status": "passed"
+      },
+      {
+        "name": "manual request is audited; non-admin and duplicate requests are rejected",
+        "status": "passed"
+      },
+      {
+        "name": "two concurrent service claims hand out one job exactly once",
+        "status": "passed"
+      },
+      {
+        "name": "completion requires size/checksum/path and stamps finished_at on the DB clock",
+        "status": "passed"
+      },
+      {
+        "name": "backup RLS separates active super admins from ordinary users",
+        "status": "passed"
+      },
+      {
+        "name": "expired worker lease fails explicitly and releases the active-request slot",
+        "status": "passed"
+      }
+    ],
+    "findings": [
+      {
+        "severity": "high",
+        "id": "RBAC-DIRECT-SELF-DEMOTION",
+        "observed": {
+          "removed": 1,
+          "isAdminAfter": false
+        },
+        "description": "Authenticated administrators can delete their own user_roles outside the guarded RPC. Transaction rolled back in the fixture."
+      },
+      {
+        "severity": "high",
+        "id": "USERS-MUTUAL-LOCKOUT",
+        "observed": {
+          "bothRpcsSucceeded": true,
+          "activeAdministratorsAfter": 0
+        },
+        "description": "Two active administrators can suspend each other concurrently through the actual status RPC."
+      }
+    ],
+    "checks_passed": 11,
+    "findings_count": 2,
+    "exit_code": 1,
+    "exit_code_reason": "intentional security audit failure for reproduced findings",
+    "fixture": "scripts/audit/supabase-fixture.sql; auth/storage contracts, not full Supabase services"
+  },
+  "container_queries": {
+    "browser": "153.0.8010.0",
+    "scope": "Actual screen DOM, mocked data adapters, compiled production CSS",
+    "results": [
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "ar",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 2,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "ar",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 2,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "column"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "column"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "ar",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "users",
+        "locale": "en",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 5,
+        "headerDisplay": "block",
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 2,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "roles",
+        "locale": "en",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 2,
+        "headerDisplay": null,
+        "labelDisplay": null,
+        "scheduleColumns": null,
+        "manualDirection": null
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 400,
+        "viewport": 1600,
+        "containerWidth": 400,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "column"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 447,
+        "viewport": 1600,
+        "containerWidth": 447,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "column"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 448,
+        "viewport": 1600,
+        "containerWidth": 448,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 511,
+        "viewport": 1600,
+        "containerWidth": 511,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 1,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 512,
+        "viewport": 1600,
+        "containerWidth": 512,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 671,
+        "viewport": 1600,
+        "containerWidth": 671,
+        "containerType": "inline-size",
+        "gridColumns": 1,
+        "headerDisplay": "none",
+        "labelDisplay": "block",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 672,
+        "viewport": 1600,
+        "containerWidth": 672,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 895,
+        "viewport": 1600,
+        "containerWidth": 895,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 896,
+        "viewport": 1600,
+        "containerWidth": 896,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      },
+      {
+        "section": "backup",
+        "locale": "en",
+        "width": 1000,
+        "viewport": 1600,
+        "containerWidth": 1000,
+        "containerType": "inline-size",
+        "gridColumns": 4,
+        "headerDisplay": "grid",
+        "labelDisplay": "none",
+        "scheduleColumns": 3,
+        "manualDirection": "row"
+      }
+    ],
+    "cases_passed": 60
+  },
+  "backup_worker_simulation": {
+    "scope": "Offline: HTTP, psql and pg_dump mocked; actual workflow Bash, gzip, checksum and size executed",
+    "cases_passed": 10,
+    "workflow_sha256": "17472134268235f46c7f132c6c5823446504b07ae0bf0757c1321667f19903cf",
+    "idle_stdout": "::notice title=Database backup worker::No jobs to process\n",
+    "idle_github_output": "job_id=\n",
+    "idle_summary": "### Database backup worker\n\nNo jobs to process.\n",
+    "case_summaries": [
+      {
+        "case": "empty-200",
+        "expected_path_verified": true,
+        "row": null,
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "empty-204",
+        "expected_path_verified": true,
+        "row": null,
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "busy",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "running"
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "completed",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "completed",
+          "artifact_path": "backups/00000000-0000-4000-8000-000000000010/backup.sql.gz",
+          "artifact_size_bytes": 126,
+          "artifact_checksum_sha256": "72a23f45eb2ddea946829bda87e296c575c068d6fd4dc00ca6a9069160a5f5a3",
+          "error_summary": null
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Export database with pg_dump",
+            "exit_code": 0
+          },
+          {
+            "step": "Compress export with gzip",
+            "exit_code": 0
+          },
+          {
+            "step": "Compute checksum and size",
+            "exit_code": 0
+          },
+          {
+            "step": "Upload to private storage",
+            "exit_code": 0
+          },
+          {
+            "step": "Mark job completed",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "preflight-missing-key",
+        "expected_path_verified": true,
+        "row": null,
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 1
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "claim-404",
+        "expected_path_verified": true,
+        "row": null,
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 1
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "export-failure",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "failed",
+          "error_summary": "Backup failed: database export (pg_dump) failed (exit code 42). See GitHub Actions run 424242."
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Export database with pg_dump",
+            "exit_code": 1
+          },
+          {
+            "step": "Mark job failed",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "oversize",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "failed",
+          "error_summary": "Backup failed: integrity check (size or checksum) failed (archive is 126 bytes). See GitHub Actions run 424242."
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Export database with pg_dump",
+            "exit_code": 0
+          },
+          {
+            "step": "Compress export with gzip",
+            "exit_code": 0
+          },
+          {
+            "step": "Compute checksum and size",
+            "exit_code": 1
+          },
+          {
+            "step": "Mark job failed",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "upload-failure",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "failed",
+          "error_summary": "Backup failed: upload to private storage failed (HTTP 500). See GitHub Actions run 424242."
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Export database with pg_dump",
+            "exit_code": 0
+          },
+          {
+            "step": "Compress export with gzip",
+            "exit_code": 0
+          },
+          {
+            "step": "Compute checksum and size",
+            "exit_code": 0
+          },
+          {
+            "step": "Upload to private storage",
+            "exit_code": 1
+          },
+          {
+            "step": "Mark job failed",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      },
+      {
+        "case": "finalize-noop",
+        "expected_path_verified": true,
+        "row": {
+          "id": "00000000-0000-4000-8000-000000000010",
+          "backup_type": "manual",
+          "status": "failed"
+        },
+        "step_outcomes": [
+          {
+            "step": "Verify configuration",
+            "exit_code": 0
+          },
+          {
+            "step": "Claim next backup job",
+            "exit_code": 0
+          },
+          {
+            "step": "Export database with pg_dump",
+            "exit_code": 0
+          },
+          {
+            "step": "Compress export with gzip",
+            "exit_code": 0
+          },
+          {
+            "step": "Compute checksum and size",
+            "exit_code": 0
+          },
+          {
+            "step": "Upload to private storage",
+            "exit_code": 0
+          },
+          {
+            "step": "Mark job completed",
+            "exit_code": 1
+          },
+          {
+            "step": "Mark job failed",
+            "exit_code": 0
+          },
+          {
+            "step": "Remove working files",
+            "exit_code": 0
+          }
+        ]
+      }
+    ],
+    "artifact_values_are_production_values": false
+  },
+  "source_review_findings": [
+    {
+      "id": "AUTOMATIC-QUEUE-PRODUCER-MISSING",
+      "scope": "repository only; external scheduler not verified",
+      "details": "Backup settings are saved but no repository code consumes them to enqueue automatic jobs."
+    },
+    {
+      "id": "MANUAL-NOT-ON-DEMAND",
+      "details": "UI manual RPC enqueues but does not dispatch a GitHub runner."
+    },
+    {
+      "id": "LEGACY-INTEGRITY-NOT-VALIDATED",
+      "details": "backup_completed_has_integrity is NOT VALID for historical rows."
+    }
+  ]
+}

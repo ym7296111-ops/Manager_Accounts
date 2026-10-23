@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      # ---------------------------------------------------------------------
+      # Database audit (scripts/audit/database.mjs)
+      #
+      # This gate exists because the audit used to be a manual-only script:
+      # its hard-coded migration count drifted from 24 to 27 unnoticed and the
+      # script aborted before reaching a single check. Running it on every
+      # push/PR is what makes schema drift a red build instead of a surprise.
+      #
+      # Why not `services: postgres`? The audit deliberately speaks NO TCP — it
+      # connects over a Unix socket at `<repo>/.cache/live-audit/pg-socket`,
+      # port 55432, user `postgres`, trust auth, and imports `pg` from
+      # `<repo>/.cache/live-audit/tooling`. A service container cannot be given
+      # a custom server command, so it can neither move its socket into the
+      # workspace nor listen on 55432. The cluster is therefore provisioned
+      # explicitly below, using the same PostgreSQL 17 major the script asserts.
+      # ---------------------------------------------------------------------
+      - name: Provision PostgreSQL 17 for the database audit
+        env:
+          EMBEDDED_PG_VERSION: 17.10.0-beta.17
+          PG_MAJOR_REQUIRED: '17'
+          PG_PORT: '55432'
+        run: |
+          set -euo pipefail
+
+          AUDIT_ROOT="${GITHUB_WORKSPACE}/.cache/live-audit"
+          SOCKET_DIR="${AUDIT_ROOT}/pg-socket"
+          DATA_DIR="${AUDIT_ROOT}/pgdata"
+
+          # 1) Tooling. The audit imports `pg` from this exact path, so it is
+          #    installed here rather than relying on the project's node_modules.
+          mkdir -p "${AUDIT_ROOT}/tooling" "${SOCKET_DIR}"
+          chmod 700 "${SOCKET_DIR}"
+          (
+            cd "${AUDIT_ROOT}/tooling"
+            npm init -y > /dev/null
+            npm install --no-audit --no-fund "pg@^8" "embedded-postgres@${EMBEDDED_PG_VERSION}"
+          )
+
+          # 2) Locate the platform binaries the optional dependency installed.
+          #    `-print -quit` avoids a SIGPIPE that `set -o pipefail` would fail on.
+          PG_BIN="$(dirname "$(find "${AUDIT_ROOT}/tooling/node_modules/@embedded-postgres" \
+            -type f -name initdb -path '*/native/bin/*' -print -quit)")"
+          if [ -z "${PG_BIN}" ] || [ ! -x "${PG_BIN}/postgres" ]; then
+            echo "::error::Could not locate embedded PostgreSQL binaries under ${AUDIT_ROOT}/tooling"
+            exit 1
+          fi
+
+          # 3) Fail early on the wrong major: the audit asserts it explicitly.
+          REPORTED_MAJOR="$("${PG_BIN}/postgres" --version | grep -oE '[0-9]+' | head -n 1)"
+          if [ "${REPORTED_MAJOR}" != "${PG_MAJOR_REQUIRED}" ]; then
+            echo "::error::Database audit requires PostgreSQL ${PG_MAJOR_REQUIRED}, found ${REPORTED_MAJOR}"
+            exit 1
+          fi
+          echo "PostgreSQL ${REPORTED_MAJOR} binaries at ${PG_BIN}"
+
+          # 4) Throw-away cluster: trust auth, Unix socket where the audit looks,
+          #    no TCP listener. wal_level=logical matches Supabase publications.
+          rm -rf "${DATA_DIR}"
+          "${PG_BIN}/initdb" -D "${DATA_DIR}" -U postgres --auth=trust -E UTF8 --no-sync > /dev/null
+          "${PG_BIN}/pg_ctl" -D "${DATA_DIR}" -l "${AUDIT_ROOT}/postgres.log" -w \
+            -o "-p ${PG_PORT} -k ${SOCKET_DIR} -c listen_addresses='' -c wal_level=logical -c max_connections=200 -c max_wal_senders=20 -c fsync=off -c synchronous_commit=off -c full_page_writes=off" \
+            start
+
+          # 5) Healthcheck. The embedded distribution ships no pg_isready, so
+          #    probe with the SAME client library and connection parameters the
+          #    audit will use — that is what can actually be misconfigured.
+          #    (The YAML block scalar already dedents, so the heredoc body and
+          #    its terminator both land at column 0.)
+          cat > "${AUDIT_ROOT}/healthcheck.cjs" <<'HEALTHCHECK_JS'
+          const pg = require(process.env.AUDIT_TOOLING_PG);
+          const client = new pg.Client({
+            host: process.env.AUDIT_SOCKET,
+            port: Number(process.env.AUDIT_PORT),
+            user: 'postgres',
+            password: '',
+            database: 'postgres',
+            connectionTimeoutMillis: 2000,
+          });
+          client
+            .connect()
+            .then(() => client.query('select 1'))
+            .then(() => client.end())
+            .then(() => process.exit(0))
+            .catch(() => {
+              try {
+                void client.end();
+              } catch {
+                /* already closed */
+              }
+              process.exit(1);
+            });
+          HEALTHCHECK_JS
+
+          export AUDIT_TOOLING_PG="${AUDIT_ROOT}/tooling/node_modules/pg/lib/index.js"
+          export AUDIT_SOCKET="${SOCKET_DIR}"
+          export AUDIT_PORT="${PG_PORT}"
+
+          ready=0
+          for attempt in $(seq 1 30); do
+            if node "${AUDIT_ROOT}/healthcheck.cjs" 2>/dev/null; then
+              ready=1
+              echo "PostgreSQL ${REPORTED_MAJOR} accepts connections on ${SOCKET_DIR} (port ${PG_PORT})."
+              break
+            fi
+            sleep 1
+          done
+          if [ "${ready}" -ne 1 ]; then
+            echo "::error::PostgreSQL did not become ready within 30s"
+            cat "${AUDIT_ROOT}/postgres.log" 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Run DB Audit
+        # --reset-fixture is mandatory: without it the script throws before any
+        # check runs. It recreates ONLY the throw-away admin_system_audit
+        # database; no credentials and no TCP host are involved.
+        run: node scripts/audit/database.mjs --reset-fixture
+
+      - name: Upload database audit evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: database-audit
+          path: .cache/live-audit/database-results.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Stop the audit database
+        if: always()
+        run: |
+          set -uo pipefail
+          PG_BIN="$(dirname "$(find "${GITHUB_WORKSPACE}/.cache/live-audit/tooling/node_modules/@embedded-postgres" \
+            -type f -name initdb -path '*/native/bin/*' -print -quit 2>/dev/null || true)")"
+          if [ -n "${PG_BIN}" ] && [ -x "${PG_BIN}/pg_ctl" ]; then
+            "${PG_BIN}/pg_ctl" -D "${GITHUB_WORKSPACE}/.cache/live-audit/pgdata" -m fast stop || true
+          fi
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || 'https://placeholder.supabase.co' }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY || 'ci-build-only-key' }}
+
+      - name: Upload production bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+          if-no-files-found: error

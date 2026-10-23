@@ -1,0 +1,245 @@
+name: Supabase Production Telemetry
+
+# Read-only diagnosis of the linked production database.
+#
+# Why it exists: after merging the localization migration, the production
+# deploy job failed with `public.is_active_user() does not exist` while the
+# remote migration history claims version 20260930120000 (which creates that
+# function) is applied. History and schema have diverged, and no earlier run
+# ever applied migrations through CI (see docs/audits/2026-10-01-live-sanity-
+# integration-audit.md). Before repairing anything we need ground truth:
+#   1) what the remote `supabase_migrations.schema_migrations` table says,
+#   2) which objects actually exist in the live schema.
+#
+# Safety: this workflow performs ZERO writes against the production database.
+# Every psql statement is a catalog/aggregate SELECT; checks include the first-signup trigger and retired backup queue. The CLI steps are `migration list`
+# and `db push --dry-run` (explicitly non-applying). Repair is a separate,
+# explicit, human-reviewed step that must never be automated here.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SUPABASE_CLI_VERSION: 2.118.0
+
+jobs:
+  telemetry:
+    name: Read-only production telemetry
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify configuration
+        run: |
+          missing=()
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || missing+=('SUPABASE_ACCESS_TOKEN')
+          [ -n "$SUPABASE_DB_PASSWORD" ] || missing+=('SUPABASE_DB_PASSWORD')
+          [ -n "$SUPABASE_PROJECT_REF" ] || missing+=('SUPABASE_PROJECT_REF')
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf '::error::Missing values in the "Production" environment: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          if [[ ! "$SUPABASE_PROJECT_REF" =~ ^[a-z0-9]{20}$ ]]; then
+            printf '::error::SUPABASE_PROJECT_REF does not look like a Supabase project ref.\n'
+            exit 1
+          fi
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v3
+        with:
+          version: ${{ env.SUPABASE_CLI_VERSION }}
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --yes
+
+      - name: Remote migration history
+        run: |
+          mkdir -p telemetry
+          if supabase migration list --linked > telemetry/migration-list.txt 2>&1; then
+            status='ok'
+          else
+            status='failed'
+            printf '::warning::Could not read the remote migration list.\n'
+          fi
+
+          {
+            printf '### supabase migration list --linked (%s)\n\n' "$status"
+            printf '```\n'
+            cat telemetry/migration-list.txt
+            printf '\n```\n\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pending push plan (dry run, applies nothing)
+        run: |
+          supabase db push --linked --dry-run --yes > telemetry/dry-run.txt 2>&1 || true
+
+          {
+            printf '### supabase db push --dry-run\n\n'
+            printf '```\n'
+            cat telemetry/dry-run.txt
+            printf '\n```\n\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve pooler region
+        run: |
+          region="$(supabase projects list -o json | jq -r --arg ref "$SUPABASE_PROJECT_REF" '
+            (if type == "object" and has("projects") then (.projects // []) else (. // []) end) as $projects
+            | ($projects | map(select((.ref // .id) == $ref)) | first | .region) as $match
+            | ($match // ($projects | first | .region)) // "unknown"
+          ')"
+
+          if [ "$region" = "unknown" ] || [ -z "$region" ]; then
+            printf '::error::Could not determine the project region from supabase projects list.\n'
+            supabase projects list -o json > telemetry/projects.json 2>&1 || true
+            exit 1
+          fi
+
+          echo "POOLER_HOST=aws-0-${region}.pooler.supabase.com" >> "$GITHUB_ENV"
+          echo "Resolved pooler host: aws-0-${region}.pooler.supabase.com"
+
+      - name: Probe live schema (SELECT-only catalog queries)
+        env:
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          cat > telemetry/probe.sql <<'SQL'
+          \echo '===== 1) supabase_migrations.schema_migrations (remote history)'
+          select version, name
+            from supabase_migrations.schema_migrations
+           order by version;
+
+          \echo '===== 2) public tables (kind r/p)'
+          select c.relname,
+                 c.relrowsecurity as rls,
+                 c.relforcerowsecurity as force_rls
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public' and c.relkind in ('r', 'p')
+           order by 1;
+
+          \echo '===== 3) public functions'
+          select p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' as signature,
+                 case when p.prosecdef then 'SECURITY DEFINER' else 'invoker' end as binding
+            from pg_proc p
+            join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public'
+           order by 1;
+
+          \echo '===== 4) public enum/composite types'
+          select t.typname, t.typtype
+            from pg_type t
+            join pg_namespace n on n.oid = t.typnamespace
+           where n.nspname = 'public' and t.typtype in ('e', 'c')
+           order by 1;
+
+          \echo '===== 5) policies on public tables'
+          select tablename, policyname
+            from pg_policies
+           where schemaname = 'public'
+           order by 1, 2;
+
+          \echo '===== 6) realtime publication membership'
+          select pubname, schemaname, tablename
+            from pg_publication_tables
+           order by 1, 2, 3;
+
+          \echo '===== 7) cron schema objects (pg_cron)'
+          select n.nspname, c.relname
+            from pg_class c
+            join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'cron'
+           order by 1, 2;
+
+          \echo '===== 8) key row counts (each query independent)'
+          select 'app_settings' as source_table, count(*) as rows from public.app_settings;
+          select 'profiles' as source_table, count(*) as rows from public.profiles;
+          select 'user_roles' as source_table, count(*) as rows from public.user_roles;
+          select 'audit_logs' as source_table, count(*) as rows from public.audit_logs;
+          select 'backup_logs (retained history)' as source_table, count(*) as rows from public.backup_logs;
+          select 'backup_settings.enabled' as source_table, count(*) filter (where enabled) as rows from public.backup_settings;
+          select 'tickets' as source_table, count(*) as rows from public.tickets;
+          select 'app_identity_settings' as source_table, count(*) as rows from public.app_identity_settings;
+
+          \echo '===== 9) per-migration object checklist'
+          select v.label, v.present
+            from (values
+              ('000000 init: table app_settings', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'app_settings')),
+              ('000000 init: table profiles', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'profiles')),
+              ('000000 init: table roles', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'roles')),
+              ('000000 init: table user_roles', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'user_roles')),
+              ('000000 init: table audit_logs', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'audit_logs')),
+              ('000000 init: fn is_admin()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'is_admin')),
+              ('000000 init: fn write_audit_log()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'write_audit_log')),
+              ('120000 harden: fn is_active_user()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'is_active_user')),
+              ('120000 harden: fn admin_set_user_status()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'admin_set_user_status')),
+              ('120000 harden: trigger fn guard_profile_protected_columns()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'guard_profile_protected_columns')),
+              ('150000 realtime: profiles in supabase_realtime', exists(select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'profiles')),
+              ('150000 realtime: app_settings in supabase_realtime', exists(select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'app_settings')),
+              ('160000 rbac atomic: fn admin_set_role_permissions()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'admin_set_role_permissions')),
+              ('160000 rbac atomic: fn guard_role_permissions_writes()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'guard_role_permissions_writes')),
+              ('170000 backup: retained settings table', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'backup_settings')),
+              ('170000 backup: retained history table', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'backup_logs')),
+              ('20261016000000 backup retirement: scheduler disabled', not exists(select 1 from public.backup_settings where singleton and enabled)),
+              ('20261016000000 backup retirement: queue has no active rows', not exists(select 1 from public.backup_logs where status in ('queued','running'))),
+              ('20261016000000 first signup: private state table', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'first_admin_bootstrap_state' and c.relkind = 'r')),
+              ('20261016000000 first signup: email trigger function', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'confirm_first_auth_user_email')),
+              ('20261016000000 first signup: profile/role trigger function', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'handle_new_user')),
+              ('20261016000000 first signup: legacy bootstrap RPCs absent', not exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('bootstrap_first_super_admin','check_bootstrap_readiness'))),
+              ('20261016120000 owner: protected role exists', exists(select 1 from public.roles where slug = 'owner' and is_super_admin)),
+              ('20261016120000 owner: all explicit permission rows exist', not exists(select 1 from public.permissions p where not exists(select 1 from public.roles r join public.role_permissions rp on rp.role_id = r.id where r.slug = 'owner' and r.is_super_admin and rp.permission_id = p.id))),
+              ('20261016120000 owner: future permissions are granted by trigger', exists(select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'permissions' and t.tgname = 'permissions_grant_owner_permission' and not t.tgisinternal)),
+              ('20261016120000 owner: old one-protected-role index removed', not exists(select 1 from pg_indexes where schemaname = 'public' and indexname = 'idx_one_super_admin')),
+              ('20261016000000 backup retirement: queue RPCs absent', not exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('admin_trigger_manual_backup','admin_update_backup_settings','admin_claim_next_backup_job','generate_scheduled_backup_requests'))),
+              ('20261016000000 backup retirement: cron jobs absent', not exists(select 1 from cron.job where jobname in ('generate-scheduled-backup-requests-europe-paris-0100','generate-scheduled-backup-requests-hourly') and database = current_database())),
+              ('20261016000000 backup retirement: realtime tables absent', not exists(select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename in ('backup_logs','backup_settings'))),
+              ('20261016000000 backup retirement: storage policy absent', not exists(select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'backup_objects_super_admin_read')),
+              ('130000 hardening: fn admin_set_user_roles()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'admin_set_user_roles')),
+              ('140000 support: table tickets', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'tickets')),
+              ('140000 support: table ticket_replies', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'ticket_replies')),
+              ('140000 support: type ticket_status', exists(select 1 from pg_type t join pg_namespace n on n.oid = t.typnamespace where n.nspname = 'public' and t.typname = 'ticket_status')),
+              ('140000 support: fn create_support_ticket()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'create_support_ticket')),
+              ('150000 identity: table app_identity_settings', exists(select 1 from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'app_identity_settings')),
+              ('150000 identity: fn can_manage_app_identity()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'can_manage_app_identity')),
+              ('150000 identity: fn admin_update_app_identity()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'admin_update_app_identity')),
+              ('160000 localization: fn can_manage_appearance()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'can_manage_appearance')),
+              ('160000 localization: fn admin_update_appearance_settings()', exists(select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'admin_update_appearance_settings'))
+            ) as v(label, present)
+           order by v.label;
+          SQL
+
+          db_url="postgresql://postgres.${SUPABASE_PROJECT_REF}@${POOLER_HOST}:5432/postgres?sslmode=require"
+          # ON_ERROR_STOP=0 on purpose: if one catalog probe errors (e.g. a
+          # missing schema), the rest must still run and be reported.
+          psql "$db_url" -X -v ON_ERROR_STOP=0 -P pager=off -f telemetry/probe.sql \
+            > telemetry/probe-output.txt 2>&1 || true
+
+          {
+            printf '### Live schema probe (psql via Supavisor session pooler)\n\n'
+            printf '```\n'
+            cat telemetry/probe-output.txt
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          printf '::notice::Telemetry published in the job summary and uploaded as an artifact.\n'
+
+      - name: Upload telemetry artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-telemetry
+          path: telemetry/
+          if-no-files-found: warn

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f8fafc" />
+    <meta
+      name="description"
+      content="نظام إدارة متكامل مبني على Vite و React و TypeScript مع Supabase و Vercel."
+    />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+    <title>نظام الإدارة</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!--
+      Theme + locale boot script: runs before first paint so the correct mode
+      and text direction apply with zero flash. It mirrors the logic in
+      src/context/ThemeContext.tsx, src/i18n/I18nContext.tsx and
+      src/context/LocalizationProvider.tsx and MUST use the same storage keys
+      (admin-system:theme, admin-system:locale, admin-system:localization).
+
+      Resolution cascade (locale, direction, theme):
+        1) explicit user choice  -> raw stored value under the per-preference key
+        2) system-wide default   -> versioned snapshot (v:1) written by the app
+        3) build-neutral default -> ar / rtl / system (matches the DB seed)
+    -->
+    <script>
+      (function () {
+        var THEME_KEY = 'admin-system:theme';
+        var LOCALE_KEY = 'admin-system:locale';
+        var LOCALIZATION_KEY = 'admin-system:localization';
+        try {
+          /* 0) Localization snapshot (system-wide defaults envelope) ------- */
+          var snapshot = null;
+          var storedSnapshot = window.localStorage.getItem(LOCALIZATION_KEY);
+          if (storedSnapshot) {
+            var parsedSnapshot = JSON.parse(storedSnapshot);
+            if (parsedSnapshot && typeof parsedSnapshot === 'object' && parsedSnapshot.v === 1) {
+              snapshot = parsedSnapshot;
+            }
+          }
+
+          /* 1) Locale + direction ------------------------------------------ */
+          var storedLocale = window.localStorage.getItem(LOCALE_KEY);
+          var locale = storedLocale === 'en' || storedLocale === 'ar' ? storedLocale : null;
+          if (
+            locale === null &&
+            snapshot &&
+            (snapshot.defaultLocale === 'en' || snapshot.defaultLocale === 'ar')
+          ) {
+            locale = snapshot.defaultLocale;
+          }
+          if (locale === null) {
+            locale = 'ar';
+          }
+          document.documentElement.lang = locale;
+          var dir = locale === 'en' ? 'ltr' : locale === 'ar' ? 'rtl' : null;
+          if (
+            dir === null &&
+            snapshot &&
+            (snapshot.defaultDirection === 'rtl' || snapshot.defaultDirection === 'ltr')
+          ) {
+            dir = snapshot.defaultDirection;
+          }
+          document.documentElement.dir = dir === 'ltr' ? 'ltr' : 'rtl';
+
+          /* 2) Color mode --------------------------------------------------- */
+          var stored = window.localStorage.getItem(THEME_KEY);
+          var theme =
+            stored === 'light' || stored === 'dark' || stored === 'system' ? stored : null;
+          if (
+            theme === null &&
+            snapshot &&
+            (snapshot.defaultTheme === 'light' ||
+              snapshot.defaultTheme === 'dark' ||
+              snapshot.defaultTheme === 'system')
+          ) {
+            theme = snapshot.defaultTheme;
+          }
+          if (theme === null) {
+            theme = 'system';
+          }
+          var prefersDark =
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = theme === 'dark' || (theme === 'system' && prefersDark);
+
+          var root = document.documentElement;
+          root.classList.toggle('dark', isDark);
+          root.style.colorScheme = isDark ? 'dark' : 'light';
+
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) {
+            meta.setAttribute('content', isDark ? '#020617' : '#f8fafc');
+          }
+
+          /* 3) Identity snapshot: title + favicon before first paint ------ */
+          var IDENTITY_KEY = 'admin-system:identity';
+          var storedIdentity = window.localStorage.getItem(IDENTITY_KEY);
+          if (storedIdentity) {
+            var identity = JSON.parse(storedIdentity);
+            if (identity && typeof identity === 'object') {
+              var identityName =
+                locale === 'en' && typeof identity.nameEn === 'string' && identity.nameEn
+                  ? identity.nameEn
+                  : typeof identity.nameAr === 'string' && identity.nameAr
+                    ? identity.nameAr
+                    : null;
+              if (identityName) {
+                document.title = identityName;
+              }
+              var faviconUrl = identity.faviconUrl;
+              if (typeof faviconUrl === 'string' && /^https:\/\//.test(faviconUrl)) {
+                var existing = document.querySelectorAll('link[rel~="icon"]');
+                for (var i = 0; i < existing.length; i++) {
+                  existing[i].parentNode.removeChild(existing[i]);
+                }
+                var icon = document.createElement('link');
+                icon.rel = 'icon';
+                icon.href = faviconUrl;
+                if (typeof identity.faviconType === 'string' && identity.faviconType) {
+                  icon.type = identity.faviconType;
+                }
+                document.head.appendChild(icon);
+              }
+            }
+          }
+        } catch (error) {
+          /* localStorage unavailable: keep the default light RTL locale */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
