@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { requirementMet } from '@/hooks/useAuthCapabilities';
-import { NAV_ITEMS, filterNavByCapability, type NavNode } from './nav-items';
+import {
+  NAV_ITEMS,
+  PROJECT_SETTINGS_CAPABILITY,
+  filterNavByCapability,
+  type NavGroupNode,
+  type NavNode,
+} from './nav-items';
 
 /**
  * Sidebar Smart Hiding: the tree is filtered by the caller's capability set.
@@ -33,9 +39,31 @@ const APP_LEAVES = ['settings-general', 'settings-appearance', 'settings-notific
 describe('sidebar capability filter', () => {
   it('shows the whole tree to the wildcard holder', () => {
     const ids = visibleLeafIds(['*']);
-    for (const id of [...SYSTEM_LEAVES, ...APP_LEAVES]) {
+    for (const id of [...SYSTEM_LEAVES, ...APP_LEAVES, 'settings-project']) {
       expect(ids).toContain(id);
     }
+  });
+
+  it('places project settings last under settings with its dedicated capability', () => {
+    const settings = NAV_ITEMS.find(
+      (node): node is NavGroupNode => node.kind === 'group' && node.id === 'settings',
+    );
+    expect(settings).toBeDefined();
+    const project = settings?.children.at(-1);
+    expect(project).toMatchObject({
+      kind: 'link',
+      id: 'settings-project',
+      to: '/settings/project',
+      capability: PROJECT_SETTINGS_CAPABILITY,
+    });
+  });
+
+  it('shows only the project branch to an explicit project-settings manager', () => {
+    const ids = visibleLeafIds([PROJECT_SETTINGS_CAPABILITY]);
+    expect(ids).toContain('settings');
+    expect(ids).toContain('settings-project');
+    expect(ids).not.toContain('settings-system');
+    expect(ids).not.toContain('settings-app');
   });
 
   it('hides a branch entirely when none of its children survive', () => {

@@ -27,6 +27,7 @@ import { Link } from 'react-router';
 import {
   IDENTITY_ERROR_KEYS,
   useAppIdentityAdmin,
+  type AppIdentityAdminScope,
   type AppIdentityErrorCode,
   type SaveAppIdentityInput,
 } from '@/hooks/useAppIdentity';
@@ -42,7 +43,8 @@ import {
 /**
  * General & Branding Settings (renders inside SettingsPage for `general`).
  *
- * * Capability gate: without `settings.manage` or `*` the screen is a 403.
+ * * Capability gate: general uses `settings.manage`; project scope uses
+ *   `project.settings:manage` (the wildcard passes both).
  * * ONE DOM tree serves both layouts through `@container` queries: form + live
  *   preview side by side on wide containers, stacked on narrow ones.
  * * Dropzones preview files as `blob:` URLs locally; Storage upload + the
@@ -374,9 +376,14 @@ function AssetDropzone({
   );
 }
 
-export default function GeneralSettings() {
+export interface GeneralSettingsProps {
+  /** Keeps the legacy general screen unchanged; project uses its dedicated grant/RPCs. */
+  readonly scope?: AppIdentityAdminScope;
+}
+
+export default function GeneralSettings({ scope = 'general' }: GeneralSettingsProps) {
   const { t, locale } = useI18n();
-  const admin = useAppIdentityAdmin();
+  const admin = useAppIdentityAdmin(scope);
   const { identity } = admin;
   const [draft, setDraft] = useState<IdentityDraft>(() => draftFrom(identity));
   const [baselineStamp, setBaselineStamp] = useState(identity.updatedAt);

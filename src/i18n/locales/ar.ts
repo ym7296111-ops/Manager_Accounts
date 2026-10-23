@@ -21,9 +21,9 @@ export const ar = {
 
   /* -------------------------------------------------------- navigation */
   'nav.dashboard': 'الشاشة الرئيسية',
-  'nav.workspace1': 'مساحة عمل 1',
-  'nav.workspace2': 'مساحة عمل 2',
-  'nav.workspace3': 'مساحة عمل 3',
+  'nav.workspaceAps': 'APS',
+  'nav.workspaceWorkshops10th': 'المنتج التام — ورش العاشر',
+  'nav.workspaceReports': 'التقارير والاستعلامات',
   'nav.settings': 'الضبط والتحكم',
   'nav.systemSettings': 'ضبط النظام والمستخدمين',
   'nav.appSettings': 'ضبط التطبيق',
@@ -35,6 +35,7 @@ export const ar = {
   'nav.general': 'الإعدادات الإدارية العامة',
   'nav.appearance': 'التحكم بالمظهر',
   'nav.notifications': 'التنبيهات',
+  'nav.projectSettings': 'ضبط المشروع',
   'nav.emptyGroup': 'لا توجد عناصر بعد — جاهزة للتعبئة',
   'nav.expand': 'فتح {name}',
   'nav.collapse': 'طي {name}',
@@ -303,9 +304,11 @@ export const ar = {
   'dashboard.error.unknown': 'حدث خطأ غير متوقع أثناء تحميل المؤشرات.',
 
   /* --------------------------------------------------------- workspace */
-  'workspace.title': 'مساحة عمل {n}',
-  'workspace.emptyTitle': 'مساحة عمل فارغة',
-  'workspace.emptyBody': 'هذه المساحة مهيأة بالكامل وجاهزة لاستقبال وحداتها وبياناتها.',
+  'workspace.aps.description': 'إدخال التقارير الورقية المعتمدة محاسبياً.',
+  'workspace.workshops10th.description': 'كيان مستقل لإدارة المنتج التام في ورش العاشر.',
+  'workspace.reports.description': 'طبقة قراءة وتجميع من APS وورش العاشر دون كتابة مستقلة.',
+  'workspace.emptyTitle': 'مساحة عمل جاهزة',
+  'workspace.emptyBody': 'هذه المساحة مهيأة لاستقبال وحداتها وبياناتها المستقلة في مرحلة لاحقة.',
 
   /* ---------------------------------------------------------- settings */
   'settings.emptyTitle': 'لا توجد عناصر لعرضها بعد',
@@ -346,6 +349,7 @@ export const ar = {
   'settings.backup.desc': 'إدارة النسخ الاحتياطية لقاعدة البيانات من لوحة Supabase.',
   'settings.support.desc': 'متابعة تذاكر الدعم الفني وحالات الحل.',
   'settings.general.desc': 'اسم النظام وبيانات التواصل ووضع الصيانة.',
+  'settings.project.desc': 'هوية المشروع وبيانات المسؤول والشعار وأيقونة المتصفح.',
   'settings.appearance.desc':
     'اللغة والمظهر الافتراضيان والمنطقة الزمنية وأيام العطلة لهذا المشروع.',
   'settings.notifications.title': 'التنبيهات',

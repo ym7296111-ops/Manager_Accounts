@@ -16,6 +16,56 @@ export interface E2EDatabase {
       >;
       user_roles: Table<{ user_id: string; role_id: string }, { user_id: string; role_id: string }>;
       roles: Table<{ id: string; slug: string }, { id?: string; slug: string }>;
+      app_identity_settings: Table<
+        {
+          id: boolean;
+          name_ar: string;
+          name_en: string;
+          admin_email: string | null;
+          phone: string | null;
+          logo_path: string | null;
+          logo_hash: string | null;
+          favicon_path: string | null;
+          favicon_hash: string | null;
+          assets_revision: number;
+          updated_at: string;
+          updated_by: string | null;
+        },
+        {
+          id?: boolean;
+          name_ar: string;
+          name_en: string;
+          admin_email?: string | null;
+          phone?: string | null;
+          logo_path?: string | null;
+          logo_hash?: string | null;
+          favicon_path?: string | null;
+          favicon_hash?: string | null;
+          assets_revision?: number;
+          updated_at?: string;
+          updated_by?: string | null;
+        }
+      >;
+      audit_logs: Table<
+        {
+          id: number;
+          actor_id: string | null;
+          action: string;
+          entity: string;
+          entity_id: string;
+          metadata: Json;
+          created_at: string;
+        },
+        {
+          id?: number;
+          actor_id?: string | null;
+          action: string;
+          entity: string;
+          entity_id: string;
+          metadata?: Json;
+          created_at?: string;
+        }
+      >;
       permissions: Table<
         { id: string; slug: string; is_delegatable: boolean },
         { id?: string; slug: string; is_delegatable?: boolean }
@@ -63,6 +113,26 @@ export interface E2EDatabase {
     };
     Views: Record<string, never>;
     Functions: {
+      admin_update_project_settings: {
+        Args: {
+          p_name_ar: string;
+          p_name_en: string;
+          p_admin_email?: string | null;
+          p_phone?: string | null;
+          p_logo_path?: string | null;
+          p_logo_hash?: string | null;
+          p_favicon_path?: string | null;
+          p_favicon_hash?: string | null;
+          p_clear_logo?: boolean;
+          p_clear_favicon?: boolean;
+          p_expected_updated_at?: string | null;
+        };
+        Returns: Json;
+      };
+      can_manage_project_settings: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
       admin_approve_user: {
         Args: {
           p_user_id: string;

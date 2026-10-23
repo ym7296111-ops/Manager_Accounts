@@ -262,17 +262,25 @@ export function replaceFavicon(href: string, type?: string): void {
   head.appendChild(link);
 }
 
-export function applyDocumentIdentity(identity: AppIdentity, locale: 'ar' | 'en'): void {
+export function applyDocumentFavicon(identity: AppIdentity): void {
   if (typeof document === 'undefined') {
     return;
   }
-  document.title = displayNameFor(identity, locale);
   const faviconUrl = brandingPublicUrl(identity.faviconPath);
   if (faviconUrl === null) {
     replaceFavicon(DEFAULT_FAVICON_HREF, DEFAULT_FAVICON_TYPE);
     return;
   }
   replaceFavicon(faviconUrl, mimeFromPath(identity.faviconPath));
+}
+
+/** Boot/standalone helper. The routed app composes its title in DocumentTitle. */
+export function applyDocumentIdentity(identity: AppIdentity, locale: 'ar' | 'en'): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  document.title = displayNameFor(identity, locale);
+  applyDocumentFavicon(identity);
 }
 
 function extensionFor(file: File): string {

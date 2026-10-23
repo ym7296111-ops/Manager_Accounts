@@ -4,10 +4,11 @@
  * Scope: the notification carrier/secrets tables
  * (`20261002120000_notification_transports_and_secrets.sql`) and the message
  * template tables (`20261002150000_notification_templates_schema.sql`), plus the
- * RPCs that are the only sanctioned access path. This file does NOT
- * describe the rest of the schema (profiles, RBAC, backups, support, identity,
- * localization); it exists so Phase 1 can be reviewed and typed before the
- * client is wired to it.
+ * RPCs that are the only sanctioned access path, plus the app-identity
+ * contracts used by Manager_Accounts. This file does NOT describe the rest of
+ * the schema (profiles, RBAC, backups, support, workspaces, localization);
+ * regenerate the complete file against the linked project when those contracts
+ * are needed by the client.
  *
  * Regenerate the complete file against the linked project (this replaces the
  * slice wholesale, which is the intended end state):
@@ -29,6 +30,59 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type Database = {
   public: {
     Tables: {
+      app_identity_settings: {
+        Row: {
+          admin_email: string | null;
+          assets_revision: number;
+          favicon_hash: string | null;
+          favicon_path: string | null;
+          id: boolean;
+          logo_hash: string | null;
+          logo_path: string | null;
+          name_ar: string;
+          name_en: string;
+          phone: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          admin_email?: string | null;
+          assets_revision?: number;
+          favicon_hash?: string | null;
+          favicon_path?: string | null;
+          id?: boolean;
+          logo_hash?: string | null;
+          logo_path?: string | null;
+          name_ar: string;
+          name_en: string;
+          phone?: string | null;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          admin_email?: string | null;
+          assets_revision?: number;
+          favicon_hash?: string | null;
+          favicon_path?: string | null;
+          id?: boolean;
+          logo_hash?: string | null;
+          logo_path?: string | null;
+          name_ar?: string;
+          name_en?: string;
+          phone?: string | null;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'app_identity_settings_updated_by_fkey';
+            columns: ['updated_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       notification_encryption_keys: {
         Row: {
           created_at: string;
@@ -413,6 +467,26 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      admin_update_project_settings: {
+        Args: {
+          p_admin_email?: string | null;
+          p_clear_favicon?: boolean;
+          p_clear_logo?: boolean;
+          p_expected_updated_at?: string | null;
+          p_favicon_hash?: string | null;
+          p_favicon_path?: string | null;
+          p_logo_hash?: string | null;
+          p_logo_path?: string | null;
+          p_name_ar: string;
+          p_name_en: string;
+          p_phone?: string | null;
+        };
+        Returns: Json;
+      };
+      can_manage_project_settings: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
       admin_clear_email_password: {
         Args: {
           p_expected_secrets_version?: number;

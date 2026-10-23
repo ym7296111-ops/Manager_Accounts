@@ -1,9 +1,8 @@
 # قالب نظام الإدارة — Admin System Boilerplate
 
 ![Version](https://img.shields.io/badge/version-1.0.1-blue)
-![Tests](https://img.shields.io/badge/tests-619%20passed-brightgreen)
-![E2E](https://img.shields.io/badge/e2e-30%20passed-brightgreen)
-![Audit](https://img.shields.io/badge/db%20audit-63%20checks-brightgreen)
+
+> تُقرأ نتائج الاختبارات والتدقيق من تشغيلات GitHub Actions الفعلية؛ لا تعرض هذه الصفحة شارات نجاح ثابتة أو أعداداً غير موثقة.
 
 قالب متكامل جاهز للإنتاج (Production-Ready) يعتمد نموذج **التطوير السحابي بالكامل (Cloud-Only)**:
 كل التحسينات تحدث على GitHub و Vercel و Supabase —
@@ -103,11 +102,28 @@
 | `/login`                                                        | تسجيل الدخول (مستقل، خارج الهيكل)                                                                             |
 | `/reset-password`                                               | إعادة تعيين كلمة المرور من رابط الإيميل (مسار احتياطي غير موصول — التدفق الأساسي طلب اعتماد يدوي من `/login`) |
 | `/`                                                             | الشاشة الرئيسية (محمية): مؤشرات تنفيذية لمن يملك `dashboard:read`، وإلا ترحيب ووصول سريع وحالة النظام         |
-| `/workspaces/1` `/workspaces/2` `/workspaces/3`                 | مساحات عمل فارغة مهيأة                                                                                        |
+| `/workspaces/aps`                                               | مساحة APS لإدخال التقارير الورقية المعتمدة محاسبياً (هيكل مهيأ)                                               |
+| `/workspaces/workshops-10th`                                    | مساحة «المنتج التام — ورش العاشر» ككيان مستقل (هيكل مهيأ)                                                     |
+| `/workspaces/reports`                                           | مساحة «التقارير والاستعلامات» المستقبلية للتجميع والقراءة فقط (هيكل مهيأ)                                     |
 | `/profile`                                                      | الملف الشخصي وتغيير كلمة المرور (محمية)                                                                       |
+| `/settings/project`                                             | ضبط المشروع؛ يتطلب الصلاحية الصريحة `project.settings:manage`                                                 |
 | `/settings/system/{users,roles,password-resets,backup,support}` | ضبط النظام؛ النسخ يوجّه إلى Supabase Dashboard                                                                |
 | `/settings/app/{general,appearance,notifications}`              | ضبط التطبيق                                                                                                   |
 | `*`                                                             | صفحة غير موجودة                                                                                               |
+
+## مساحات العمل وضبط المشروع
+
+مسارات مساحات العمل المعتمدة إنجليزية وثابتة: `/workspaces/aps` و`/workspaces/workshops-10th`
+و`/workspaces/reports`، بينما تظهر أسماؤها العربية المترجمة وأيقوناتها في الواجهة وعنوان المستند.
+المصدر الوحيد للكتالوج هو `src/lib/workspaces.ts`؛ لا يوجد سجل مساحات عمل مكرر في قاعدة البيانات.
+الشاشات الحالية هياكل مهيأة فقط، ولا تتضمن وحدات قيود APS أو الورش أو التقارير الداخلية.
+
+صفحة **ضبط المشروع** على `/settings/project` هي آخر عنصر ضمن «الضبط والتحكم»، وتتطلب الصلاحية
+الصريحة `project.settings:manage`. تُمنح افتراضياً للدورين `owner` و`super_admin`؛ ولا تكفي عضوية
+`admin` أو صلاحية `settings.manage` وحدها. تظهر للمستخدم غير المخوّل شاشة 403، ويرفض RPC المستقل
+`admin_update_project_settings` الكتابة بـSQLSTATE `42501`. تحفظ الكتابة الناجحة حقول الهوية الستة
+(بما فيها الشعار والأيقونة) وتضيف حدث `project.settings_updated` إلى `audit_logs` في المعاملة نفسها.
+يبقى مسار الإعدادات العامة القديم و`admin_update_app_identity` ببوابتهما وامتيازاتهما دون تغيير.
 
 ## لوحة المؤشرات التنفيذية (Executive Dashboard)
 

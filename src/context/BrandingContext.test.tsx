@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrandingProvider, useBranding } from '@/context/BrandingContext';
 import { I18nProvider } from '@/i18n/I18nContext';
@@ -92,7 +92,6 @@ describe('BrandingProvider', () => {
   it('loads the singleton row, paints the name, and writes the boot snapshot', async () => {
     renderBranding();
     expect(await screen.findByText('هوية حية')).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe('هوية حية'));
     expect(screen.getByTestId('revision').textContent).toBe('7');
     expect(window.localStorage.getItem(IDENTITY_STORAGE_KEY)).toContain('Live Identity');
   });

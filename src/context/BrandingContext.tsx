@@ -5,7 +5,7 @@ import {
   APP_IDENTITY_QUERY_KEY,
   IDENTITY_CHANNEL,
   IDENTITY_SELECT_COLUMNS,
-  applyDocumentIdentity,
+  applyDocumentFavicon,
   brandingPublicUrl,
   displayNameFor,
   fallbackIdentity,
@@ -21,7 +21,7 @@ import { getSupabase } from '@/lib/supabase';
  * Live application identity.
  *
  * * One TanStack Query entry (`['app-identity']`) is the source of truth for
- *   the login screen, the sidebar brand, document title and favicon.
+ *   the login screen, sidebar brand, route-aware document title and favicon.
  * * Supabase Realtime on `public.app_identity_settings` is an invalidation
  *   signal ONLY — events never patch client state.
  * * A public localStorage snapshot (`admin-system:identity`) lets the boot
@@ -116,9 +116,9 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   }, [queryClient]);
 
   useEffect(() => {
-    applyDocumentIdentity(identity, locale);
+    applyDocumentFavicon(identity);
     writeStoredSnapshot(snapshotFrom(identity));
-  }, [identity, locale]);
+  }, [identity]);
 
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: APP_IDENTITY_QUERY_KEY });

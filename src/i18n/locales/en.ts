@@ -21,9 +21,9 @@ export const en: Record<TranslationKey, string> = {
 
   /* -------------------------------------------------------- navigation */
   'nav.dashboard': 'Dashboard',
-  'nav.workspace1': 'Workspace 1',
-  'nav.workspace2': 'Workspace 2',
-  'nav.workspace3': 'Workspace 3',
+  'nav.workspaceAps': 'APS',
+  'nav.workspaceWorkshops10th': 'Finished Product — 10th Workshops',
+  'nav.workspaceReports': 'Reports & Inquiries',
   'nav.settings': 'Settings & Control',
   'nav.systemSettings': 'System & Users',
   'nav.appSettings': 'App Settings',
@@ -35,6 +35,7 @@ export const en: Record<TranslationKey, string> = {
   'nav.general': 'General Settings',
   'nav.appearance': 'Appearance',
   'nav.notifications': 'Notifications',
+  'nav.projectSettings': 'Project Settings',
   'nav.emptyGroup': 'No items yet — ready to be filled',
   'nav.expand': 'Expand {name}',
   'nav.collapse': 'Collapse {name}',
@@ -312,9 +313,13 @@ export const en: Record<TranslationKey, string> = {
   'dashboard.error.unknown': 'An unexpected error occurred while loading the indicators.',
 
   /* --------------------------------------------------------- workspace */
-  'workspace.title': 'Workspace {n}',
-  'workspace.emptyTitle': 'Empty workspace',
-  'workspace.emptyBody': 'This workspace is fully prepared and ready for its units and data.',
+  'workspace.aps.description': 'Entry of accounting-approved paper reports.',
+  'workspace.workshops10th.description':
+    'An independent entity for finished-product management at the 10th workshops.',
+  'workspace.reports.description': 'A read-only aggregation layer over APS and the 10th workshops.',
+  'workspace.emptyTitle': 'Workspace ready',
+  'workspace.emptyBody':
+    'This workspace is prepared for its independent units and data in a later milestone.',
 
   /* ---------------------------------------------------------- settings */
   'settings.emptyTitle': 'Nothing to show yet',
@@ -355,6 +360,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.backup.desc': 'Manage database backups from the Supabase dashboard.',
   'settings.support.desc': 'Track support tickets and their resolution status.',
   'settings.general.desc': 'System name, contact details and maintenance mode.',
+  'settings.project.desc': 'Project identity, administrator contact details, logo and favicon.',
   'settings.appearance.desc':
     'Default language, theme, time zone and weekend days for this project.',
   'settings.notifications.title': 'Notifications',
