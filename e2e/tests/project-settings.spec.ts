@@ -119,10 +119,11 @@ test('owner edits all project identity fields, uploads both assets, and writes a
     after: {
       name_ar: 'هوية مشروع الاختبار',
       name_en: 'Project E2E Identity',
-      admin_email: 'project.owner@example.com',
-      phone: '+201000000123',
     },
   });
+  const serializedAudit = JSON.stringify(audit.metadata);
+  expect(serializedAudit).not.toContain('project.owner@example.com');
+  expect(serializedAudit).not.toContain('+201000000123');
 });
 
 test.describe('ordinary admin without project.settings:manage', () => {

@@ -457,6 +457,74 @@ try {
     }
   });
 
+  await test('owner updates project settings and writes audit_logs atomically', async () => {
+    const ownerId = randomUUID();
+    await db.query('begin');
+    try {
+      // Create the owner through the real first-signup trigger while Auth is
+      // empty, then roll the entire fixture and identity update back together.
+      await db.query('insert into auth.users(id,email) values ($1,$2)', [
+        ownerId,
+        `project-owner.${randomUUID()}@example.invalid`,
+      ]);
+      assert.equal(
+        (await db.query('select public.is_original_owner($1) as owner', [ownerId])).rows[0].owner,
+        true,
+      );
+      await db.query('set local role authenticated');
+      await db.query("select set_config('request.jwt.claim.sub', $1, true)", [ownerId]);
+      await db.query("select set_config('request.jwt.claim.role', 'authenticated', true)");
+
+      const before = await db.query(
+        'select updated_at::text as updated_at from public.app_identity_settings where id=true',
+      );
+      const updated = await db.query(
+        `select public.admin_update_project_settings(
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+         ) as identity`,
+        [
+          'هوية المشروع المحدّثة',
+          'Project Settings Audit',
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          false,
+          false,
+          before.rows[0].updated_at,
+        ],
+      );
+      assert.equal(updated.rows[0].identity.name_ar, 'هوية المشروع المحدّثة');
+      assert.equal(updated.rows[0].identity.name_en, 'Project Settings Audit');
+
+      const audit = await db.query(
+        `select actor_id,action,entity,entity_id,metadata
+           from public.audit_logs
+          where actor_id=$1
+            and entity='app_identity_settings'
+            and entity_id='singleton'
+            and metadata->>'event'='project.settings_updated'
+          order by created_at desc
+          limit 1`,
+        [ownerId],
+      );
+      assert.equal(audit.rowCount, 1);
+      assert.equal(audit.rows[0].action, 'settings.updated');
+      assert.equal(audit.rows[0].metadata.after.name_ar, 'هوية المشروع المحدّثة');
+      assert.ok(audit.rows[0].metadata.changed_fields.includes('name_ar'));
+      assert.ok(audit.rows[0].metadata.changed_fields.includes('name_en'));
+
+      await db.query('reset role');
+      await db.query('set constraints all immediate');
+      await db.query('rollback');
+    } catch (error) {
+      await db.query('rollback');
+      throw error;
+    }
+  });
+
   // The following identities are synthetic audit fixtures in an isolated
   // database. Mark the first-signup claim closed, then let the real Auth
   // triggers create their profiles/default viewer assignments before the
@@ -554,62 +622,6 @@ try {
       asRole('anon', null, (c) =>
         c.query("select public.admin_update_project_settings('تحديث ممنوع','Denied Anonymous')"),
       ),
-    );
-  });
-
-  await test('owner updates project settings and writes audit_logs atomically', async () => {
-    const owner = await db.query(
-      "select ur.user_id from public.user_roles ur join public.roles r on r.id=ur.role_id where r.slug='owner' order by ur.granted_at limit 1",
-    );
-    assert.equal(owner.rowCount, 1);
-    const ownerId = owner.rows[0].user_id;
-
-    await asRole(
-      'authenticated',
-      ownerId,
-      async (c) => {
-        const before = await c.query(
-          'select updated_at from public.app_identity_settings where id=true',
-        );
-        const updated = await c.query(
-          `select public.admin_update_project_settings(
-             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
-           ) as identity`,
-          [
-            'هوية المشروع المحدّثة',
-            'Project Settings Audit',
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            false,
-            false,
-            before.rows[0].updated_at,
-          ],
-        );
-        assert.equal(updated.rows[0].identity.name_ar, 'هوية المشروع المحدّثة');
-        assert.equal(updated.rows[0].identity.name_en, 'Project Settings Audit');
-
-        const audit = await c.query(
-          `select actor_id,action,entity,entity_id,metadata
-             from public.audit_logs
-            where actor_id=$1
-              and entity='app_identity_settings'
-              and entity_id='singleton'
-              and metadata->>'event'='project.settings_updated'
-            order by created_at desc
-            limit 1`,
-          [ownerId],
-        );
-        assert.equal(audit.rowCount, 1);
-        assert.equal(audit.rows[0].action, 'settings.updated');
-        assert.equal(audit.rows[0].metadata.after.name_ar, 'هوية المشروع المحدّثة');
-        assert.ok(audit.rows[0].metadata.changed_fields.includes('name_ar'));
-        assert.ok(audit.rows[0].metadata.changed_fields.includes('name_en'));
-      },
-      true,
     );
   });
 
