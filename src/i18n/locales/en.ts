@@ -421,6 +421,36 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.stations.success.saved': 'Saved.',
   'settings.project.stations.success.deleted': 'Deleted.',
   'settings.project.stations.dismiss': 'Dismiss alert',
+  'settings.project.classifications.heading': 'Classifications tree',
+  'settings.project.classifications.description':
+    'Three levels: category → group → item. Only leaf items will be offered when letters are created later.',
+  'settings.project.classifications.addCategory': 'Add category',
+  'settings.project.classifications.addGroup': 'Add group',
+  'settings.project.classifications.addItem': 'Add item',
+  'settings.project.classifications.addHint':
+    'Adding is not enabled yet; it arrives in the next phase of the build.',
+  'settings.project.classifications.groupsHeading': 'Groups',
+  'settings.project.classifications.itemsHeading': 'Items',
+  /* "Groups: 2" rather than "2 groups": a bare count + noun needs plural
+     agreement ("1 groups" is wrong), and this matches the house pattern used
+     by `users.count`. */
+  'settings.project.classifications.groupCount': 'Groups: {count}',
+  'settings.project.classifications.itemCount': 'Items: {count}',
+  'settings.project.classifications.noGroups': 'No groups in this category yet.',
+  'settings.project.classifications.noItems': 'No items in this group yet.',
+  'settings.project.classifications.status.active': 'Active',
+  'settings.project.classifications.status.inactive': 'Disabled',
+  'settings.project.classifications.loading': 'Loading classifications…',
+  'settings.project.classifications.retry': 'Try again',
+  'settings.project.classifications.empty.title': 'No classifications yet',
+  'settings.project.classifications.empty.description':
+    'Add a category first, then its groups, then their items. Codes are generated automatically by the server.',
+  'settings.project.classifications.error.forbidden':
+    'You do not have permission to read classifications (project.settings:manage).',
+  'settings.project.classifications.error.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.classifications.error.network': 'Could not reach the server. Please try again.',
+  'settings.project.classifications.error.unknown': 'Could not load classifications.',
   'settings.project.tabs.classificationsPlaceholder': 'Classifications content — coming soon.',
   'settings.project.tabs.partiesPlaceholder': 'Parties content — coming soon.',
   'settings.project.tabs.generalPlaceholder': 'General settings content — coming soon.',

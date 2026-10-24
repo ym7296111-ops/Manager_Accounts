@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
+import type * as ClassificationsModule from '@/hooks/useClassifications';
 import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
@@ -44,6 +45,43 @@ vi.mock('@/hooks/useStationsDirectory', async (importOriginal) => {
           name: 'المحطة الرئيسية',
           isActive: true,
           warehouses: [{ id: 'w1', code: 'WH-001', name: 'مخزن المواد الخام', isActive: true }],
+        },
+      ],
+      error: null,
+      refetch: vi.fn(),
+    }),
+  };
+});
+
+/* The classifications tab reads the tree on mount; stub it for the same reason
+   as the stations directory — this test asserts the shell's wiring. */
+vi.mock('@/hooks/useClassifications', async (importOriginal) => {
+  const actual = await importOriginal<typeof ClassificationsModule>();
+  return {
+    ...actual,
+    useClassifications: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [
+        {
+          id: 'c1',
+          code: 'CLS-001',
+          name: 'المواد والمستلزمات',
+          level: 1,
+          isLeaf: false,
+          isActive: true,
+          children: [
+            {
+              id: 'g1',
+              code: 'CLS-002',
+              name: 'المواد الخام',
+              level: 2,
+              isLeaf: true,
+              isActive: true,
+              children: [],
+            },
+          ],
         },
       ],
       error: null,
@@ -115,8 +153,14 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();
 
     fireEvent.click(tabs[1]!);
-    expect(screen.getByText('محتوى التصنيفات قيد الإنشاء')).toBeTruthy();
     expect(tabs[1]?.getAttribute('aria-selected')).toBe('true');
+    // The classifications tab now renders the read-only tree, collapsed.
+    expect(screen.getByRole('heading', { name: 'شجرة التصنيفات' })).toBeTruthy();
+    expect(screen.getByText('المواد والمستلزمات')).toBeTruthy();
+    expect(screen.getByText('CLS-001')).toBeTruthy();
+    expect(screen.queryByText('المواد الخام')).toBeNull();
+    // Only the active panel is mounted, so the stations directory is gone.
+    expect(screen.queryByText('ST-01')).toBeNull();
 
     fireEvent.click(tabs[2]!);
     expect(screen.getByText('محتوى جهات الوارد والمنصرف قيد الإنشاء')).toBeTruthy();
@@ -128,6 +172,8 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();
     // Leaving and returning to the tab does not resurrect the old placeholder.
     expect(screen.queryByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeNull();
+    // …and the classifications tree is unmounted with its panel.
+    expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
   });
 
   it('returns 403 to an admin without project.settings:manage', () => {

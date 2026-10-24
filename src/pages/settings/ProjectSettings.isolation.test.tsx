@@ -107,7 +107,12 @@ describe('ProjectSettings separation from the general / branding screen', () => 
     expect(generalSettingsModule.loaded).toBe(false);
 
     /* Belt-and-braces: no member of the local component tree references it. */
-    for (const name of ['ProjectSettings.tsx', 'StationsWarehouses.tsx', 'StationDialogs.tsx']) {
+    for (const name of [
+      'ProjectSettings.tsx',
+      'StationsWarehouses.tsx',
+      'StationDialogs.tsx',
+      'Classifications.tsx',
+    ]) {
       expect(readSibling(name)).not.toContain('GeneralSettings');
     }
   });

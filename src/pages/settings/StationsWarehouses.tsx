@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { StatusIcon } from '@/components/ui/StatusIcon';
 import {
   useStationsDirectory,
   type StationsDirectoryErrorCode,
@@ -85,19 +86,6 @@ interface DeleteTarget {
 interface Banner {
   readonly tone: 'error' | 'success';
   readonly key: TranslationKey;
-}
-
-function StatusIcon({ active, label }: { readonly active: boolean; readonly label: string }) {
-  const Icon = active ? CheckCircle2 : Ban;
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1">
-      <Icon
-        className={active ? 'text-success size-4' : 'text-destructive size-4'}
-        aria-hidden="true"
-      />
-      <span className="sr-only">{label}</span>
-    </span>
-  );
 }
 
 const ACTION_CLASS =

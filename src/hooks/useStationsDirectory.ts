@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { classifyPostgrestReadError } from '@/hooks/postgrestReadError';
 import { getSupabase } from '@/lib/supabase';
 
 /**
@@ -130,30 +131,9 @@ export function classifyStationsError(error: unknown): StationsDirectoryErrorCod
     return error.code;
   }
 
-  const candidate = error as { code?: unknown; message?: unknown } | null;
-  const code = typeof candidate?.code === 'string' ? candidate.code : '';
-  const message = typeof candidate?.message === 'string' ? candidate.message.toLowerCase() : '';
-
-  if (
-    code === '42501' ||
-    code === 'PGRST301' ||
-    message.includes('permission denied') ||
-    message.includes('permission_denied') ||
-    message.includes('jwt')
-  ) {
-    return 'forbidden';
-  }
-
-  if (
-    code === 'PGRST503' ||
-    message.includes('failed to fetch') ||
-    message.includes('networkerror') ||
-    message.includes('timeout')
-  ) {
-    return 'network';
-  }
-
-  return 'unknown';
+  /* The wire-level mapping (42501 / PGRST301 / transport) is shared with every
+     other project-settings read so the two screens cannot drift apart. */
+  return classifyPostgrestReadError(error);
 }
 
 export function useStationsDirectory(options?: { readonly enabled?: boolean }) {

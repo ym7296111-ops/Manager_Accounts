@@ -409,6 +409,33 @@ export const ar = {
   'settings.project.stations.success.saved': 'تم الحفظ.',
   'settings.project.stations.success.deleted': 'تم الحذف.',
   'settings.project.stations.dismiss': 'إغلاق التنبيه',
+  'settings.project.classifications.heading': 'شجرة التصنيفات',
+  'settings.project.classifications.description':
+    'ثلاثة مستويات: فئة رئيسية ← مجموعة ← صنف. الأصناف الورقية فقط هي التي ستُعرض عند إنشاء الخطابات لاحقاً.',
+  'settings.project.classifications.addCategory': 'إضافة فئة رئيسية',
+  'settings.project.classifications.addGroup': 'إضافة مجموعة',
+  'settings.project.classifications.addItem': 'إضافة صنف',
+  'settings.project.classifications.addHint':
+    'الإضافة غير مفعّلة بعد؛ ستُتاح في المرحلة التالية من التطوير.',
+  'settings.project.classifications.groupsHeading': 'المجموعات',
+  'settings.project.classifications.itemsHeading': 'الأصناف',
+  'settings.project.classifications.groupCount': 'عدد المجموعات: {count}',
+  'settings.project.classifications.itemCount': 'عدد الأصناف: {count}',
+  'settings.project.classifications.noGroups': 'لا توجد مجموعات في هذه الفئة بعد.',
+  'settings.project.classifications.noItems': 'لا توجد أصناف في هذه المجموعة بعد.',
+  'settings.project.classifications.status.active': 'نشط',
+  'settings.project.classifications.status.inactive': 'معطّل',
+  'settings.project.classifications.loading': 'جارٍ تحميل التصنيفات…',
+  'settings.project.classifications.retry': 'إعادة المحاولة',
+  'settings.project.classifications.empty.title': 'لا توجد تصنيفات بعد',
+  'settings.project.classifications.empty.description':
+    'أضف فئة رئيسية أولاً، ثم مجموعاتها، ثم أصنافها. الأكواد تُولَّد تلقائياً من الخادم.',
+  'settings.project.classifications.error.forbidden':
+    'لا تملك صلاحية قراءة التصنيفات (project.settings:manage).',
+  'settings.project.classifications.error.unavailable':
+    'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
+  'settings.project.classifications.error.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.classifications.error.unknown': 'تعذّر تحميل التصنيفات.',
   'settings.project.tabs.classificationsPlaceholder': 'محتوى التصنيفات قيد الإنشاء',
   'settings.project.tabs.partiesPlaceholder': 'محتوى جهات الوارد والمنصرف قيد الإنشاء',
   'settings.project.tabs.generalPlaceholder': 'محتوى الإعدادات العامة قيد الإنشاء',
