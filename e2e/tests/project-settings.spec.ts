@@ -56,8 +56,11 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('WH-001')).toHaveCount(0);
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // Expanding the first station reveals its seeded warehouses.
-  await main.getByRole('button', { name: /المحطة الرئيسية/ }).click();
+  /* Expanding the first station reveals its seeded warehouses. `aria-expanded`
+     targets the header toggle specifically: the row's Edit / Deactivate /
+     Delete buttons carry the station name in their accessible names too, so a
+     name-only match is ambiguous under strict mode. */
+  await main.locator('button[aria-expanded]').filter({ hasText: 'المحطة الرئيسية' }).click();
   await expect(main.getByText('WH-001')).toBeVisible();
   await expect(main.getByText('WH-002')).toBeVisible();
   await expect(main.getByText('WH-003')).toBeVisible();
