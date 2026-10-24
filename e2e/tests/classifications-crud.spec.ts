@@ -139,17 +139,23 @@ test.describe('classifications CRUD', () => {
 
     await expect(main.getByText(ITEM)).toBeVisible();
 
-    // ---- the tree really is three levels deep ------------------------------
+    /* ---- the tree really is three levels deep ------------------------------
+       Re-read all three rows now that the subtree is complete: `is_leaf` is
+       derived from the child list, so the snapshots taken at creation time
+       predate the children that flip a parent from leaf to branch. */
+    const finishedCategory = await readRow(CATEGORY);
+    const finishedGroup = await readRow(GROUP);
     const createdItem = await readRow(ITEM);
-    expect(createdCategory?.level).toBe(1);
-    expect(createdGroup?.level).toBe(2);
+
+    expect(finishedCategory?.level).toBe(1);
+    expect(finishedGroup?.level).toBe(2);
     expect(createdItem?.level).toBe(3);
-    expect(createdGroup?.parent_id).toBe(createdCategory?.id);
-    expect(createdItem?.parent_id).toBe(createdGroup?.id);
+    expect(finishedGroup?.parent_id).toBe(finishedCategory?.id);
+    expect(createdItem?.parent_id).toBe(finishedGroup?.id);
+    // The two parents flipped to non-leaf without anybody sending is_leaf.
+    expect(finishedCategory?.is_leaf).toBe(false);
+    expect(finishedGroup?.is_leaf).toBe(false);
     expect(createdItem?.is_leaf).toBe(true);
-    // The parent flipped to non-leaf without anybody sending is_leaf.
-    expect(createdCategory?.is_leaf).toBe(false);
-    expect(createdGroup?.is_leaf).toBe(false);
 
     // ---- rename: the code is shown, never editable -------------------------
     await main.getByRole('button', { name: `Edit ${ITEM}` }).click();
@@ -171,7 +177,7 @@ test.describe('classifications CRUD', () => {
     expect(renamed?.name).toBe(RENAMED);
     expect(renamed?.code).toBe(createdItem?.code);
     expect(renamed?.level).toBe(3);
-    expect(renamed?.parent_id).toBe(createdGroup?.id);
+    expect(renamed?.parent_id).toBe(finishedGroup?.id);
 
     // ---- activate / deactivate --------------------------------------------
     await main.getByRole('button', { name: `Deactivate ${RENAMED}` }).click();
