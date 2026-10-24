@@ -5,10 +5,12 @@
  * (`20261002120000_notification_transports_and_secrets.sql`) and the message
  * template tables (`20261002150000_notification_templates_schema.sql`), plus the
  * RPCs that are the only sanctioned access path, plus the app-identity
- * contracts used by Manager_Accounts. This file does NOT describe the rest of
- * the schema (profiles, RBAC, backups, support, workspaces, localization);
- * regenerate the complete file against the linked project when those contracts
- * are needed by the client.
+ * contracts used by Manager_Accounts, plus the project-settings
+ * stations/warehouses tables
+ * (`20261104030000_stations_and_warehouses.sql`). This file does NOT describe
+ * the rest of the schema (profiles, RBAC, backups, support, workspaces,
+ * localization); regenerate the complete file against the linked project when
+ * those contracts are needed by the client.
  *
  * Regenerate the complete file against the linked project (this replaces the
  * slice wholesale, which is the intended end state):
@@ -461,6 +463,73 @@ export type Database = {
           user_id?: string;
         };
         Relationships: [];
+      };
+      stations: {
+        Row: {
+          code: string;
+          created_at: string;
+          id: string;
+          is_active: boolean;
+          name: string;
+          updated_at: string;
+        };
+        Insert: {
+          /** Minted server-side from `station_code_seq` (ST-01); never send it. */
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          name: string;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          name?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      warehouses: {
+        Row: {
+          code: string;
+          created_at: string;
+          id: string;
+          is_active: boolean;
+          name: string;
+          station_id: string;
+          updated_at: string;
+        };
+        Insert: {
+          /** Minted server-side from `warehouse_code_seq` (WH-001); never send it. */
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          name: string;
+          station_id: string;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          name?: string;
+          station_id?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'warehouses_station_id_fkey';
+            columns: ['station_id'];
+            isOneToOne: false;
+            referencedRelation: 'stations';
+            referencedColumns: ['id'];
+          },
+        ];
       };
     };
     Views: {
