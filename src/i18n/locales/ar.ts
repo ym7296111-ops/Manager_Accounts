@@ -415,8 +415,6 @@ export const ar = {
   'settings.project.classifications.addCategory': 'إضافة فئة رئيسية',
   'settings.project.classifications.addGroup': 'إضافة مجموعة',
   'settings.project.classifications.addItem': 'إضافة صنف',
-  'settings.project.classifications.addHint':
-    'الإضافة غير مفعّلة بعد؛ ستُتاح في المرحلة التالية من التطوير.',
   'settings.project.classifications.groupsHeading': 'المجموعات',
   'settings.project.classifications.itemsHeading': 'الأصناف',
   'settings.project.classifications.groupCount': 'عدد المجموعات: {count}',
@@ -430,13 +428,59 @@ export const ar = {
   'settings.project.classifications.empty.title': 'لا توجد تصنيفات بعد',
   'settings.project.classifications.empty.description':
     'أضف فئة رئيسية أولاً، ثم مجموعاتها، ثم أصنافها. الأكواد تُولَّد تلقائياً من الخادم.',
+  'settings.project.classifications.level.category': 'فئة رئيسية',
+  'settings.project.classifications.level.group': 'مجموعة',
+  'settings.project.classifications.level.item': 'صنف',
+  'settings.project.classifications.action.edit': 'تعديل',
+  'settings.project.classifications.action.deactivate': 'تعطيل',
+  'settings.project.classifications.action.activate': 'تفعيل',
+  'settings.project.classifications.action.delete': 'حذف',
+  'settings.project.classifications.dialog.addCategory': 'إضافة فئة رئيسية',
+  'settings.project.classifications.dialog.addGroup': 'إضافة مجموعة',
+  'settings.project.classifications.dialog.addItem': 'إضافة صنف',
+  'settings.project.classifications.dialog.edit': 'تعديل الاسم',
+  'settings.project.classifications.dialog.name': 'اسم {kind}',
+  'settings.project.classifications.dialog.rootHint':
+    'سيُنشأ {kind} جديد في المستوى الأول. الكود والمستوى يولّدهما الخادم.',
+  'settings.project.classifications.dialog.underParent':
+    'سيُنشأ {kind} جديد داخل «{parent}». الكود والمستوى يولّدهما الخادم.',
+  'settings.project.classifications.dialog.code': 'الكود (يُولَّد تلقائياً)',
+  'settings.project.classifications.dialog.immutable':
+    'الكود والمستوى والأب لا تتغير من هذه الشاشة؛ يمكن تعديل الاسم فقط.',
+  'settings.project.classifications.dialog.save': 'حفظ',
+  'settings.project.classifications.dialog.cancel': 'إلغاء',
+  'settings.project.classifications.dialog.close': 'إغلاق',
+  'settings.project.classifications.dialog.saving': 'جارٍ الحفظ…',
+  'settings.project.classifications.validation.required': 'الاسم مطلوب.',
+  'settings.project.classifications.validation.tooShort': 'الاسم يجب ألا يقل عن حرفين.',
+  'settings.project.classifications.delete.title': 'حذف العنصر',
+  'settings.project.classifications.delete.body':
+    'سيُحذف «{name}» ({code}) نهائياً. لا يمكن التراجع عن هذه العملية.',
+  'settings.project.classifications.delete.childGuard':
+    'الحذف مرفوض من قاعدة البيانات إذا كان للعنصر أبناء؛ احذف الأبناء أولاً.',
+  'settings.project.classifications.delete.confirm': 'تأكيد الحذف',
+  'settings.project.classifications.success.saved': 'تم الحفظ.',
+  'settings.project.classifications.success.deleted': 'تم الحذف.',
+  'settings.project.classifications.dismiss': 'إغلاق التنبيه',
+  'settings.project.classifications.writeError.forbidden':
+    'لا تملك صلاحية تنفيذ هذه العملية (project.settings:manage).',
+  'settings.project.classifications.writeError.unavailable':
+    'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
+  'settings.project.classifications.writeError.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.classifications.writeError.validation': 'الاسم غير صالح.',
+  'settings.project.classifications.writeError.hasChildren':
+    'لا يمكن حذف هذا العنصر لاحتوائه على عناصر فرعية. احذف عناصره الفرعية أولاً.',
+  'settings.project.classifications.writeError.missingParent':
+    'لم يعد العنصر الأب موجوداً. حدّث الشجرة وحاول مرة أخرى.',
+  'settings.project.classifications.writeError.notFound':
+    'لم يعد هذا العنصر موجوداً. حدّث الشجرة وحاول مرة أخرى.',
+  'settings.project.classifications.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
   'settings.project.classifications.error.forbidden':
     'لا تملك صلاحية قراءة التصنيفات (project.settings:manage).',
   'settings.project.classifications.error.unavailable':
     'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
   'settings.project.classifications.error.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
   'settings.project.classifications.error.unknown': 'تعذّر تحميل التصنيفات.',
-  'settings.project.tabs.classificationsPlaceholder': 'محتوى التصنيفات قيد الإنشاء',
   'settings.project.tabs.partiesPlaceholder': 'محتوى جهات الوارد والمنصرف قيد الإنشاء',
   'settings.project.tabs.generalPlaceholder': 'محتوى الإعدادات العامة قيد الإنشاء',
   'settings.appearance.desc':

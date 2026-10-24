@@ -67,7 +67,7 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('WH-003')).toBeVisible();
   await expect(main.getByRole('button', { name: /إضافة مخزن|Add warehouse/ })).toBeEnabled();
 
-  // The classifications tab renders the read-only tree over `supabase/seed.sql`.
+  // The classifications tab renders the seeded tree over `supabase/seed.sql`.
   // Codes are asserted rather than labels: they are language-independent.
   await tabs.nth(1).click();
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
@@ -78,22 +78,31 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('CLS-002')).toBeVisible();
 
   // Collapsed by default: no group or item exists in the DOM before the
-  // category is opened. The add affordances are present but disabled — the
-  // write path is not part of this phase.
+  // category is opened. The add affordance is live (Phase 3), and each row
+  // carries its own edit / activate / delete controls.
   await expect(main.getByText('CLS-003')).toHaveCount(0);
-  await expect(main.getByRole('button', { name: /إضافة فئة رئيسية|Add category/ })).toBeDisabled();
+  await expect(main.getByRole('button', { name: /إضافة فئة رئيسية|Add category/ })).toBeEnabled();
+  await expect(
+    main.getByRole('button', { name: /تعديل المواد والمستلزمات|Edit المواد والمستلزمات/ }),
+  ).toBeVisible();
+  // A category with children offers no delete: the FK is the real guard, the
+  // hidden button is the courtesy. (Covered in depth in classifications-crud.)
+  await expect(
+    main.getByRole('button', { name: /حذف المواد والمستلزمات|Delete المواد والمستلزمات/ }),
+  ).toHaveCount(0);
 
   await main.locator('button[aria-expanded]').filter({ hasText: 'المواد والمستلزمات' }).click();
   await expect(main.getByText('CLS-003')).toBeVisible();
   await expect(main.getByText('CLS-004')).toBeVisible();
   await expect(main.getByText('CLS-006')).toHaveCount(0);
-  await expect(main.getByRole('button', { name: /إضافة مجموعة|Add group/ }).first()).toBeDisabled();
+  await expect(main.getByRole('button', { name: /إضافة مجموعة|Add group/ }).first()).toBeEnabled();
 
   await main.locator('button[aria-expanded]').filter({ hasText: 'المواد الخام' }).click();
   await expect(main.getByText('CLS-006')).toBeVisible();
-  await expect(main.getByRole('button', { name: /إضافة صنف|Add item/ }).first()).toBeDisabled();
+  await expect(main.getByRole('button', { name: /إضافة صنف|Add item/ }).first()).toBeEnabled();
 
-  // Read-only means read-only: expanding the whole tree mounts no field.
+  // The tree itself mounts no field: every write goes through a dialog that is
+  // mounted only on demand (dialogs portal to <body>, outside <main>).
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
   // The remaining tabs are still placeholders and issue no queries.

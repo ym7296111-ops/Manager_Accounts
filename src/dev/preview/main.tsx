@@ -1,10 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot } from 'react-dom/client';
-import { CLASSIFICATIONS_QUERY_KEY } from '@/hooks/useClassifications';
-import { STATIONS_DIRECTORY_QUERY_KEY } from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import PreviewApp from '@/dev/preview/PreviewApp';
-import { CLASSIFICATIONS, STATIONS } from '@/dev/preview/previewData';
 import '@/dev/preview/preview.css';
 
 /**
@@ -16,21 +13,20 @@ import '@/dev/preview/preview.css';
  * (`RequireCapabilityPassthrough`) and a database (the react-query cache is
  * primed instead).
  *
- * The primed cache is a QueryClient-level stub, not a component-level one: the
- * hooks still run their own selectors and tree building, and `staleTime` is
- * infinite so no request is attempted against an unconfigured client.
+ * The hooks run unmodified: `@/lib/supabase` is aliased to
+ * `memorySupabase.ts` (see `vite.preview.config.ts`), an in-memory client that
+ * mints codes and derives `level`/`is_leaf` like the database triggers do. That
+ * makes create / rename / toggle / delete clickable here, including the
+ * refusal to delete a node that still has children.
  *
  * Run with: `npm run preview:ui` (see `vite.preview.config.ts`).
  */
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: { staleTime: Infinity, retry: false, refetchOnWindowFocus: false },
+    queries: { staleTime: 0, retry: false, refetchOnWindowFocus: false },
   },
 });
-
-queryClient.setQueryData(CLASSIFICATIONS_QUERY_KEY, CLASSIFICATIONS);
-queryClient.setQueryData(STATIONS_DIRECTORY_QUERY_KEY, STATIONS);
 
 const container = document.getElementById('root');
 

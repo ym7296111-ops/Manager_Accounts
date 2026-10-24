@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { getSupabase } from '@/lib/supabase';
 import { STATIONS_DIRECTORY_QUERY_KEY } from '@/hooks/useStationsDirectory';
+import { validateName } from '@/lib/nameValidation';
 
 /**
  * Write operations for the Stations & Warehouses directory.
@@ -33,26 +34,15 @@ export class StationWriteError extends Error {
   }
 }
 
-/** Mirrors the Arabic/English copy requirement: a name is at least 2 characters. */
-export const MIN_NAME_LENGTH = 2;
-
-export type NameValidationFailure = 'required' | 'tooShort';
-
-export type NameValidation =
-  | { readonly ok: true; readonly value: string }
-  | { readonly ok: false; readonly code: NameValidationFailure };
-
-/** Trim first, then require content, then require the minimum length. */
-export function validateName(raw: string): NameValidation {
-  const value = raw.trim();
-  if (value === '') {
-    return { ok: false, code: 'required' };
-  }
-  if ([...value].length < MIN_NAME_LENGTH) {
-    return { ok: false, code: 'tooShort' };
-  }
-  return { ok: true, value };
-}
+/* The rule itself is shared with the classifications directory — see
+   `@/lib/nameValidation` — and re-exported here so existing imports keep
+   working without each call site learning a second module. */
+export {
+  MIN_NAME_LENGTH,
+  validateName,
+  type NameValidation,
+  type NameValidationFailure,
+} from '@/lib/nameValidation';
 
 function validateNameOrThrow(raw: string): string {
   const result = validateName(raw);
