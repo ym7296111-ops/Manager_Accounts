@@ -35,6 +35,15 @@ const RENAMED = 'Automated test item renamed';
 
 const CODE_PATTERN = /^CLS-\d{3,}$/;
 
+/**
+ * The “add sub-classification” button inside a given parent.
+ *
+ * Level 2 and level 3 are both sub-classifications, so their visible label is
+ * identical and two of those buttons can be on screen at once. The screen
+ * qualifies the accessible name with the parent the new row will land under.
+ */
+const addSubUnder = (parent: string) => `Add sub-classification under “${parent}”`;
+
 async function openClassificationsTab(page: Page) {
   await page.goto('/settings/project');
   const main = page.getByRole('main');
@@ -77,13 +86,13 @@ test.describe('classifications CRUD', () => {
     const main = await openClassificationsTab(page);
 
     // ---- create a category: name only, no code field -----------------------
-    await main.getByRole('button', { name: 'Add category' }).click();
+    await main.getByRole('button', { name: 'Add main classification' }).click();
     let dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: 'Add category' })).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: 'Add main classification' })).toBeVisible();
     // One editable field and no code/level/parent control of any kind.
     await expect(dialog.locator('input')).toHaveCount(1);
     await expect(dialog.locator('select')).toHaveCount(0);
-    await dialog.getByLabel('category name').fill(CATEGORY);
+    await dialog.getByLabel('main classification name').fill(CATEGORY);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -111,12 +120,12 @@ test.describe('classifications CRUD', () => {
     // ---- create a group inside it: the parent is carried by the request ----
     await categoryToggle.click();
     await expect(categoryToggle).toHaveAttribute('aria-expanded', 'true');
-    await main.getByRole('button', { name: 'Add group' }).click();
+    await main.getByRole('button', { name: addSubUnder(CATEGORY), exact: true }).click();
     dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: 'Add group' })).toBeVisible();
+    await expect(dialog.getByRole('heading', { name: 'Add sub-classification' })).toBeVisible();
     // The dialog states where the node lands; it does not offer to change it.
     await expect(dialog.getByText(CATEGORY, { exact: false })).toBeVisible();
-    await dialog.getByLabel('group name').fill(GROUP);
+    await dialog.getByLabel('sub-classification name').fill(GROUP);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -130,10 +139,10 @@ test.describe('classifications CRUD', () => {
     // ---- create an item inside the group -----------------------------------
     await groupToggle.click();
     await expect(groupToggle).toHaveAttribute('aria-expanded', 'true');
-    await main.getByRole('button', { name: 'Add item' }).click();
+    await main.getByRole('button', { name: addSubUnder(GROUP), exact: true }).click();
     dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: 'Add item' })).toBeVisible();
-    await dialog.getByLabel('item name').fill(ITEM);
+    await expect(dialog.getByRole('heading', { name: 'Add sub-classification' })).toBeVisible();
+    await dialog.getByLabel('sub-classification name').fill(ITEM);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -161,9 +170,9 @@ test.describe('classifications CRUD', () => {
     await main.getByRole('button', { name: `Edit ${ITEM}`, exact: true }).click();
     dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Rename' })).toBeVisible();
-    await expect(dialog.getByLabel('item name')).toHaveValue(ITEM);
+    await expect(dialog.getByLabel('sub-classification name')).toHaveValue(ITEM);
     await expect(dialog.locator('input')).toHaveCount(1);
-    await dialog.getByLabel('item name').fill(RENAMED);
+    await dialog.getByLabel('sub-classification name').fill(RENAMED);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(main.getByText(RENAMED)).toBeVisible();
@@ -213,7 +222,7 @@ test.describe('classifications CRUD', () => {
     for (const name of [RENAMED, GROUP, CATEGORY]) {
       await main.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
       const confirm = page.getByRole('dialog');
-      await expect(confirm.getByRole('heading', { name: 'Delete item' })).toBeVisible();
+      await expect(confirm.getByRole('heading', { name: 'Delete classification' })).toBeVisible();
       await confirm.getByRole('button', { name: 'Confirm delete' }).click();
       await expect(page.getByRole('dialog')).toHaveCount(0);
       await expect(main.getByText(name, { exact: true })).toHaveCount(0);
@@ -293,7 +302,7 @@ test.describe('classifications authorization', () => {
     // Writes are refused at the table level with 42501.
     const { error: insertError } = await client
       .from('classifications')
-      .insert({ name: 'فئة ممنوعة' })
+      .insert({ name: 'تصنيف ممنوع' })
       .select('id');
     expect(insertError?.code).toBe('42501');
 

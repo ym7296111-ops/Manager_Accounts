@@ -143,6 +143,15 @@ const toggleOf = (name: string) =>
 const actionOf = (action: string, entity: string) =>
   screen.getByRole('button', { name: `${action} ${entity}` });
 
+/**
+ * The “add sub-classification” button inside a given parent.
+ *
+ * Both sub-levels share one visible label, and two of those buttons can be on
+ * screen at once, so the screen qualifies the accessible name with the parent
+ * the new row will land under.
+ */
+const subAddButton = (parent: string) => `إضافة تصنيف فرعي داخل «${parent}»`;
+
 /** Invokes the callbacks the component passes to `mutate(vars, callbacks)`. */
 function callbacksOf(stub: MutationStub) {
   const call = stub.mutate.mock.calls.at(-1);
@@ -182,9 +191,11 @@ describe('Classifications — tree rendering', () => {
     expect(screen.getByText('الخدمات')).toBeTruthy();
     expect(screen.getByText('CLS-006')).toBeTruthy();
 
-    // Counts and status are exposed to assistive technology, not just colour.
-    expect(screen.getByText('عدد المجموعات: 2')).toBeTruthy();
-    expect(screen.getByText('عدد المجموعات: 0')).toBeTruthy();
+    /* Counts and status are exposed to assistive technology, not just colour.
+       Level 2 and level 3 share the "sub-classifications" label, so a count is
+       only unambiguous inside the row it belongs to. */
+    expect(within(toggleOf('المواد والمستلزمات')).getByText('التصنيفات الفرعية: 2')).toBeTruthy();
+    expect(within(toggleOf('الخدمات')).getByText('التصنيفات الفرعية: 0')).toBeTruthy();
     const inactiveLabels = screen.getAllByText('معطّل');
     expect(inactiveLabels).toHaveLength(1); // the disabled category
 
@@ -209,8 +220,8 @@ describe('Classifications — tree rendering', () => {
     expect(screen.getByText('المواد الخام')).toBeTruthy();
     expect(screen.getByText('CLS-002')).toBeTruthy();
     expect(screen.getByText('مستلزمات التشغيل')).toBeTruthy();
-    expect(screen.getByText('عدد الأصناف: 2')).toBeTruthy();
-    expect(screen.getByText('عدد الأصناف: 0')).toBeTruthy();
+    expect(within(toggleOf('المواد الخام')).getByText('التصنيفات الفرعية: 2')).toBeTruthy();
+    expect(within(toggleOf('مستلزمات التشغيل')).getByText('التصنيفات الفرعية: 0')).toBeTruthy();
     expect(screen.queryByText('حديد وصلب')).toBeNull();
 
     const panel = document.getElementById('classification-category-panel-c1')!;
@@ -246,9 +257,13 @@ describe('Classifications — tree rendering', () => {
     expect(materials.getAttribute('aria-expanded')).toBe('true');
     expect(services.getAttribute('aria-expanded')).toBe('false');
 
-    // A category with no children shows its empty-group note, not an empty box.
+    // A category with no children shows its empty note, not an empty box.
     fireEvent.click(services);
-    expect(screen.getByText('لا توجد مجموعات في هذه الفئة بعد.')).toBeTruthy();
+    expect(
+      within(document.getElementById('classification-category-panel-c2')!).getByText(
+        'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
+      ),
+    ).toBeTruthy();
 
     fireEvent.click(toggleOf('المواد الخام'));
     expect(toggleOf('المواد الخام').getAttribute('aria-expanded')).toBe('true');
@@ -263,12 +278,16 @@ describe('Classifications — tree rendering', () => {
     expect(toggleOf('المواد الخام').getAttribute('aria-expanded')).toBe('true');
   });
 
-  it('shows the empty-group note for a group without items', () => {
+  it('shows the empty note for a sub-classification without children', () => {
     renderScreen();
     fireEvent.click(toggleOf('المواد والمستلزمات'));
     fireEvent.click(toggleOf('مستلزمات التشغيل'));
 
-    expect(screen.getByText('لا توجد أصناف في هذه المجموعة بعد.')).toBeTruthy();
+    expect(
+      within(document.getElementById('classification-group-panel-g2')!).getByText(
+        'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
+      ),
+    ).toBeTruthy();
   });
 });
 
@@ -281,7 +300,7 @@ describe('Classifications — empty, loading and permission states', () => {
     expect(screen.queryByText('CLS-001')).toBeNull();
     // The add affordance stays present and live: an empty tree is the one place
     // where the next step must be obvious.
-    expect(screen.getByRole('button', { name: 'إضافة فئة رئيسية' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إضافة تصنيف أساسي' })).toHaveProperty(
       'disabled',
       false,
     );
@@ -330,39 +349,41 @@ describe('Classifications — create', () => {
   it('opens a name-only dialog for a new category and submits the trimmed name', () => {
     renderScreen();
 
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة فئة رئيسية' }));
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف أساسي' }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'إضافة فئة رئيسية' })).toBeTruthy();
+    expect(within(dialog).getByRole('heading', { name: 'إضافة تصنيف أساسي' })).toBeTruthy();
 
     // Exactly one field, and no code / level / parent input.
     expect(within(dialog).queryAllByRole('textbox')).toHaveLength(1);
     expect(within(dialog).queryByText(/CLS-/)).toBeNull();
-    expect(dialog.textContent).toContain('سيُنشأ فئة رئيسية جديد في المستوى الأول');
+    expect(dialog.textContent).toContain('سيُنشأ تصنيف أساسي جديد في المستوى الأول');
 
-    fireEvent.change(within(dialog).getByLabelText('اسم فئة رئيسية'), {
-      target: { value: '  فئة جديدة  ' },
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف أساسي'), {
+      target: { value: '  تصنيف أساسي جديد  ' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     expect(mutations.create.mutate).toHaveBeenCalledTimes(1);
     /* A category omits parent_id entirely — the level is the server's to derive. */
-    expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({ name: 'فئة جديدة' });
+    expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({ name: 'تصنيف أساسي جديد' });
   });
 
   it('sends parent_id for a group created inside a category', () => {
     renderScreen();
     fireEvent.click(toggleOf('المواد والمستلزمات'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة مجموعة' }));
+    fireEvent.click(screen.getByRole('button', { name: subAddButton('المواد والمستلزمات') }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'إضافة مجموعة' })).toBeTruthy();
+    expect(within(dialog).getByRole('heading', { name: 'إضافة تصنيف فرعي' })).toBeTruthy();
     expect(dialog.textContent).toContain('المواد والمستلزمات');
 
-    fireEvent.change(within(dialog).getByLabelText('اسم مجموعة'), { target: { value: 'مجموعة' } });
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
+      target: { value: 'تصنيف فرعي' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({
-      name: 'مجموعة',
+      name: 'تصنيف فرعي',
       parentId: 'c1',
     });
   });
@@ -372,25 +393,27 @@ describe('Classifications — create', () => {
     fireEvent.click(toggleOf('المواد والمستلزمات'));
     fireEvent.click(toggleOf('المواد الخام'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة صنف' }));
+    fireEvent.click(screen.getByRole('button', { name: subAddButton('المواد الخام') }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'إضافة صنف' })).toBeTruthy();
+    expect(within(dialog).getByRole('heading', { name: 'إضافة تصنيف فرعي' })).toBeTruthy();
 
-    fireEvent.change(within(dialog).getByLabelText('اسم صنف'), { target: { value: 'صنف جديد' } });
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
+      target: { value: 'تصنيف فرعي أدنى' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({
-      name: 'صنف جديد',
+      name: 'تصنيف فرعي أدنى',
       parentId: 'g1',
     });
   });
 
   it('refuses an empty or single-character name before any request is made', () => {
     renderScreen();
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة فئة رئيسية' }));
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف أساسي' }));
 
     const dialog = screen.getByRole('dialog');
-    const input = within(dialog).getByLabelText('اسم فئة رئيسية');
+    const input = within(dialog).getByLabelText('اسم تصنيف أساسي');
 
     fireEvent.change(input, { target: { value: '   ' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
@@ -406,10 +429,12 @@ describe('Classifications — create', () => {
   it('closes the dialog and reveals the new node once the insert resolves', () => {
     renderScreen();
     fireEvent.click(toggleOf('المواد والمستلزمات'));
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة مجموعة' }));
+    fireEvent.click(screen.getByRole('button', { name: subAddButton('المواد والمستلزمات') }));
 
     const dialog = screen.getByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('اسم مجموعة'), { target: { value: 'جديدة' } });
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
+      target: { value: 'جديدة' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     settleWithSuccess(mutations.create);
@@ -422,10 +447,10 @@ describe('Classifications — create', () => {
 
   it('keeps the dialog open and reports a denied write without pretending success', () => {
     renderScreen();
-    fireEvent.click(screen.getByRole('button', { name: 'إضافة فئة رئيسية' }));
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف أساسي' }));
     const dialog = screen.getByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('اسم فئة رئيسية'), {
-      target: { value: 'فئة' },
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف أساسي'), {
+      target: { value: 'اسم مختصر' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
@@ -446,12 +471,12 @@ describe('Classifications — rename', () => {
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'تعديل الاسم' })).toBeTruthy();
     /* The noun in the label follows the node's own level: this is a group. */
-    expect(within(dialog).getByLabelText('اسم مجموعة')).toHaveProperty('value', 'المواد الخام');
+    expect(within(dialog).getByLabelText('اسم تصنيف فرعي')).toHaveProperty('value', 'المواد الخام');
     expect(within(dialog).getByText('CLS-002')).toBeTruthy();
     // The code is plain text: only the name is editable.
     expect(within(dialog).queryAllByRole('textbox')).toHaveLength(1);
 
-    fireEvent.change(within(dialog).getByLabelText('اسم مجموعة'), {
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
       target: { value: 'اسم معدّل' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
@@ -471,8 +496,8 @@ describe('Classifications — rename', () => {
     fireEvent.click(actionOf('تعديل', 'حديد وصلب'));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByLabelText('اسم صنف')).toHaveProperty('value', 'حديد وصلب');
-    fireEvent.change(within(dialog).getByLabelText('اسم صنف'), {
+    expect(within(dialog).getByLabelText('اسم تصنيف فرعي')).toHaveProperty('value', 'حديد وصلب');
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
       target: { value: 'حديد' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
@@ -565,7 +590,7 @@ describe('Classifications — delete (double guard)', () => {
     fireEvent.click(actionOf('حذف', 'الخدمات'));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'حذف العنصر' })).toBeTruthy();
+    expect(within(dialog).getByRole('heading', { name: 'حذف التصنيف' })).toBeTruthy();
     expect(within(dialog).getByText(/الخدمات/)).toBeTruthy();
     expect(within(dialog).getByText(/CLS-006/)).toBeTruthy();
     // The dialog says out loud that the constraint, not the UI, is the guard.
@@ -586,7 +611,7 @@ describe('Classifications — delete (double guard)', () => {
     settleWithError(mutations.remove, new ClassificationWriteError('hasChildren'));
 
     const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('لا يمكن حذف هذا العنصر لاحتوائه على عناصر فرعية');
+    expect(alert.textContent).toContain('لا يمكن حذف هذا التصنيف لاحتوائه على تصنيفات فرعية');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
@@ -597,7 +622,7 @@ describe('Classifications — delete (double guard)', () => {
 
     settleWithError(mutations.remove, new ClassificationWriteError('notFound'));
 
-    expect(screen.getByRole('alert').textContent).toContain('لم يعد هذا العنصر موجوداً');
+    expect(screen.getByRole('alert').textContent).toContain('لم يعد هذا التصنيف موجوداً');
     expect(screen.queryByText('تم الحذف.')).toBeNull();
   });
 

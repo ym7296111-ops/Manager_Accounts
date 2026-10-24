@@ -42,7 +42,7 @@ const ROW = {
   id: 'c-new',
   parent_id: null,
   code: 'CLS-013',
-  name: 'فئة',
+  name: 'تصنيف أساسي',
   level: 1,
   is_leaf: true,
   is_active: true,
@@ -158,9 +158,9 @@ describe('buildCreatePayload', () => {
 
   it('never carries a derived column', () => {
     for (const payload of [
-      buildCreatePayload({ name: 'فئة' }),
-      buildCreatePayload({ name: 'مجموعة', parentId: 'cat-1' }),
-      buildCreatePayload({ name: 'صنف', parentId: 'grp-1' }),
+      buildCreatePayload({ name: 'تصنيف أساسي' }),
+      buildCreatePayload({ name: 'تصنيف فرعي', parentId: 'cat-1' }),
+      buildCreatePayload({ name: 'تصنيف فرعي أدنى', parentId: 'grp-1' }),
     ]) {
       for (const column of DERIVED_COLUMNS) {
         expect(column in payload).toBe(false);
@@ -250,11 +250,11 @@ describe('classifyClassificationWriteError', () => {
 
 describe('useCreateClassification', () => {
   it('inserts the name only for a category and never the code, level or is_leaf', async () => {
-    const row = await runMutation(useCreateClassification, { name: 'فئة جديدة' });
+    const row = await runMutation(useCreateClassification, { name: 'تصنيف أساسي جديد' });
 
     expect(calls.table).toBe('classifications');
     expect(calls.operation).toBe('insert');
-    expect(calls.payload).toEqual({ name: 'فئة جديدة' });
+    expect(calls.payload).toEqual({ name: 'تصنيف أساسي جديد' });
     expect(Object.keys(calls.payload ?? {}).sort()).toEqual(['name']);
     // The echo is read, not sent: it is what the server derived.
     expect(calls.select).toContain('level');
@@ -262,15 +262,15 @@ describe('useCreateClassification', () => {
   });
 
   it('sends parent_id when creating a group inside a category', async () => {
-    await runMutation(useCreateClassification, { name: 'مجموعة', parentId: 'cat-1' });
+    await runMutation(useCreateClassification, { name: 'تصنيف فرعي', parentId: 'cat-1' });
 
-    expect(calls.payload).toEqual({ name: 'مجموعة', parent_id: 'cat-1' });
+    expect(calls.payload).toEqual({ name: 'تصنيف فرعي', parent_id: 'cat-1' });
   });
 
   it('sends parent_id when creating an item inside a group', async () => {
-    await runMutation(useCreateClassification, { name: 'صنف', parentId: 'grp-1' });
+    await runMutation(useCreateClassification, { name: 'تصنيف فرعي أدنى', parentId: 'grp-1' });
 
-    expect(calls.payload).toEqual({ name: 'صنف', parent_id: 'grp-1' });
+    expect(calls.payload).toEqual({ name: 'تصنيف فرعي أدنى', parent_id: 'grp-1' });
   });
 
   it('issues no request at all for an invalid name', async () => {
@@ -288,7 +288,7 @@ describe('useCreateClassification', () => {
     const { result } = renderHook(useCreateClassification, { wrapper });
 
     await expect(
-      result.current.mutateAsync({ name: 'مجموعة', parentId: 'gone' }),
+      result.current.mutateAsync({ name: 'تصنيف فرعي', parentId: 'gone' }),
     ).rejects.toMatchObject({ code: 'missingParent' });
   });
 
@@ -297,7 +297,7 @@ describe('useCreateClassification', () => {
 
     const { result } = renderHook(useCreateClassification, { wrapper });
 
-    await expect(result.current.mutateAsync({ name: 'فئة' })).rejects.toMatchObject({
+    await expect(result.current.mutateAsync({ name: 'تصنيف أساسي' })).rejects.toMatchObject({
       code: 'unavailable',
     });
   });
@@ -397,7 +397,7 @@ describe('cache invalidation', () => {
     );
     const { result } = renderHook(useCreateClassification, { wrapper: Wrapper });
 
-    result.current.mutate({ name: 'فئة' });
+    result.current.mutate({ name: 'تصنيف أساسي' });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(invalidate).toHaveBeenCalledWith({

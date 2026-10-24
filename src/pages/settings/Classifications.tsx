@@ -46,9 +46,9 @@ import {
  *
  * Three levels, assembled client-side from one flat read:
  *
- *   level 1  فئة رئيسية  → an accordion row, collapsed by default
- *   level 2  مجموعة      → an accordion row inside the category panel
- *   level 3  صنف         → a flat row inside the group panel
+ *   level 1  تصنيف أساسي        → an accordion row, collapsed by default
+ *   level 2  تصنيف فرعي         → an accordion row inside the parent panel
+ *   level 3  تصنيف فرعي (ورقي)  → a flat row; the only deletable level
  *
  * What the UI sends, and what it never sends:
  *
@@ -114,17 +114,35 @@ interface DeleteTarget {
   readonly code: string;
 }
 
+/**
+ * The “add” affordance for one level.
+ *
+ * Level 2 and level 3 are both sub-classifications, so their buttons read the
+ * same and two of them can be on screen at once (one inside an open main
+ * classification, one inside an open sub-classification). `ariaLabel` names the
+ * node the new row will land under, which disambiguates them for both screen
+ * readers and tests; it always starts with the visible label, as WCAG 2.5.3
+ * requires.
+ */
 function AddButton({
   label,
+  ariaLabel,
   onClick,
   disabled,
 }: {
   readonly label: string;
+  readonly ariaLabel?: string;
   readonly onClick: () => void;
   readonly disabled: boolean;
 }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className={ADD_BUTTON_CLASS}>
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className={ADD_BUTTON_CLASS}
+    >
       <Plus className="size-3.5" aria-hidden="true" />
       {label}
     </button>
@@ -672,6 +690,9 @@ export default function Classifications() {
               addGroup={
                 <AddButton
                   label={t('settings.project.classifications.addGroup')}
+                  ariaLabel={t('settings.project.classifications.addUnderParent', {
+                    parent: category.name,
+                  })}
                   onClick={() => openAdd('group', category.id, category.name)}
                   disabled={busy}
                 />
@@ -680,6 +701,9 @@ export default function Classifications() {
               renderAddItem={(group) => (
                 <AddButton
                   label={t('settings.project.classifications.addItem')}
+                  ariaLabel={t('settings.project.classifications.addUnderParent', {
+                    parent: group.name,
+                  })}
                   onClick={() => openAdd('item', group.id, group.name)}
                   disabled={busy}
                 />

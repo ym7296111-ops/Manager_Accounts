@@ -43,12 +43,12 @@ await openTab();
 await page.screenshot({ path: `${OUT}/classifications-tree-actions.png` });
 
 // 2. Add-category dialog: name only, code previewed as read-only.
-await page.getByRole('button', { name: 'إضافة فئة رئيسية' }).click();
+await page.getByRole('button', { name: 'إضافة تصنيف أساسي' }).click();
 await page.getByRole('dialog').waitFor();
 await page.screenshot({ path: `${OUT}/classifications-add-category.png` });
 
 // 3. Validation state: the disabled save + inline error on a one-character name.
-await page.getByLabel('اسم فئة رئيسية').fill('ا');
+await page.getByLabel('اسم تصنيف أساسي').fill('ا');
 await page.getByRole('dialog').getByRole('button', { name: 'حفظ' }).click();
 await page.waitForTimeout(200);
 await page.screenshot({ path: `${OUT}/classifications-validation.png` });
@@ -56,7 +56,7 @@ await page.getByRole('button', { name: 'إغلاق' }).click();
 
 // 4. Add-group dialog: shows where the node lands, parent not editable.
 await page.locator('button[aria-expanded]').filter({ hasText: 'المواد والمستلزمات' }).click();
-await page.getByRole('button', { name: 'إضافة مجموعة' }).click();
+await page.getByRole('button', { name: 'إضافة تصنيف فرعي داخل «المواد والمستلزمات»' }).click();
 await page.getByRole('dialog').waitFor();
 await page.screenshot({ path: `${OUT}/classifications-add-group.png` });
 await page.getByRole('button', { name: 'إغلاق' }).click();
@@ -82,21 +82,25 @@ const parentDelete = await page.getByRole('button', { name: 'حذف المواد
 console.log('delete affordances on a parent (must be 0):', parentDelete);
 expect(parentDelete === 0, 'a node with children must not offer delete');
 
-await page.getByRole('button', { name: 'إضافة فئة رئيسية' }).click();
-await page.getByLabel('اسم فئة رئيسية').fill('فئة تحت الاختبار');
+await page.getByRole('button', { name: 'إضافة تصنيف أساسي' }).click();
+await page.getByLabel('اسم تصنيف أساسي').fill('تصنيف تحت الاختبار');
 await page.getByRole('dialog').getByRole('button', { name: 'حفظ' }).click();
-await page.getByRole('button', { name: 'حذف فئة تحت الاختبار' }).waitFor();
+await page.getByRole('button', { name: 'حذف تصنيف تحت الاختبار' }).waitFor();
 
-await page.evaluate(() => window.__previewDb?.addChild('فئة تحت الاختبار', 'مجموعة أُضيفت للتو'));
-await page.getByRole('button', { name: 'حذف فئة تحت الاختبار' }).click();
+await page.evaluate(() =>
+  window.__previewDb?.addChild('تصنيف تحت الاختبار', 'تصنيف فرعي أُضيف للتو'),
+);
+await page.getByRole('button', { name: 'حذف تصنيف تحت الاختبار' }).click();
 await page.getByRole('dialog').getByRole('button', { name: 'تأكيد الحذف' }).click();
-await page.getByText('لا يمكن حذف هذا العنصر لاحتوائه على عناصر فرعية', { exact: false }).waitFor();
+await page
+  .getByText('لا يمكن حذف هذا التصنيف لاحتوائه على تصنيفات فرعية', { exact: false })
+  .waitFor();
 
 /* The refusal triggers a refetch: the stale row must stop offering delete, and
    the child that caused the refusal must show up once the row is opened. */
-await page.getByRole('button', { name: 'حذف فئة تحت الاختبار' }).waitFor({ state: 'detached' });
-await page.locator('button[aria-expanded]').filter({ hasText: 'فئة تحت الاختبار' }).click();
-await page.getByText('مجموعة أُضيفت للتو').waitFor();
+await page.getByRole('button', { name: 'حذف تصنيف تحت الاختبار' }).waitFor({ state: 'detached' });
+await page.locator('button[aria-expanded]').filter({ hasText: 'تصنيف تحت الاختبار' }).click();
+await page.getByText('تصنيف فرعي أُضيف للتو').waitFor();
 await page.screenshot({ path: `${OUT}/classifications-delete-refused.png`, fullPage: true });
 await page.getByRole('button', { name: 'إغلاق التنبيه' }).click();
 console.log('23503 surfaced as the has-children message');
@@ -107,7 +111,7 @@ await page.evaluate(() => window.localStorage.setItem('admin-system:locale', 'en
 await page.reload({ waitUntil: 'networkidle' });
 await page.getByRole('tab').nth(1).click();
 await page.getByRole('heading', { name: 'Classifications tree' }).waitFor();
-await page.getByRole('button', { name: 'Add category' }).click();
+await page.getByRole('button', { name: 'Add main classification' }).click();
 await page.getByRole('dialog').waitFor();
 await page.screenshot({ path: `${OUT}/classifications-add-category-en.png` });
 await page.getByRole('button', { name: 'Close' }).click();
@@ -124,7 +128,7 @@ await page.reload({ waitUntil: 'networkidle' });
 await page.evaluate(() => document.documentElement.classList.add('dark'));
 await page.getByRole('tab').nth(1).click();
 await page.getByRole('heading', { name: 'شجرة التصنيفات' }).waitFor();
-await page.getByRole('button', { name: 'إضافة فئة رئيسية' }).click();
+await page.getByRole('button', { name: 'إضافة تصنيف أساسي' }).click();
 await page.getByRole('dialog').waitFor();
 await page.screenshot({ path: `${OUT}/classifications-add-category-dark.png` });
 

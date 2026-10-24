@@ -423,36 +423,41 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.stations.dismiss': 'Dismiss alert',
   'settings.project.classifications.heading': 'Classifications tree',
   'settings.project.classifications.description':
-    'Three levels: category → group → item. Only leaf items will be offered when letters are created later.',
-  'settings.project.classifications.addCategory': 'Add category',
-  'settings.project.classifications.addGroup': 'Add group',
-  'settings.project.classifications.addItem': 'Add item',
-  'settings.project.classifications.groupsHeading': 'Groups',
-  'settings.project.classifications.itemsHeading': 'Items',
+    'Three levels: a main classification at the top, with sub-classifications on the two levels below it. Only leaf sub-classifications will be offered when letters are created later.',
+  'settings.project.classifications.addCategory': 'Add main classification',
+  'settings.project.classifications.addGroup': 'Add sub-classification',
+  'settings.project.classifications.addItem': 'Add sub-classification',
+  /* Two "add sub-classification" buttons can be on screen at once (one inside
+     an open main classification, one inside an open sub-classification), so
+     each carries the node it will land under. The accessible name still starts
+     with the visible label, which keeps it compliant (WCAG 2.5.3). */
+  'settings.project.classifications.addUnderParent': 'Add sub-classification under “{parent}”',
+  'settings.project.classifications.groupsHeading': 'Sub-classifications',
+  'settings.project.classifications.itemsHeading': 'Sub-classifications',
   /* "Groups: 2" rather than "2 groups": a bare count + noun needs plural
      agreement ("1 groups" is wrong), and this matches the house pattern used
      by `users.count`. */
-  'settings.project.classifications.groupCount': 'Groups: {count}',
-  'settings.project.classifications.itemCount': 'Items: {count}',
-  'settings.project.classifications.noGroups': 'No groups in this category yet.',
-  'settings.project.classifications.noItems': 'No items in this group yet.',
+  'settings.project.classifications.groupCount': 'Sub-classifications: {count}',
+  'settings.project.classifications.itemCount': 'Sub-classifications: {count}',
+  'settings.project.classifications.noGroups': 'No sub-classifications in this classification yet.',
+  'settings.project.classifications.noItems': 'No sub-classifications in this classification yet.',
   'settings.project.classifications.status.active': 'Active',
   'settings.project.classifications.status.inactive': 'Disabled',
   'settings.project.classifications.loading': 'Loading classifications…',
   'settings.project.classifications.retry': 'Try again',
   'settings.project.classifications.empty.title': 'No classifications yet',
   'settings.project.classifications.empty.description':
-    'Add a category first, then its groups, then their items. Codes are generated automatically by the server.',
-  'settings.project.classifications.level.category': 'category',
-  'settings.project.classifications.level.group': 'group',
-  'settings.project.classifications.level.item': 'item',
+    'Add a main classification first, then its sub-classifications. Codes are generated automatically by the server.',
+  'settings.project.classifications.level.category': 'main classification',
+  'settings.project.classifications.level.group': 'sub-classification',
+  'settings.project.classifications.level.item': 'sub-classification',
   'settings.project.classifications.action.edit': 'Edit',
   'settings.project.classifications.action.deactivate': 'Deactivate',
   'settings.project.classifications.action.activate': 'Activate',
   'settings.project.classifications.action.delete': 'Delete',
-  'settings.project.classifications.dialog.addCategory': 'Add category',
-  'settings.project.classifications.dialog.addGroup': 'Add group',
-  'settings.project.classifications.dialog.addItem': 'Add item',
+  'settings.project.classifications.dialog.addCategory': 'Add main classification',
+  'settings.project.classifications.dialog.addGroup': 'Add sub-classification',
+  'settings.project.classifications.dialog.addItem': 'Add sub-classification',
   'settings.project.classifications.dialog.edit': 'Rename',
   'settings.project.classifications.dialog.name': '{kind} name',
   'settings.project.classifications.dialog.rootHint':
@@ -469,11 +474,11 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.classifications.validation.required': 'A name is required.',
   'settings.project.classifications.validation.tooShort':
     'The name must be at least two characters.',
-  'settings.project.classifications.delete.title': 'Delete item',
+  'settings.project.classifications.delete.title': 'Delete classification',
   'settings.project.classifications.delete.body':
     '“{name}” ({code}) will be permanently deleted. This cannot be undone.',
   'settings.project.classifications.delete.childGuard':
-    'The database refuses this delete while the item still has children; delete its children first.',
+    'The database refuses this delete while the classification still has sub-classifications; delete those first.',
   'settings.project.classifications.delete.confirm': 'Confirm delete',
   'settings.project.classifications.success.saved': 'Saved.',
   'settings.project.classifications.success.deleted': 'Deleted.',
@@ -486,11 +491,11 @@ export const en: Record<TranslationKey, string> = {
     'Could not reach the server. Please try again.',
   'settings.project.classifications.writeError.validation': 'The name is not valid.',
   'settings.project.classifications.writeError.hasChildren':
-    'This item cannot be deleted because it still has child items. Delete its children first.',
+    'This classification cannot be deleted because it still has sub-classifications. Delete them first.',
   'settings.project.classifications.writeError.missingParent':
-    'The parent item no longer exists. Refresh the tree and try again.',
+    'The parent classification no longer exists. Refresh the tree and try again.',
   'settings.project.classifications.writeError.notFound':
-    'This item no longer exists. Refresh the tree and try again.',
+    'This classification no longer exists. Refresh the tree and try again.',
   'settings.project.classifications.writeError.unknown': 'The operation failed. Please try again.',
   'settings.project.classifications.error.forbidden':
     'You do not have permission to read classifications (project.settings:manage).',

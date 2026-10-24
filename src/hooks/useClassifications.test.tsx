@@ -87,19 +87,19 @@ function outline(nodes: readonly ClassificationNode[], depth = 0): string[] {
 describe('parseClassifications', () => {
   it('assembles a three-level tree from a flat, unordered response', () => {
     const parsed = parseClassifications([
-      { id: 'i1', parent_id: 'g1', code: 'CLS-004', name: 'صنف', is_active: true },
-      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'مجموعة', is_active: true },
-      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'فئة', is_active: true },
+      { id: 'i1', parent_id: 'g1', code: 'CLS-004', name: 'تصنيف فرعي أدنى', is_active: true },
+      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'تصنيف فرعي', is_active: true },
+      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'تصنيف أساسي', is_active: true },
     ]);
 
     expect(outline(parsed)).toEqual(['CLS-001:1', '  CLS-002:2', '    CLS-004:3']);
-    expect(parsed[0]?.children[0]?.children[0]?.name).toBe('صنف');
+    expect(parsed[0]?.children[0]?.children[0]?.name).toBe('تصنيف فرعي أدنى');
   });
 
   it('derives level from the structure and ignores a level claimed on the wire', () => {
     const parsed = parseClassifications([
-      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'فئة', level: 3 },
-      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'مجموعة', level: 1 },
+      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'تصنيف أساسي', level: 3 },
+      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'تصنيف فرعي', level: 1 },
     ]);
 
     expect(parsed[0]?.level).toBe(1);
@@ -119,8 +119,15 @@ describe('parseClassifications', () => {
 
   it('carries the derived is_leaf and is_active flags, and defaults to false', () => {
     const parsed = parseClassifications([
-      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'فئة', is_leaf: false, is_active: true },
-      { id: 'i1', parent_id: 'c1', code: 'CLS-002', name: 'صنف', is_leaf: 'true' },
+      {
+        id: 'c1',
+        parent_id: null,
+        code: 'CLS-001',
+        name: 'تصنيف أساسي',
+        is_leaf: false,
+        is_active: true,
+      },
+      { id: 'i1', parent_id: 'c1', code: 'CLS-002', name: 'تصنيف فرعي أدنى', is_leaf: 'true' },
     ]);
 
     expect(parsed[0]?.isLeaf).toBe(false);
@@ -224,8 +231,8 @@ describe('CLASSIFICATIONS_SELECT', () => {
 describe('useClassifications', () => {
   it('runs one flat query against public.classifications and returns the tree', async () => {
     respondWith([
-      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'مجموعة', is_active: true },
-      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'فئة', is_active: true },
+      { id: 'g1', parent_id: 'c1', code: 'CLS-002', name: 'تصنيف فرعي', is_active: true },
+      { id: 'c1', parent_id: null, code: 'CLS-001', name: 'تصنيف أساسي', is_active: true },
     ]);
 
     const { result } = mountHook();

@@ -81,7 +81,9 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // category is opened. The add affordance is live (Phase 3), and each row
   // carries its own edit / activate / delete controls.
   await expect(main.getByText('CLS-003')).toHaveCount(0);
-  await expect(main.getByRole('button', { name: /إضافة فئة رئيسية|Add category/ })).toBeEnabled();
+  await expect(
+    main.getByRole('button', { name: /إضافة تصنيف أساسي|Add main classification/ }),
+  ).toBeEnabled();
   await expect(
     main.getByRole('button', { name: /تعديل المواد والمستلزمات|Edit المواد والمستلزمات/ }),
   ).toBeVisible();
@@ -95,11 +97,15 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('CLS-003')).toBeVisible();
   await expect(main.getByText('CLS-004')).toBeVisible();
   await expect(main.getByText('CLS-006')).toHaveCount(0);
-  await expect(main.getByRole('button', { name: /إضافة مجموعة|Add group/ }).first()).toBeEnabled();
+  await expect(
+    main.getByRole('button', { name: /إضافة تصنيف فرعي|Add sub-classification/ }).first(),
+  ).toBeEnabled();
 
   await main.locator('button[aria-expanded]').filter({ hasText: 'المواد الخام' }).click();
   await expect(main.getByText('CLS-006')).toBeVisible();
-  await expect(main.getByRole('button', { name: /إضافة صنف|Add item/ }).first()).toBeEnabled();
+  await expect(
+    main.getByRole('button', { name: /إضافة تصنيف فرعي|Add sub-classification/ }).first(),
+  ).toBeEnabled();
 
   // The tree itself mounts no field: every write goes through a dialog that is
   // mounted only on demand (dialogs portal to <body>, outside <main>).
