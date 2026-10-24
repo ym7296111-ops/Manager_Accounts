@@ -349,7 +349,8 @@ export const ar = {
   'settings.backup.desc': 'إدارة النسخ الاحتياطية لقاعدة البيانات من لوحة Supabase.',
   'settings.support.desc': 'متابعة تذاكر الدعم الفني وحالات الحل.',
   'settings.general.desc': 'اسم النظام وبيانات التواصل ووضع الصيانة.',
-  'settings.project.desc': 'هوية المشروع وبيانات المسؤول والشعار وأيقونة المتصفح.',
+  'settings.project.desc':
+    'إدارة البيانات الأساسية للمشروع: المحطات والمخازن، التصنيفات، الجهات، والإعدادات العامة.',
   'settings.project.tabs.stations': 'المحطات والمخازن',
   'settings.project.tabs.classifications': 'التصنيفات',
   'settings.project.tabs.parties': 'جهات الوارد والمنصرف',

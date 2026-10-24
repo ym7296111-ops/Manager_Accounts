@@ -79,8 +79,12 @@ describe('ProjectSettings', () => {
     renderScreen();
 
     expect(screen.getByRole('heading', { name: 'ضبط المشروع' })).toBeTruthy();
-    // Header description stays
-    expect(screen.getByText('هوية المشروع وبيانات المسؤول والشعار وأيقونة المتصفح.')).toBeTruthy();
+    // Header description: master-data copy (no identity/branding language).
+    expect(
+      screen.getByText(
+        'إدارة البيانات الأساسية للمشروع: المحطات والمخازن، التصنيفات، الجهات، والإعدادات العامة.',
+      ),
+    ).toBeTruthy();
 
     const tablist = screen.getByRole('tablist');
     expect(tablist).toBeTruthy();

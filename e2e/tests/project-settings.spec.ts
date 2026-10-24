@@ -26,9 +26,10 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   const main = page.getByRole('main');
   await expect(main.getByRole('heading', { name: 'Project Settings', exact: true })).toBeVisible();
   await expect(
-    main.getByText('Project identity, administrator contact details, logo and favicon.', {
-      exact: true,
-    }),
+    main.getByText(
+      "Manage the project's master data: stations and warehouses, classifications, parties, and general settings.",
+      { exact: true },
+    ),
   ).toBeVisible();
 
   // Four tabs in the specified order, directly under the header.
@@ -87,6 +88,27 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // Dialogs portal to <body>, so `main` stays free of form controls until one
   // is deliberately opened.
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
+});
+
+test('hard load of /settings/project serves the screen, never a 404', async ({ page }) => {
+  /* Regression guard for the production incident: a direct navigation to a
+     client route fell through to the hosting SPA fallback and answered
+     Vercel 404 NOT_FOUND. Click navigation always worked; only the hard
+     load / first-visit deep link was broken. */
+  const response = await page.goto('/settings/project');
+
+  /* A hard load that dropped to the platform 404 would answer 404. */
+  expect(response?.status()).toBeLessThan(400);
+
+  await expect(page).toHaveURL(/\/settings\/project$/);
+
+  /* Neither the hosting 404 nor the app's own 404 screen may appear. */
+  await expect(page.getByText('Page not found')).toHaveCount(0);
+  await expect(page.getByText('الصفحة غير موجودة')).toHaveCount(0);
+
+  /* The real screen — header plus the four tabs — is what loads. */
+  await expect(page.getByRole('heading', { name: 'Project Settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('tablist')).toBeVisible();
 });
 
 test.describe('ordinary admin without project.settings:manage', () => {
