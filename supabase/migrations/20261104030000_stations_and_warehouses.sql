@@ -127,6 +127,15 @@ alter table public.stations force row level security;
 alter table public.warehouses enable row level security;
 alter table public.warehouses force row level security;
 
+-- Table privileges must be granted explicitly. The `grant ... on all tables in
+-- schema public to authenticated` in 20260930000000_init_core_schema.sql is a
+-- point-in-time grant over the tables that existed then, and the only default
+-- privilege registered for public is `service_role`. Without these two grants
+-- `authenticated` is rejected with 42501 at the table level and the RLS
+-- policies below are never reached. `anon` is deliberately granted nothing.
+grant select, insert, update, delete on public.stations to authenticated;
+grant select, insert, update, delete on public.warehouses to authenticated;
+
 drop policy if exists stations_project_settings_select on public.stations;
 create policy stations_project_settings_select
   on public.stations
