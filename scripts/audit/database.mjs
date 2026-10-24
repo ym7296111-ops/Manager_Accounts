@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 43);
+    assert.equal(migrations.length, 44);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1846,6 +1846,7 @@ try {
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
     assert.ok(migrations.includes('20261104030000_stations_and_warehouses.sql'));
+    assert.ok(migrations.includes('20261104040000_classifications_schema.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -1886,6 +1887,159 @@ try {
       (Number((await db.query('show server_version_num')).rows[0].server_version_num) / 10000) | 0,
       17,
     );
+  });
+  await test('classifications: derived level and is_leaf, sequence codes, subtree moves', async () => {
+    const columns = await db.query(
+      "select column_name from information_schema.columns where table_schema='public' and table_name='classifications' order by ordinal_position",
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      [
+        'id',
+        'parent_id',
+        'name',
+        'code',
+        'level',
+        'is_leaf',
+        'is_active',
+        'created_at',
+        'updated_at',
+      ],
+    );
+
+    // Our four project-settings policies must each be permissive. The approval
+    // workflow migration drops a blanket restrictive `approved_access_only`
+    // guard onto every existing RLS table, and the replay test above re-runs
+    // that migration, so the table may also carry that guard — assert ours only.
+    const policies = await db.query(
+      "select polname, polpermissive from pg_policy where polrelid='public.classifications'::regclass and polname like 'classifications_project_settings_%' order by polname",
+    );
+    assert.deepEqual(policies.rows, [
+      { polname: 'classifications_project_settings_delete', polpermissive: true },
+      { polname: 'classifications_project_settings_insert', polpermissive: true },
+      { polname: 'classifications_project_settings_select', polpermissive: true },
+      { polname: 'classifications_project_settings_update', polpermissive: true },
+    ]);
+
+    // Root: level is derived to 1, code minted from the sequence, leaf by default.
+    const root = await db.query(
+      "insert into public.classifications (name) values ('فئة الاختبار') returning id, code, level, is_leaf",
+    );
+    assert.equal(root.rows[0].code, 'CLS-001');
+    assert.equal(root.rows[0].level, 1);
+    assert.equal(root.rows[0].is_leaf, true);
+    const rootId = root.rows[0].id;
+
+    // A client-supplied level is ignored: the server still derives level 1.
+    const rootOverride = await db.query(
+      "insert into public.classifications (name, level) values ('جذر معاكس', 5) returning level",
+    );
+    assert.equal(rootOverride.rows[0].level, 1);
+
+    // A child's level is derived from its parent without being supplied, and a
+    // new child flips its parent to non-leaf.
+    const child = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'مجموعة الاختبار') returning id, code, level, is_leaf",
+      [rootId],
+    );
+    assert.equal(child.rows[0].code, 'CLS-003');
+    assert.equal(child.rows[0].level, 2);
+    assert.equal(child.rows[0].is_leaf, true);
+    const parentAfterChild = await db.query(
+      'select is_leaf from public.classifications where id = $1',
+      [rootId],
+    );
+    assert.equal(parentAfterChild.rows[0].is_leaf, false);
+    const childId = child.rows[0].id;
+
+    // Grandchild: level derived to 3.
+    const grandChild = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'صنف الاختبار') returning id, level",
+      [childId],
+    );
+    assert.equal(grandChild.rows[0].level, 3);
+    const grandChildId = grandChild.rows[0].id;
+
+    // A fourth level is refused with a clear error.
+    await expectCode('22023', () =>
+      db.query("insert into public.classifications (parent_id, name) values ($1, 'رابع')", [
+        grandChildId,
+      ]),
+    );
+
+    // Moving a node re-derives its whole subtree's levels.
+    const moveRoot = await db.query(
+      "insert into public.classifications (name) values ('جذر منقول') returning id",
+    );
+    const moveRootId = moveRoot.rows[0].id;
+    const moveChild = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'طفل منقول') returning id",
+      [moveRootId],
+    );
+    const moveTarget = await db.query(
+      "insert into public.classifications (name) values ('هدف المنقول') returning id",
+    );
+    await db.query('update public.classifications set parent_id = $1 where id = $2', [
+      moveTarget.rows[0].id,
+      moveRootId,
+    ]);
+    const moveRootLevel = await db.query('select level from public.classifications where id = $1', [
+      moveRootId,
+    ]);
+    assert.equal(moveRootLevel.rows[0].level, 2);
+    const moveChildLevel = await db.query(
+      'select level from public.classifications where id = $1',
+      [moveChild.rows[0].id],
+    );
+    assert.equal(moveChildLevel.rows[0].level, 3);
+
+    // A move that would push any descendant past level 3 is refused.
+    const deepRoot = await db.query(
+      "insert into public.classifications (name) values ('جذر عميق') returning id",
+    );
+    const deepRootId = deepRoot.rows[0].id;
+    const deepChild = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'ابن عميق') returning id",
+      [deepRootId],
+    );
+    await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'حفيد عميق')",
+      [deepChild.rows[0].id],
+    );
+    await expectCode('22023', () =>
+      db.query('update public.classifications set parent_id = $1 where id = $2', [
+        moveTarget.rows[0].id,
+        deepRootId,
+      ]),
+    );
+
+    // Removing the last child flips the parent back to a leaf.
+    await db.query('delete from public.classifications where id = $1', [grandChildId]);
+    await db.query('delete from public.classifications where id = $1', [childId]);
+    const parentAfterDelete = await db.query(
+      'select is_leaf from public.classifications where id = $1',
+      [rootId],
+    );
+    assert.equal(parentAfterDelete.rows[0].is_leaf, true);
+
+    // The internal re-derivation flag must not be a bypass. Any session can set
+    // a custom GUC, so skipping derivation requires the flag *and* a nested
+    // trigger depth. Set the flag alone, then write directly: the level is still
+    // derived and the client's value is still ignored. This runs last because
+    // these inserts burn sequence values the code assertions above depend on.
+    await db.query("select set_config('classifications.deriving_level', 'on', false)");
+    try {
+      const flagged = await db.query(
+        "insert into public.classifications (name, level) values ('محاولة تجاوز', 2) returning level",
+      );
+      assert.equal(flagged.rows[0].level, 1);
+      const flaggedDeep = await db.query(
+        "insert into public.classifications (name, level) values ('محاولة تجاوز عميقة', 9) returning level",
+      );
+      assert.equal(flaggedDeep.rows[0].level, 1);
+    } finally {
+      await db.query("select set_config('classifications.deriving_level', 'off', false)");
+    }
   });
   await test('RLS on every public table and no anonymous SECURITY DEFINER execution', async () => {
     assert.equal(
