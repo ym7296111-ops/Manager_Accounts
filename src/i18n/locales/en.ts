@@ -360,7 +360,8 @@ export const en: Record<TranslationKey, string> = {
   'settings.backup.desc': 'Manage database backups from the Supabase dashboard.',
   'settings.support.desc': 'Track support tickets and their resolution status.',
   'settings.general.desc': 'System name, contact details and maintenance mode.',
-  'settings.project.desc': 'Project identity, administrator contact details, logo and favicon.',
+  'settings.project.desc':
+    "Manage the project's master data: stations and warehouses, classifications, parties, and general settings.",
   'settings.project.tabs.stations': 'Stations & Warehouses',
   'settings.project.tabs.classifications': 'Classifications',
   'settings.project.tabs.parties': 'Parties',
