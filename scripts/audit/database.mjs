@@ -1921,11 +1921,30 @@ try {
       { polname: 'classifications_project_settings_update', polpermissive: true },
     ]);
 
+    // Codes are minted by public.next_classification_code() from
+    // public.classification_code_seq, and supabase/seed.sql (replayed above)
+    // deliberately seeds a demo tree, so the next value is NOT 1 here. The
+    // expected code is derived from the sequence itself rather than hardcoded:
+    // hardcoding 'CLS-001' made this audit a second, silent copy of the seed's
+    // row count — it turned a legitimate seed change into a red build.
+    const nextCode = async () => {
+      const seq = await db.query(
+        'select last_value, is_called from public.classification_code_seq',
+      );
+      const last = Number(seq.rows[0].last_value);
+      const upcoming = seq.rows[0].is_called ? last + 1 : last;
+      // Mirrors the minting rule: zero-pad to three digits, keep full digits
+      // past 999 (lpad would truncate '1000' to '100').
+      return `CLS-${upcoming < 1000 ? String(upcoming).padStart(3, '0') : String(upcoming)}`;
+    };
+
     // Root: level is derived to 1, code minted from the sequence, leaf by default.
+    const expectedRootCode = await nextCode();
     const root = await db.query(
       "insert into public.classifications (name) values ('فئة الاختبار') returning id, code, level, is_leaf",
     );
-    assert.equal(root.rows[0].code, 'CLS-001');
+    assert.equal(root.rows[0].code, expectedRootCode);
+    assert.match(root.rows[0].code, /^CLS-\d{3,}$/);
     assert.equal(root.rows[0].level, 1);
     assert.equal(root.rows[0].is_leaf, true);
     const rootId = root.rows[0].id;
@@ -1937,12 +1956,15 @@ try {
     assert.equal(rootOverride.rows[0].level, 1);
 
     // A child's level is derived from its parent without being supplied, and a
-    // new child flips its parent to non-leaf.
+    // new child flips its parent to non-leaf. Its code comes straight after the
+    // root's (the override insert above consumed one value in between).
+    const expectedChildCode = await nextCode();
     const child = await db.query(
       "insert into public.classifications (parent_id, name) values ($1, 'مجموعة الاختبار') returning id, code, level, is_leaf",
       [rootId],
     );
-    assert.equal(child.rows[0].code, 'CLS-003');
+    assert.equal(child.rows[0].code, expectedChildCode);
+    assert.notEqual(child.rows[0].code, root.rows[0].code);
     assert.equal(child.rows[0].level, 2);
     assert.equal(child.rows[0].is_leaf, true);
     const parentAfterChild = await db.query(
