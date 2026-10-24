@@ -105,9 +105,18 @@ create trigger classifications_set_updated_at
 -- A move may not push any descendant past level 3, so the deepest descendant is
 -- measured before the move is allowed.
 --
--- `classifications.deriving_level` lets the AFTER trigger's batch subtree
--- re-derivation supply the level itself; it is set for exactly that one
--- statement and is never visible to a client.
+-- The AFTER trigger re-derives a moved subtree with one batch UPDATE, and the
+-- level it computes must survive this trigger rather than be recomputed from
+-- each descendant's unchanged parent. Two conditions have to hold together
+-- before derivation is skipped:
+--   * the `classifications.deriving_level` GUC is `on`, and
+--   * `pg_trigger_depth() >= 2`, i.e. this row trigger was fired by another
+--     trigger's statement, not by a client write.
+-- The depth check is what makes this safe: any session can set a custom GUC, so
+-- the flag alone would let a caller insert a bogus `level` (a level-2 root
+-- would even pass the 1..3 CHECK). A direct client INSERT or UPDATE always
+-- enters this trigger at depth 1 and is therefore always derived. The
+-- `level > 3` guard sits outside the skip, so it applies on every path.
 create or replace function public.classifications_before_write()
 returns trigger
 language plpgsql
@@ -115,8 +124,14 @@ as $$
 declare
   v_parent_level integer;
   v_subtree_depth integer;
+  v_internal_relevel boolean;
 begin
-  if coalesce(current_setting('classifications.deriving_level', true), 'off') <> 'on' then
+  v_internal_relevel := coalesce(
+    current_setting('classifications.deriving_level', true),
+    'off'
+  ) = 'on' and pg_trigger_depth() >= 2;
+
+  if not v_internal_relevel then
     if new.parent_id is null then
       new.level := 1;
     else
@@ -148,11 +163,11 @@ begin
           using errcode = '22023';
       end if;
     end if;
+  end if;
 
-    if new.level > 3 then
-      raise exception 'classifications: maximum depth is three levels'
-        using errcode = '22023';
-    end if;
+  if new.level > 3 or new.level < 1 then
+    raise exception 'classifications: level must be between 1 and 3'
+      using errcode = '22023';
   end if;
 
   new.is_leaf := not exists (

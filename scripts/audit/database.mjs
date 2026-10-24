@@ -2021,6 +2021,25 @@ try {
       [rootId],
     );
     assert.equal(parentAfterDelete.rows[0].is_leaf, true);
+
+    // The internal re-derivation flag must not be a bypass. Any session can set
+    // a custom GUC, so skipping derivation requires the flag *and* a nested
+    // trigger depth. Set the flag alone, then write directly: the level is still
+    // derived and the client's value is still ignored. This runs last because
+    // these inserts burn sequence values the code assertions above depend on.
+    await db.query("select set_config('classifications.deriving_level', 'on', false)");
+    try {
+      const flagged = await db.query(
+        "insert into public.classifications (name, level) values ('محاولة تجاوز', 2) returning level",
+      );
+      assert.equal(flagged.rows[0].level, 1);
+      const flaggedDeep = await db.query(
+        "insert into public.classifications (name, level) values ('محاولة تجاوز عميقة', 9) returning level",
+      );
+      assert.equal(flaggedDeep.rows[0].level, 1);
+    } finally {
+      await db.query("select set_config('classifications.deriving_level', 'off', false)");
+    }
   });
   await test('RLS on every public table and no anonymous SECURITY DEFINER execution', async () => {
     assert.equal(
