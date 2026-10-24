@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
@@ -41,14 +41,51 @@ describe('ProjectSettings', () => {
     window.localStorage.clear();
   });
 
-  it('renders the project settings shell without any form fields', () => {
+  it('renders the project settings shell with four tabs in the specified order', () => {
     renderScreen();
 
     expect(screen.getByRole('heading', { name: 'ضبط المشروع' })).toBeTruthy();
-    expect(screen.getByText('لا توجد عناصر لعرضها بعد')).toBeTruthy();
+    // Header description stays
+    expect(screen.getByText('هوية المشروع وبيانات المسؤول والشعار وأيقونة المتصفح.')).toBeTruthy();
+
+    const tablist = screen.getByRole('tablist');
+    expect(tablist).toBeTruthy();
+
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(4);
+    expect(tabs[0]?.textContent).toBe('المحطات والمخازن');
+    expect(tabs[1]?.textContent).toBe('التصنيفات');
+    expect(tabs[2]?.textContent).toBe('جهات الوارد والمنصرف');
+    expect(tabs[3]?.textContent).toBe('عام');
+
+    // First tab is active by default, its panel is visible
+    expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
+
+    // No form fields in shell
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('form')).toBeNull();
-    expect(screen.queryByLabelText('اسم التطبيق بالعربية')).toBeNull();
+  });
+
+  it('switches tab panels on click', () => {
+    renderScreen();
+
+    const tabs = screen.getAllByRole('tab');
+
+    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
+
+    fireEvent.click(tabs[1]!);
+    expect(screen.getByText('محتوى التصنيفات قيد الإنشاء')).toBeTruthy();
+    expect(tabs[1]?.getAttribute('aria-selected')).toBe('true');
+
+    fireEvent.click(tabs[2]!);
+    expect(screen.getByText('محتوى جهات الوارد والمنصرف قيد الإنشاء')).toBeTruthy();
+
+    fireEvent.click(tabs[3]!);
+    expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();
+
+    fireEvent.click(tabs[0]!);
+    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
   });
 
   it('returns 403 to an admin without project.settings:manage', () => {
@@ -59,5 +96,14 @@ describe('ProjectSettings', () => {
     expect(screen.getByRole('alert').textContent).toContain('403');
     expect(screen.getByRole('heading', { name: /الوصول مرفوض/ })).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it('does not render any form fields or queries', () => {
+    renderScreen();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.queryByRole('form')).toBeNull();
+    // Tabs are buttons, not inputs
+    expect(screen.queryByRole('tablist')).toBeTruthy();
   });
 });

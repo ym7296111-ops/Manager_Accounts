@@ -30,12 +30,49 @@ test('owner sees an empty project settings page with no form fields', async ({ p
       exact: true,
     }),
   ).toBeVisible();
+
+  // UI Shell: four tabs in the specified order, directly under the header
+  const tablist = main.getByRole('tablist');
+  await expect(tablist).toBeVisible();
+  const tabs = tablist.getByRole('tab');
+  await expect(tabs).toHaveCount(4);
+  await expect(tabs.nth(0)).toHaveText('Stations & Warehouses');
+  await expect(tabs.nth(1)).toHaveText('Classifications');
+  await expect(tabs.nth(2)).toHaveText('Parties');
+  await expect(tabs.nth(3)).toHaveText('General');
+
+  // First tab is active by default and shows its placeholder; no form fields
+  await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
   await expect(
-    main.getByRole('heading', { name: 'Nothing to show yet', exact: true }),
+    main.getByText('Stations & Warehouses content — coming soon.', { exact: true }),
   ).toBeVisible();
+  await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
+
+  // Verify each tab switches its placeholder content
+  await tabs.nth(1).click();
+  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(
-    main.getByText('This screen is ready to be wired to Supabase data.', { exact: true }),
+    main.getByText('Classifications content — coming soon.', { exact: true }),
   ).toBeVisible();
+
+  await tabs.nth(2).click();
+  await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
+  await expect(main.getByText('Parties content — coming soon.', { exact: true })).toBeVisible();
+
+  await tabs.nth(3).click();
+  await expect(tabs.nth(3)).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    main.getByText('General settings content — coming soon.', { exact: true }),
+  ).toBeVisible();
+
+  // Back to first tab
+  await tabs.nth(0).click();
+  await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
+  await expect(
+    main.getByText('Stations & Warehouses content — coming soon.', { exact: true }),
+  ).toBeVisible();
+
+  // Still no form fields after navigation
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 });
 
