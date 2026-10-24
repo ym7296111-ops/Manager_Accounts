@@ -155,3 +155,69 @@ begin
       on demo.station_name = station.name;
 end;
 $seed_stations_and_warehouses$;
+
+
+-- ---------------------------------------------------------------------------
+-- Demo classification tree (Project Settings → Classifications).
+--
+-- Local/e2e only, exactly like the stations seed: `supabase db push --linked`
+-- never applies this file, so production stays empty until real categories are
+-- entered through the UI.
+--
+-- Neither `code`, `level` nor `is_leaf` is supplied. `code` defaults to
+-- public.next_classification_code() (so CLS-001… stay in step with
+-- classification_code_seq and the first UI-created row never collides), while
+-- `level` and `is_leaf` are derived by the classifications triggers from
+-- `parent_id`. Writing any of the three here would either desynchronize the
+-- sequence or be overwritten by the trigger.
+-- ---------------------------------------------------------------------------
+do $seed_classifications$
+declare
+  v_existing integer;
+  v_materials uuid;
+  v_services uuid;
+  v_raw_materials uuid;
+  v_operating_supplies uuid;
+  v_maintenance uuid;
+begin
+  select count(*)::integer into v_existing from public.classifications;
+  if v_existing > 0 then
+    return;
+  end if;
+
+  -- Level 1 — categories
+  insert into public.classifications (name, is_active)
+  values ('المواد والمستلزمات', true)
+  returning id into v_materials;
+
+  insert into public.classifications (name, is_active)
+  values ('الخدمات', true)
+  returning id into v_services;
+
+  -- Level 2 — groups (the first category carries two, as the acceptance
+  -- criterion asks; the second keeps one, so empty-state and disabled-node
+  -- rendering can both be inspected)
+  insert into public.classifications (parent_id, name, is_active)
+  values (v_materials, 'المواد الخام', true)
+  returning id into v_raw_materials;
+
+  insert into public.classifications (parent_id, name, is_active)
+  values (v_materials, 'مستلزمات التشغيل', true)
+  returning id into v_operating_supplies;
+
+  insert into public.classifications (parent_id, name, is_active)
+  values (v_services, 'خدمات الصيانة', false)
+  returning id into v_maintenance;
+
+  -- Level 3 — items (leaves; `is_leaf` stays true until a child is added)
+  insert into public.classifications (parent_id, name, is_active)
+  values
+    (v_raw_materials, 'حديد وصلب', true),
+    (v_raw_materials, 'أخشاب', true),
+    (v_raw_materials, 'بلاستيك ومطاط', false),
+    (v_operating_supplies, 'زيوت وشحوم', true),
+    (v_operating_supplies, 'قطع غيار', true),
+    (v_maintenance, 'صيانة دورية', true),
+    (v_maintenance, 'إصلاح أعطال', true);
+end;
+$seed_classifications$;

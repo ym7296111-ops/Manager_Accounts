@@ -67,13 +67,36 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('WH-003')).toBeVisible();
   await expect(main.getByRole('button', { name: /إضافة مخزن|Add warehouse/ })).toBeEnabled();
 
-  // The remaining tabs are still placeholders and issue no queries.
+  // The classifications tab renders the read-only tree over `supabase/seed.sql`.
+  // Codes are asserted rather than labels: they are language-independent.
   await tabs.nth(1).click();
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(
-    main.getByText('Classifications content — coming soon.', { exact: true }),
+    main.getByRole('heading', { name: /شجرة التصنيفات|Classifications tree/ }),
   ).toBeVisible();
+  await expect(main.getByText('CLS-001')).toBeVisible();
+  await expect(main.getByText('CLS-002')).toBeVisible();
 
+  // Collapsed by default: no group or item exists in the DOM before the
+  // category is opened. The add affordances are present but disabled — the
+  // write path is not part of this phase.
+  await expect(main.getByText('CLS-003')).toHaveCount(0);
+  await expect(main.getByRole('button', { name: /إضافة فئة رئيسية|Add category/ })).toBeDisabled();
+
+  await main.locator('button[aria-expanded]').filter({ hasText: 'المواد والمستلزمات' }).click();
+  await expect(main.getByText('CLS-003')).toBeVisible();
+  await expect(main.getByText('CLS-004')).toBeVisible();
+  await expect(main.getByText('CLS-006')).toHaveCount(0);
+  await expect(main.getByRole('button', { name: /إضافة مجموعة|Add group/ }).first()).toBeDisabled();
+
+  await main.locator('button[aria-expanded]').filter({ hasText: 'المواد الخام' }).click();
+  await expect(main.getByText('CLS-006')).toBeVisible();
+  await expect(main.getByRole('button', { name: /إضافة صنف|Add item/ }).first()).toBeDisabled();
+
+  // Read-only means read-only: expanding the whole tree mounts no field.
+  await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
+
+  // The remaining tabs are still placeholders and issue no queries.
   await tabs.nth(2).click();
   await expect(main.getByText('Parties content — coming soon.', { exact: true })).toBeVisible();
 

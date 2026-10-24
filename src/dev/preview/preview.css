@@ -1,0 +1,14 @@
+/*
+  Review-harness stylesheet.
+
+  The production stylesheet starts with `@import 'tailwindcss'`, whose automatic
+  source detection is anchored to the Vite root. This harness roots the dev
+  server at `src/dev/preview`, so without an explicit `@source` Tailwind would
+  only scan the harness itself and every utility used by the real screen
+  (`src/pages/settings/…`) would be missing. `@source "../../"` restores the
+  scan to `src/`, which is what the production build already does.
+
+  This file is preview-only; `index.html` still loads `src/styles/globals.css`.
+*/
+@import '../../styles/globals.css';
+@source '../../';

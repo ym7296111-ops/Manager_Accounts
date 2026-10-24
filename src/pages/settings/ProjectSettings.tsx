@@ -4,15 +4,18 @@ import { RequireCapability } from '@/components/auth/RequireAuth';
 import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
+import Classifications from '@/pages/settings/Classifications';
 import StationsWarehouses from '@/pages/settings/StationsWarehouses';
 
 /**
  * Project-settings screen (`/settings/project`).
  *
  * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes four tabs under the header. The Stations & Warehouses tab renders a
- * read-only accordion backed by a single nested query; the remaining three tabs
- * are still placeholders and issue no queries of their own.
+ * exposes four tabs under the header. Two tabs are live — Stations & Warehouses
+ * (nested single read) and Classifications (flat single read assembled into a
+ * three-level tree) — and each fetches only while its own tab is mounted, so
+ * switching tabs costs no background traffic. Parties and General are still
+ * placeholders and issue no queries of their own.
  */
 type ProjectSettingsTab = 'stations' | 'classifications' | 'parties' | 'general';
 
@@ -31,7 +34,6 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'classifications',
     labelKey: 'settings.project.tabs.classifications',
-    placeholderKey: 'settings.project.tabs.classificationsPlaceholder',
   },
   {
     id: 'parties',
@@ -77,8 +79,8 @@ export default function ProjectSettings() {
           </div>
         </header>
 
-        {/* Tabs — standard pattern, directly under the header. Only the
-            Stations & Warehouses panel fetches data (Phase 2). */}
+        {/* Tabs — standard pattern, directly under the header. Only the active
+            panel is mounted, so only it fetches data. */}
         <div className="space-y-4">
           <div
             role="tablist"
@@ -119,6 +121,8 @@ export default function ProjectSettings() {
           >
             {activeConfig.id === 'stations' ? (
               <StationsWarehouses />
+            ) : activeConfig.id === 'classifications' ? (
+              <Classifications />
             ) : (
               <p className="text-muted-foreground text-sm leading-relaxed">
                 {activeConfig.placeholderKey !== undefined ? t(activeConfig.placeholderKey) : null}
