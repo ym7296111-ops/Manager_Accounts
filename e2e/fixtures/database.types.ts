@@ -16,6 +16,31 @@ export interface E2EDatabase {
       >;
       user_roles: Table<{ user_id: string; role_id: string }, { user_id: string; role_id: string }>;
       roles: Table<{ id: string; slug: string }, { id?: string; slug: string }>;
+      /* `code` is deliberately absent from Insert: it is minted server-side by
+         next_station_code()/next_warehouse_code(), so a client cannot send one. */
+      stations: Table<
+        {
+          id: string;
+          code: string;
+          name: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        { id?: string; name: string; is_active?: boolean }
+      >;
+      warehouses: Table<
+        {
+          id: string;
+          station_id: string;
+          code: string;
+          name: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        { id?: string; station_id: string; name: string; is_active?: boolean }
+      >;
       app_identity_settings: Table<
         {
           id: boolean;

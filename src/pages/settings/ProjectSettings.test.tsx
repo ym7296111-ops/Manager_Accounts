@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -52,12 +53,19 @@ vi.mock('@/hooks/useStationsDirectory', async (importOriginal) => {
 });
 
 function renderScreen() {
+  /* The stations tab mounts real mutation hooks, which need a QueryClient even
+     though the directory query itself is stubbed below. */
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+  });
   return render(
-    <I18nProvider>
-      <MemoryRouter initialEntries={['/settings/project']}>
-        <ProjectSettings />
-      </MemoryRouter>
-    </I18nProvider>,
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>
+        <MemoryRouter initialEntries={['/settings/project']}>
+          <ProjectSettings />
+        </MemoryRouter>
+      </I18nProvider>
+    </QueryClientProvider>,
   );
 }
 
