@@ -20,7 +20,7 @@ async function signInAsOrdinaryAdmin(page: Page): Promise<void> {
   await login.expectSignedIn();
 }
 
-test('owner sees the read-only stations accordion over the seeded directory', async ({ page }) => {
+test('owner sees the stations accordion over the seeded directory', async ({ page }) => {
   await page.goto('/settings/project');
 
   const main = page.getByRole('main');
@@ -48,11 +48,11 @@ test('owner sees the read-only stations accordion over the seeded directory', as
   await expect(main.getByText('ST-02')).toBeVisible();
   await expect(main.getByText('ST-03')).toBeVisible();
 
-  // Read-only phase: the add button exists but is inert, and nothing is
-  // revealed until a header is expanded.
+  // The write path is live, so the affordance is enabled — but nothing is
+  // revealed, and no field is mounted, until the user acts.
   const addStation = main.getByRole('button', { name: /إضافة محطة|Add station/ });
   await expect(addStation).toBeVisible();
-  await expect(addStation).toBeDisabled();
+  await expect(addStation).toBeEnabled();
   await expect(main.getByText('WH-001')).toHaveCount(0);
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
@@ -61,7 +61,7 @@ test('owner sees the read-only stations accordion over the seeded directory', as
   await expect(main.getByText('WH-001')).toBeVisible();
   await expect(main.getByText('WH-002')).toBeVisible();
   await expect(main.getByText('WH-003')).toBeVisible();
-  await expect(main.getByRole('button', { name: /إضافة مخزن|Add warehouse/ })).toBeDisabled();
+  await expect(main.getByRole('button', { name: /إضافة مخزن|Add warehouse/ })).toBeEnabled();
 
   // The remaining tabs are still placeholders and issue no queries.
   await tabs.nth(1).click();
@@ -81,6 +81,8 @@ test('owner sees the read-only stations accordion over the seeded directory', as
   await tabs.nth(0).click();
   await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByText('ST-01')).toBeVisible();
+  // Dialogs portal to <body>, so `main` stays free of form controls until one
+  // is deliberately opened.
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 });
 
