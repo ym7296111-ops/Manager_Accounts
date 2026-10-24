@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
+import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
 
@@ -20,6 +21,31 @@ vi.mock('@/hooks/useAuthCapabilities', async (importOriginal) => {
       configured: true,
       hasCapability: (slug: string) =>
         capabilityState.capabilities.includes('*') || capabilityState.capabilities.includes(slug),
+      refetch: vi.fn(),
+    }),
+  };
+});
+
+/* The stations tab issues a real nested query; stub it so this test asserts the
+   shell's wiring rather than the transport layer. */
+vi.mock('@/hooks/useStationsDirectory', async (importOriginal) => {
+  const actual = await importOriginal<typeof StationsDirectoryModule>();
+  return {
+    ...actual,
+    useStationsDirectory: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [
+        {
+          id: 's1',
+          code: 'ST-01',
+          name: 'المحطة الرئيسية',
+          isActive: true,
+          warehouses: [{ id: 'w1', code: 'WH-001', name: 'مخزن المواد الخام', isActive: true }],
+        },
+      ],
+      error: null,
       refetch: vi.fn(),
     }),
   };
@@ -58,9 +84,11 @@ describe('ProjectSettings', () => {
     expect(tabs[2]?.textContent).toBe('جهات الوارد والمنصرف');
     expect(tabs[3]?.textContent).toBe('عام');
 
-    // First tab is active by default, its panel is visible
+    // First tab is active by default, and it now renders the read-only accordion
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
+    expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();
+    expect(screen.getByText('ST-01')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'إضافة محطة' })).toBeTruthy();
 
     // No form fields in shell
     expect(screen.queryByRole('textbox')).toBeNull();
@@ -72,7 +100,7 @@ describe('ProjectSettings', () => {
 
     const tabs = screen.getAllByRole('tab');
 
-    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
+    expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();
 
     fireEvent.click(tabs[1]!);
     expect(screen.getByText('محتوى التصنيفات قيد الإنشاء')).toBeTruthy();
@@ -85,7 +113,9 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();
 
     fireEvent.click(tabs[0]!);
-    expect(screen.getByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeTruthy();
+    expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();
+    // Leaving and returning to the tab does not resurrect the old placeholder.
+    expect(screen.queryByText('محتوى المحطات والمخازن قيد الإنشاء')).toBeNull();
   });
 
   it('returns 403 to an admin without project.settings:manage', () => {
