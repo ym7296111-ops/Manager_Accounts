@@ -464,6 +464,53 @@ export type Database = {
         };
         Relationships: [];
       };
+      classifications: {
+        Row: {
+          code: string;
+          created_at: string;
+          id: string;
+          is_active: boolean;
+          is_leaf: boolean;
+          level: number;
+          name: string;
+          parent_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          /** Minted server-side from `classification_code_seq` (CLS-001); never send it. */
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          is_leaf?: boolean;
+          /** Derived server-side from `parent_id` (1 for a root); ignored if sent. */
+          level?: number;
+          name: string;
+          parent_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          is_leaf?: boolean;
+          /** Derived server-side; ignored if sent. */
+          level?: number;
+          name?: string;
+          parent_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'classifications_parent_id_fkey';
+            columns: ['parent_id'];
+            isOneToOne: false;
+            referencedRelation: 'classifications';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       stations: {
         Row: {
           code: string;
@@ -555,6 +602,10 @@ export type Database = {
       can_manage_project_settings: {
         Args: Record<PropertyKey, never>;
         Returns: boolean;
+      };
+      next_classification_code: {
+        Args: Record<PropertyKey, never>;
+        Returns: string;
       };
       admin_clear_email_password: {
         Args: {
