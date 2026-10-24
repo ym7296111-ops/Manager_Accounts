@@ -12,7 +12,9 @@ import { defineConfig } from 'vite';
  *
  *   1. `@/components/auth/RequireAuth` → a pass-through `RequireCapability`
  *      (there is no session to derive capabilities from in a preview).
- *   2. The react-query cache is primed in `src/dev/preview/main.tsx`.
+ *   2. `@/lib/supabase` → `src/dev/preview/memorySupabase.ts`, an in-memory
+ *      stand-in that mints codes and derives `level`/`is_leaf` the way the
+ *      database triggers do, so the write path is clickable end to end.
  *
  * This config is never used by `npm run build`, which still builds `index.html`
  * with `vite.config.ts`. Run it with `npm run preview:ui`.
@@ -28,6 +30,12 @@ export default defineConfig({
         replacement: fileURLToPath(
           new URL('./src/dev/preview/RequireCapabilityPassthrough.tsx', import.meta.url),
         ),
+      },
+      /* Exact match first: the client. Without this the hooks would receive
+         `null` and every panel would show its "not configured" state. */
+      {
+        find: /^@\/lib\/supabase$/,
+        replacement: fileURLToPath(new URL('./src/dev/preview/memorySupabase.ts', import.meta.url)),
       },
       { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
     ],

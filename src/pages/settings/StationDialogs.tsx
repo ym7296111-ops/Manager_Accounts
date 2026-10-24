@@ -1,6 +1,7 @@
-import { Loader2, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { ModalShell } from '@/components/ui/ModalShell';
+import { MODAL_BUTTON_CLASS, MODAL_FIELD_CLASS, useEscapeKey } from '@/components/ui/modalStyles';
 import {
   MIN_NAME_LENGTH,
   validateName,
@@ -16,73 +17,6 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
  * SECURITY DEFINER generator) and shown read-only on edit, so there is no way
  * for the UI to send a forged or colliding code.
  */
-
-const FIELD_CLASS =
-  'border-input bg-background text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:ring-primary/25 mt-1 w-full rounded-lg border px-3.5 py-2.5 text-sm outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60';
-
-const BUTTON_CLASS =
-  'inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60';
-
-function useEscapeKey(onClose: () => void, active: boolean) {
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose, active]);
-}
-
-interface DialogShellProps {
-  readonly titleId: string;
-  readonly title: string;
-  readonly closeLabel: string;
-  readonly onClose: () => void;
-  readonly busy: boolean;
-  readonly children: React.ReactNode;
-}
-
-function DialogShell({ titleId, title, closeLabel, onClose, busy, children }: DialogShellProps) {
-  return createPortal(
-    <div
-      className="bg-foreground/50 fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget && !busy) {
-          onClose();
-        }
-      }}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        className="bg-card text-card-foreground border-border w-full max-w-md rounded-2xl border p-5 shadow-xl"
-      >
-        <div className="flex items-start justify-between gap-4">
-          <h2 id={titleId} className="text-base font-semibold">
-            {title}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            aria-label={closeLabel}
-            className="text-muted-foreground hover:text-foreground shrink-0 disabled:opacity-60"
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
-        </div>
-        {children}
-      </section>
-    </div>,
-    document.body,
-  );
-}
 
 export type StationFormKind = 'station' | 'warehouse';
 
@@ -150,7 +84,7 @@ export function StationFormDialog({
   }
 
   return (
-    <DialogShell
+    <ModalShell
       titleId={titleId}
       title={t(titleKey)}
       closeLabel={t('settings.project.stations.dialog.close')}
@@ -177,7 +111,7 @@ export function StationFormDialog({
                 setFailure(null);
               }
             }}
-            className={FIELD_CLASS}
+            className={MODAL_FIELD_CLASS}
           />
           {failure !== null ? (
             <p id={`${nameId}-error`} role="alert" className="text-destructive mt-1.5 text-xs">
@@ -207,14 +141,14 @@ export function StationFormDialog({
             type="button"
             onClick={onClose}
             disabled={busy}
-            className={`${BUTTON_CLASS} border-border text-foreground border`}
+            className={`${MODAL_BUTTON_CLASS} border-border text-foreground border`}
           >
             {t('settings.project.stations.dialog.cancel')}
           </button>
           <button
             type="submit"
             disabled={busy}
-            className={`${BUTTON_CLASS} bg-primary text-primary-foreground`}
+            className={`${MODAL_BUTTON_CLASS} bg-primary text-primary-foreground`}
           >
             {busy ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
             {busy
@@ -223,7 +157,7 @@ export function StationFormDialog({
           </button>
         </div>
       </form>
-    </DialogShell>
+    </ModalShell>
   );
 }
 
@@ -248,7 +182,7 @@ export function ConfirmDeleteDialog({
   useEscapeKey(onClose, !busy);
 
   return (
-    <DialogShell
+    <ModalShell
       titleId={titleId}
       title={t(
         kind === 'station'
@@ -267,7 +201,7 @@ export function ConfirmDeleteDialog({
           type="button"
           onClick={onClose}
           disabled={busy}
-          className={`${BUTTON_CLASS} border-border text-foreground border`}
+          className={`${MODAL_BUTTON_CLASS} border-border text-foreground border`}
         >
           {t('settings.project.stations.dialog.cancel')}
         </button>
@@ -275,13 +209,13 @@ export function ConfirmDeleteDialog({
           type="button"
           onClick={onConfirm}
           disabled={busy}
-          className={`${BUTTON_CLASS} bg-destructive text-destructive-foreground`}
+          className={`${MODAL_BUTTON_CLASS} bg-destructive text-destructive-foreground`}
         >
           {busy ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
           {t('settings.project.stations.delete.confirm')}
         </button>
       </div>
-    </DialogShell>
+    </ModalShell>
   );
 }
 

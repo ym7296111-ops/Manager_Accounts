@@ -41,6 +41,23 @@ export interface E2EDatabase {
         },
         { id?: string; station_id: string; name: string; is_active?: boolean }
       >;
+      /* `code`, `level` and `is_leaf` are absent from Insert on purpose: the code
+         is minted by next_classification_code() and the other two are derived by
+         the classifications triggers from parent_id. A client cannot send them. */
+      classifications: Table<
+        {
+          id: string;
+          parent_id: string | null;
+          code: string;
+          name: string;
+          level: number;
+          is_leaf: boolean;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        { id?: string; parent_id?: string | null; name: string; is_active?: boolean }
+      >;
       app_identity_settings: Table<
         {
           id: boolean;

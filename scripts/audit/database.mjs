@@ -1941,7 +1941,7 @@ try {
     // Root: level is derived to 1, code minted from the sequence, leaf by default.
     const expectedRootCode = await nextCode();
     const root = await db.query(
-      "insert into public.classifications (name) values ('فئة الاختبار') returning id, code, level, is_leaf",
+      "insert into public.classifications (name) values ('تصنيف أساسي للاختبار') returning id, code, level, is_leaf",
     );
     assert.equal(root.rows[0].code, expectedRootCode);
     assert.match(root.rows[0].code, /^CLS-\d{3,}$/);
@@ -1960,7 +1960,7 @@ try {
     // root's (the override insert above consumed one value in between).
     const expectedChildCode = await nextCode();
     const child = await db.query(
-      "insert into public.classifications (parent_id, name) values ($1, 'مجموعة الاختبار') returning id, code, level, is_leaf",
+      "insert into public.classifications (parent_id, name) values ($1, 'تصنيف فرعي للاختبار') returning id, code, level, is_leaf",
       [rootId],
     );
     assert.equal(child.rows[0].code, expectedChildCode);
@@ -1976,7 +1976,7 @@ try {
 
     // Grandchild: level derived to 3.
     const grandChild = await db.query(
-      "insert into public.classifications (parent_id, name) values ($1, 'صنف الاختبار') returning id, level",
+      "insert into public.classifications (parent_id, name) values ($1, 'تصنيف فرعي أدنى للاختبار') returning id, level",
       [childId],
     );
     assert.equal(grandChild.rows[0].level, 3);

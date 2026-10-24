@@ -121,16 +121,28 @@ jobs:
         run: |
           {
             printf '### Playwright E2E failure output\n\n```text\n'
-            tail -n 120 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null || true
+            grep -aA 40 -E '^\s+[0-9]+\) ' "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null \
+              | head -n 160 || true
+            printf '\n--- last lines ---\n'
+            tail -n 40 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null || true
             printf '\n```\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Keep a short diagnostic in the check annotations when log artifacts
-          # cannot be fetched; redact fixture emails before publishing.
-          details="$(tail -n 60 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null \
+          # cannot be fetched. Lead with the failing specs: the list reporter
+          # prints every spec as it runs, so a plain tail of the log fills the
+          # 3000-character budget with passes and cuts the failures off.
+          details="$(
+            {
+              grep -aE '^\s+[0-9]+\) |^\s+✘|ℹ?\s*[0-9]+ (failed|flaky|did not run)|Error:|Expected|Received' \
+                "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null | head -n 20 || true
+              printf '\n--- tail ---\n'
+              tail -n 15 "${RUNNER_TEMP}/playwright-e2e.log" 2>/dev/null || true
+            } \
             | sed -E 's/[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}/[redacted-email]/g' \
             | tr '\r\n' ' ' \
-            | cut -c1-3000)"
+            | cut -c1-3000
+          )"
           details="$(printf '%s' "$details" | sed 's/%/%25/g; s/::/%3A%3A/g')"
           printf '::error title=Playwright failure diagnostic::%s\n' "$details"
 
