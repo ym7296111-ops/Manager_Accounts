@@ -20,7 +20,7 @@ async function signInAsOrdinaryAdmin(page: Page): Promise<void> {
   await login.expectSignedIn();
 }
 
-test('owner sees an empty project settings page with no form fields', async ({ page }) => {
+test('owner sees the stations accordion over the seeded directory', async ({ page }) => {
   await page.goto('/settings/project');
 
   const main = page.getByRole('main');
@@ -31,7 +31,7 @@ test('owner sees an empty project settings page with no form fields', async ({ p
     }),
   ).toBeVisible();
 
-  // UI Shell: four tabs in the specified order, directly under the header
+  // Four tabs in the specified order, directly under the header.
   const tablist = main.getByRole('tablist');
   await expect(tablist).toBeVisible();
   const tabs = tablist.getByRole('tab');
@@ -41,14 +41,32 @@ test('owner sees an empty project settings page with no form fields', async ({ p
   await expect(tabs.nth(2)).toHaveText('Parties');
   await expect(tabs.nth(3)).toHaveText('General');
 
-  // First tab is active by default and shows its placeholder; no form fields
+  // First tab is active and renders the accordion over `supabase/seed.sql`.
+  // Codes are asserted rather than labels: they are language-independent.
   await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
-  await expect(
-    main.getByText('Stations & Warehouses content — coming soon.', { exact: true }),
-  ).toBeVisible();
+  await expect(main.getByText('ST-01')).toBeVisible();
+  await expect(main.getByText('ST-02')).toBeVisible();
+  await expect(main.getByText('ST-03')).toBeVisible();
+
+  // The write path is live, so the affordance is enabled — but nothing is
+  // revealed, and no field is mounted, until the user acts.
+  const addStation = main.getByRole('button', { name: /إضافة محطة|Add station/ });
+  await expect(addStation).toBeVisible();
+  await expect(addStation).toBeEnabled();
+  await expect(main.getByText('WH-001')).toHaveCount(0);
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // Verify each tab switches its placeholder content
+  /* Expanding the first station reveals its seeded warehouses. `aria-expanded`
+     targets the header toggle specifically: the row's Edit / Deactivate /
+     Delete buttons carry the station name in their accessible names too, so a
+     name-only match is ambiguous under strict mode. */
+  await main.locator('button[aria-expanded]').filter({ hasText: 'المحطة الرئيسية' }).click();
+  await expect(main.getByText('WH-001')).toBeVisible();
+  await expect(main.getByText('WH-002')).toBeVisible();
+  await expect(main.getByText('WH-003')).toBeVisible();
+  await expect(main.getByRole('button', { name: /إضافة مخزن|Add warehouse/ })).toBeEnabled();
+
+  // The remaining tabs are still placeholders and issue no queries.
   await tabs.nth(1).click();
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
   await expect(
@@ -56,23 +74,18 @@ test('owner sees an empty project settings page with no form fields', async ({ p
   ).toBeVisible();
 
   await tabs.nth(2).click();
-  await expect(tabs.nth(2)).toHaveAttribute('aria-selected', 'true');
   await expect(main.getByText('Parties content — coming soon.', { exact: true })).toBeVisible();
 
   await tabs.nth(3).click();
-  await expect(tabs.nth(3)).toHaveAttribute('aria-selected', 'true');
   await expect(
     main.getByText('General settings content — coming soon.', { exact: true }),
   ).toBeVisible();
 
-  // Back to first tab
   await tabs.nth(0).click();
   await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
-  await expect(
-    main.getByText('Stations & Warehouses content — coming soon.', { exact: true }),
-  ).toBeVisible();
-
-  // Still no form fields after navigation
+  await expect(main.getByText('ST-01')).toBeVisible();
+  // Dialogs portal to <body>, so `main` stays free of form controls until one
+  // is deliberately opened.
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 });
 

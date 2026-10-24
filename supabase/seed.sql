@@ -112,3 +112,46 @@ end
 $assert_baseline_present$;
 
 
+
+-- ---------------------------------------------------------------------------
+-- Demo stations & warehouses (Project Settings → Stations & Warehouses).
+--
+-- Local/e2e only: `supabase db push --linked` never applies this file, so
+-- production stays empty until real stations are entered through the UI.
+--
+-- `code` is deliberately NOT supplied. The columns default to
+-- public.next_station_code() / public.next_warehouse_code(), which advance
+-- public.station_code_seq / public.warehouse_code_seq. Writing explicit codes
+-- here would leave the sequences behind, and the first row created through the
+-- UI would then mint a code that already exists and fail the unique index.
+-- ---------------------------------------------------------------------------
+do $seed_stations_and_warehouses$
+declare
+  v_existing integer;
+begin
+  select count(*)::integer into v_existing from public.stations;
+  if v_existing > 0 then
+    return;
+  end if;
+
+  with seeded_stations as (
+    insert into public.stations (name, is_active)
+    values
+      ('المحطة الرئيسية', true),
+      ('محطة الصيانة', true),
+      ('محطة الوقود الشمالية', false)
+    returning id, name
+  )
+  insert into public.warehouses (station_id, name, is_active)
+  select station.id, demo.name, demo.is_active
+    from seeded_stations as station
+    join (
+      values
+        ('المحطة الرئيسية', 'مخزن المواد الخام', true),
+        ('المحطة الرئيسية', 'مخزن قطع الغيار', true),
+        ('المحطة الرئيسية', 'مخزن المرتجعات', false),
+        ('محطة الصيانة', 'مخزن العدد والأدوات', true)
+    ) as demo (station_name, name, is_active)
+      on demo.station_name = station.name;
+end;
+$seed_stations_and_warehouses$;

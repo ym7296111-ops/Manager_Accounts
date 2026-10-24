@@ -4,27 +4,29 @@ import { RequireCapability } from '@/components/auth/RequireAuth';
 import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
+import StationsWarehouses from '@/pages/settings/StationsWarehouses';
 
 /**
- * Project-settings shell (`/settings/project`) — UI shell only (tabs, no fields).
+ * Project-settings screen (`/settings/project`).
  *
  * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes four tabs under the header. Each tab panel is a placeholder for
- * future fields — no queries/RPCs are issued (Phase 5 — UI Shell).
+ * exposes four tabs under the header. The Stations & Warehouses tab renders a
+ * read-only accordion backed by a single nested query; the remaining three tabs
+ * are still placeholders and issue no queries of their own.
  */
 type ProjectSettingsTab = 'stations' | 'classifications' | 'parties' | 'general';
 
 interface ProjectSettingsTabConfig {
   id: ProjectSettingsTab;
   labelKey: TranslationKey;
-  placeholderKey: TranslationKey;
+  /** Placeholder copy for the tabs whose content has not been built yet. */
+  placeholderKey?: TranslationKey;
 }
 
 const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'stations',
     labelKey: 'settings.project.tabs.stations',
-    placeholderKey: 'settings.project.tabs.stationsPlaceholder',
   },
   {
     id: 'classifications',
@@ -75,7 +77,8 @@ export default function ProjectSettings() {
           </div>
         </header>
 
-        {/* Tabs — standard pattern, directly under the header, no data fetching */}
+        {/* Tabs — standard pattern, directly under the header. Only the
+            Stations & Warehouses panel fetches data (Phase 2). */}
         <div className="space-y-4">
           <div
             role="tablist"
@@ -114,9 +117,13 @@ export default function ProjectSettings() {
             aria-labelledby={`project-settings-tab-${activeConfig.id}`}
             className="bg-card border-border rounded-2xl border p-6 shadow-sm"
           >
-            <p className="text-muted-foreground text-sm leading-relaxed">
-              {t(activeConfig.placeholderKey)}
-            </p>
+            {activeConfig.id === 'stations' ? (
+              <StationsWarehouses />
+            ) : (
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                {activeConfig.placeholderKey !== undefined ? t(activeConfig.placeholderKey) : null}
+              </p>
+            )}
           </div>
         </div>
       </div>
