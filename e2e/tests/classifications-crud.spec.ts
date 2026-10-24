@@ -158,7 +158,7 @@ test.describe('classifications CRUD', () => {
     expect(createdItem?.is_leaf).toBe(true);
 
     // ---- rename: the code is shown, never editable -------------------------
-    await main.getByRole('button', { name: `Edit ${ITEM}` }).click();
+    await main.getByRole('button', { name: `Edit ${ITEM}`, exact: true }).click();
     dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Rename' })).toBeVisible();
     await expect(dialog.getByLabel('item name')).toHaveValue(ITEM);
@@ -179,9 +179,15 @@ test.describe('classifications CRUD', () => {
     expect(renamed?.level).toBe(3);
     expect(renamed?.parent_id).toBe(finishedGroup?.id);
 
-    // ---- activate / deactivate --------------------------------------------
-    await main.getByRole('button', { name: `Deactivate ${RENAMED}` }).click();
-    await expect(main.getByRole('button', { name: `Activate ${RENAMED}` })).toBeVisible();
+    /* ---- activate / deactivate -------------------------------------------
+       Exact names matter: "Activate X" is a substring of "Deactivate X", so a
+       loose match would resolve the instant the click lands and the read below
+       would race the write. The exact label only appears once the refetched
+       row says `is_active = false`. */
+    await main.getByRole('button', { name: `Deactivate ${RENAMED}`, exact: true }).click();
+    await expect(
+      main.getByRole('button', { name: `Activate ${RENAMED}`, exact: true }),
+    ).toBeVisible();
     const { data: disabled } = await client
       .from('classifications')
       .select('is_active')
@@ -189,17 +195,23 @@ test.describe('classifications CRUD', () => {
       .single();
     expect(disabled?.is_active).toBe(false);
 
-    await main.getByRole('button', { name: `Activate ${RENAMED}` }).click();
-    await expect(main.getByRole('button', { name: `Deactivate ${RENAMED}` })).toBeVisible();
+    await main.getByRole('button', { name: `Activate ${RENAMED}`, exact: true }).click();
+    await expect(
+      main.getByRole('button', { name: `Deactivate ${RENAMED}`, exact: true }),
+    ).toBeVisible();
 
     // ---- delete is offered only for a childless node ----------------------
-    await expect(main.getByRole('button', { name: `Delete ${CATEGORY}` })).toHaveCount(0);
-    await expect(main.getByRole('button', { name: `Delete ${GROUP}` })).toHaveCount(0);
-    await expect(main.getByRole('button', { name: `Delete ${RENAMED}` })).toBeVisible();
+    await expect(main.getByRole('button', { name: `Delete ${CATEGORY}`, exact: true })).toHaveCount(
+      0,
+    );
+    await expect(main.getByRole('button', { name: `Delete ${GROUP}`, exact: true })).toHaveCount(0);
+    await expect(
+      main.getByRole('button', { name: `Delete ${RENAMED}`, exact: true }),
+    ).toBeVisible();
 
     // ---- unwind: item, then group, then category --------------------------
     for (const name of [RENAMED, GROUP, CATEGORY]) {
-      await main.getByRole('button', { name: `Delete ${name}` }).click();
+      await main.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
       const confirm = page.getByRole('dialog');
       await expect(confirm.getByRole('heading', { name: 'Delete item' })).toBeVisible();
       await confirm.getByRole('button', { name: 'Confirm delete' }).click();
@@ -220,8 +232,12 @@ test.describe('classifications CRUD', () => {
     const main = await openClassificationsTab(page);
 
     // CLS-001 holds two groups: no delete affordance at all.
-    await expect(main.getByRole('button', { name: 'Delete المواد والمستلزمات' })).toHaveCount(0);
-    await expect(main.getByRole('button', { name: 'Edit المواد والمستلزمات' })).toBeVisible();
+    await expect(
+      main.getByRole('button', { name: 'Delete المواد والمستلزمات', exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      main.getByRole('button', { name: 'Edit المواد والمستلزمات', exact: true }),
+    ).toBeVisible();
 
     /* The hidden button is the courtesy; ON DELETE RESTRICT is the guard. Bypass
        the UI entirely and ask the database to delete a parent: it must refuse
