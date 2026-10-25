@@ -11,8 +11,8 @@
  *
  * * codes are minted server-side from a counter (`CLS-001` …), never taken from
  *   the payload — so a review can confirm the client really sends none;
- * * `level` is derived from `parent_id` (1 / 2 / 3) and a fourth level raises
- *   22023, exactly as the trigger does;
+ * * `level` is derived from `parent_id` at any depth (there is no ceiling), and a
+ *   move or insert that would make a node its own ancestor raises 22023;
  * * `is_leaf` is derived from the child list and is kept in step on insert and
  *   on delete, including flipping the parent back to a leaf;
  * * deleting a node that still has children raises 23503 (ON DELETE RESTRICT);
@@ -53,15 +53,21 @@ class DbError extends Error {
   }
 }
 
-/** Seed mirrors `supabase/seed.sql`, row for row and code for code. */
+/**
+ * Seed mirrors `supabase/seed.sql` row for row and code for code, plus one deep
+ * branch (`مخزون ← وقود ← سولار ← سولار تشغيل ← ديزل معدات`) so the review build
+ * exercises five levels — the shape the old three-level ceiling forbade.
+ */
 const CLASSIFICATION_SEED: ReadonlyArray<
   readonly [id: string, parent: string | null, name: string, isActive: boolean]
 > = [
   ['c-mat', null, 'المواد والمستلزمات', true],
   ['c-srv', null, 'الخدمات', true],
+  ['c-stock', null, 'مخزون', true],
   ['g-raw', 'c-mat', 'المواد الخام', true],
   ['g-ops', 'c-mat', 'مستلزمات التشغيل', true],
   ['g-maint', 'c-srv', 'خدمات الصيانة', false],
+  ['g-fuel', 'c-stock', 'وقود', true],
   ['i-steel', 'g-raw', 'حديد وصلب', true],
   ['i-wood', 'g-raw', 'أخشاب', true],
   ['i-plastic', 'g-raw', 'بلاستيك ومطاط', false],
@@ -69,6 +75,10 @@ const CLASSIFICATION_SEED: ReadonlyArray<
   ['i-parts', 'g-ops', 'قطع غيار', true],
   ['i-periodic', 'g-maint', 'صيانة دورية', true],
   ['i-repair', 'g-maint', 'إصلاح أعطال', true],
+  ['d-solar', 'g-fuel', 'سولار', true],
+  ['d-solar-ops', 'd-solar', 'سولار تشغيل', true],
+  ['d-diesel', 'd-solar-ops', 'ديزل معدات', true],
+  ['d-diesel-heavy', 'd-diesel', 'ديزل آليات ثقيلة', true],
 ];
 
 /* The seed consumes CLS-001 … CLS-012, so the counter starts where the seed
@@ -171,9 +181,6 @@ function insertClassification(payload: Record<string, unknown>): PreviewRow {
   const name = writeName(payload.name);
   const parent = typeof payload.parent_id === 'string' ? payload.parent_id : null;
   const level = levelOf(parent);
-  if (level > 3) {
-    throw new DbError('22023', 'classifications: level must be between 1 and 3');
-  }
 
   const row: PreviewRow = {
     id: id('preview'),

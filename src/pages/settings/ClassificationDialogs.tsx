@@ -24,13 +24,37 @@ export type ClassificationNodeKind = 'category' | 'group' | 'item';
 export interface ClassificationFormTarget {
   readonly kind: ClassificationNodeKind;
   readonly mode: 'create' | 'edit';
-  /** Present on create-under-a-parent; absent for a new category. */
+  /** Present on create-under-a-parent; absent for a new main classification. */
   readonly parentId?: string;
   readonly parentName?: string;
+  /** Ancestors of the parent, root first (create only). */
+  readonly parentPath?: readonly string[];
   /** Present on edit only. */
   readonly nodeId?: string;
   readonly code?: string;
   readonly initialName?: string;
+  /** Ancestors of the node, root first and ending with the node (edit only). */
+  readonly nodePath?: readonly string[];
+}
+
+/**
+ * The path, rendered as one line of text.
+ *
+ * The tree can be several levels deep, so a row's own name no longer says where
+ * it lives. The separator is a no-break sequence around a slash so a long path
+ * wraps between segments rather than inside one.
+ */
+function PathLine({ path }: { readonly path: readonly string[] }) {
+  const { t } = useI18n();
+  if (path.length === 0) {
+    return null;
+  }
+  return (
+    <p className="text-muted-foreground mt-1 text-xs">
+      <span className="opacity-70">{t('settings.project.classifications.dialog.path')}: </span>
+      <span dir="auto">{path.join(' / ')}</span>
+    </p>
+  );
 }
 
 const KIND_LABEL_KEY: Record<ClassificationNodeKind, TranslationKey> = {
@@ -46,10 +70,9 @@ function titleKeyOf(target: ClassificationFormTarget): TranslationKey {
   if (target.kind === 'category') {
     return 'settings.project.classifications.dialog.addCategory';
   }
-  if (target.kind === 'group') {
-    return 'settings.project.classifications.dialog.addGroup';
-  }
-  return 'settings.project.classifications.dialog.addItem';
+  /* Levels 2 and deeper are all sub-classifications: the label no longer
+     differs, so neither does the title. */
+  return 'settings.project.classifications.dialog.addChild';
 }
 
 export interface ClassificationFormDialogProps {
@@ -103,15 +126,20 @@ export function ClassificationFormDialog({
         {/* Where the node will land. Read-only by design: the parent is what
             decides the level, so it is stated rather than offered. */}
         {target.mode === 'create' ? (
-          <p className="text-muted-foreground text-xs">
-            {target.parentName === undefined
-              ? t('settings.project.classifications.dialog.rootHint', { kind: kindLabel })
-              : t('settings.project.classifications.dialog.underParent', {
-                  kind: kindLabel,
-                  parent: target.parentName,
-                })}
-          </p>
-        ) : null}
+          <div>
+            <p className="text-muted-foreground text-xs">
+              {target.parentName === undefined
+                ? t('settings.project.classifications.dialog.rootHint', { kind: kindLabel })
+                : t('settings.project.classifications.dialog.underParent', {
+                    kind: kindLabel,
+                    parent: target.parentName,
+                  })}
+            </p>
+            <PathLine path={target.parentPath ?? []} />
+          </div>
+        ) : (
+          <PathLine path={target.nodePath ?? []} />
+        )}
 
         <div>
           <label htmlFor={nameId} className="text-foreground text-sm font-medium">

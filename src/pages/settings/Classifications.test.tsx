@@ -224,9 +224,9 @@ describe('Classifications — tree rendering', () => {
     expect(within(toggleOf('مستلزمات التشغيل')).getByText('التصنيفات الفرعية: 0')).toBeTruthy();
     expect(screen.queryByText('حديد وصلب')).toBeNull();
 
-    const panel = document.getElementById('classification-category-panel-c1')!;
+    const panel = document.getElementById('classification-panel-c1')!;
     expect(panel.getAttribute('role')).toBe('region');
-    expect(panel.getAttribute('aria-labelledby')).toBe('classification-category-c1');
+    expect(panel.getAttribute('aria-labelledby')).toBe('classification-c1');
   });
 
   it('reveals the items of a group when the group is expanded', () => {
@@ -243,9 +243,9 @@ describe('Classifications — tree rendering', () => {
     const leaf = screen.getByText('أخشاب').closest('li')!;
     expect(within(leaf).getByText('معطّل')).toBeTruthy();
 
-    const panel = document.getElementById('classification-group-panel-g1')!;
+    const panel = document.getElementById('classification-panel-g1')!;
     expect(panel.getAttribute('role')).toBe('region');
-    expect(panel.getAttribute('aria-labelledby')).toBe('classification-group-g1');
+    expect(panel.getAttribute('aria-labelledby')).toBe('classification-g1');
   });
 
   it('expands categories and groups independently and collapses on a second click', () => {
@@ -260,8 +260,8 @@ describe('Classifications — tree rendering', () => {
     // A category with no children shows its empty note, not an empty box.
     fireEvent.click(services);
     expect(
-      within(document.getElementById('classification-category-panel-c2')!).getByText(
-        'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
+      within(document.getElementById('classification-panel-c2')!).getByText(
+        'لا توجد تصنيفات فرعية في هذا التصنيف بعد. يمكنك التوسع بإضافة تصنيف فرعي.',
       ),
     ).toBeTruthy();
 
@@ -284,8 +284,8 @@ describe('Classifications — tree rendering', () => {
     fireEvent.click(toggleOf('مستلزمات التشغيل'));
 
     expect(
-      within(document.getElementById('classification-group-panel-g2')!).getByText(
-        'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
+      within(document.getElementById('classification-panel-g2')!).getByText(
+        'لا توجد تصنيفات فرعية في هذا التصنيف بعد. يمكنك التوسع بإضافة تصنيف فرعي.',
       ),
     ).toBeTruthy();
   });
@@ -342,6 +342,150 @@ describe('Classifications — empty, loading and permission states', () => {
     const alert = screen.getByRole('alert');
     expect(alert.textContent).not.toContain('permission denied');
     expect(alert.textContent).toContain('لا تملك صلاحية قراءة التصنيفات');
+  });
+});
+
+/**
+ * A six-level branch — the shape the depth limit used to forbid.
+ *
+ * مخزون ← وقود ← سولار ← سولار تشغيل ← ديزل معدات ← ديزل آليات ثقيلة
+ */
+const deepNode = (
+  id: string,
+  name: string,
+  code: string,
+  level: number,
+  children: readonly ClassificationNode[],
+): ClassificationNode => ({
+  id,
+  code,
+  name,
+  level,
+  isLeaf: children.length === 0,
+  isActive: true,
+  children,
+});
+
+const DEEP_TREE: readonly ClassificationNode[] = [
+  deepNode('d1', 'مخزون', 'CLS-101', 1, [
+    deepNode('d2', 'وقود', 'CLS-102', 2, [
+      deepNode('d3', 'سولار', 'CLS-103', 3, [
+        deepNode('d4', 'سولار تشغيل', 'CLS-104', 4, [
+          deepNode('d5', 'ديزل معدات', 'CLS-105', 5, [
+            deepNode('d6', 'ديزل آليات ثقيلة', 'CLS-106', 6, []),
+          ]),
+        ]),
+      ]),
+    ]),
+  ]),
+  deepNode('e1', 'إيرادات', 'CLS-200', 1, []),
+];
+
+/** Opens every row from the root down to `name`. */
+function openPath(names: readonly string[]) {
+  for (const name of names) {
+    fireEvent.click(toggleOf(name));
+  }
+}
+
+describe('Classifications — unbounded depth', () => {
+  beforeEach(() => {
+    setQuery({ data: DEEP_TREE });
+  });
+
+  it('renders a six-level branch and indents every level by the same step', () => {
+    renderScreen();
+    openPath(['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']);
+
+    expect(screen.getByText('ديزل آليات ثقيلة')).toBeTruthy();
+    expect(screen.getByText('CLS-106')).toBeTruthy();
+
+    /* Each panel contributes one 16px step and sits inside its parent's panel,
+       so the indentation accumulates down the branch whatever the depth. */
+    const panels = ['d1', 'd2', 'd3', 'd4', 'd5'].map((id) =>
+      document.getElementById(`classification-panel-${id}`)!,
+    );
+    for (const panel of panels) {
+      expect(panel.style.paddingInlineStart).toBe('16px');
+    }
+    for (let index = 1; index < panels.length; index += 1) {
+      expect(panels[index - 1]!.contains(panels[index]!)).toBe(true);
+    }
+  });
+
+  it('marks the root as a folder, the middle levels as branches and the deepest as a leaf', () => {
+    renderScreen();
+
+    const rowOf = (name: string) => screen.getByText(name).closest('div') as HTMLElement;
+
+    // Collapsed root: a closed folder.
+    expect(rowOf('مخزون').querySelector('svg.lucide-folder')).not.toBeNull();
+
+    openPath(['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']);
+
+    // An opened root shows the *open* folder — the icon repeats the chevron's cue.
+    expect(rowOf('مخزون').querySelector('svg.lucide-folder-open')).not.toBeNull();
+    // Levels 2-5 are branches; level 6 is a leaf and gets a tag, because a leaf
+    // is what a letter can select.
+    expect(rowOf('وقود').querySelector('svg.lucide-layers')).not.toBeNull();
+    expect(rowOf('سولار').querySelector('svg.lucide-layers')).not.toBeNull();
+    expect(rowOf('ديزل معدات').querySelector('svg.lucide-layers')).not.toBeNull();
+    expect(rowOf('ديزل آليات ثقيلة').querySelector('svg.lucide-tag')).not.toBeNull();
+  });
+
+  it('exposes the full path as a tooltip on a deep row', () => {
+    renderScreen();
+    openPath(['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']);
+
+    expect(toggleOf('ديزل آليات ثقيلة').getAttribute('title')).toBe(
+      'مخزون / وقود / سولار / سولار تشغيل / ديزل معدات / ديزل آليات ثقيلة',
+    );
+  });
+
+  it('shows the path in the rename dialog', () => {
+    renderScreen();
+    openPath(['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']);
+    fireEvent.click(actionOf('تعديل', 'ديزل معدات'));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('المسار: مخزون / وقود / سولار / سولار تشغيل / ديزل معدات');
+  });
+
+  it('offers "add sub-classification" under a fifth-level node and sends its parent_id', () => {
+    renderScreen();
+    openPath(['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']);
+
+    // Even the deepest node in the fixture is extendable: it is a leaf, and its
+    // panel still carries the add button.
+    fireEvent.click(screen.getByRole('button', { name: subAddButton('ديزل معدات') }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'إضافة تصنيف فرعي' })).toBeTruthy();
+    // The dialog states the level it will land on by showing the parent's path.
+    expect(dialog.textContent).toContain('مخزون / وقود / سولار / سولار تشغيل / ديزل معدات');
+
+    fireEvent.change(within(dialog).getByLabelText('اسم تصنيف فرعي'), {
+      target: { value: 'ديزل مولدات' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
+
+    expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({
+      name: 'ديزل مولدات',
+      parentId: 'd5',
+    });
+  });
+
+  it('offers the add affordance on a leaf at the second level too', () => {
+    renderScreen();
+    fireEvent.click(toggleOf('إيرادات'));
+
+    // A childless root opens onto the empty note plus the add button.
+    expect(
+      within(document.getElementById('classification-panel-e1')!).getByText(
+        'لا توجد تصنيفات فرعية في هذا التصنيف بعد. يمكنك التوسع بإضافة تصنيف فرعي.',
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: subAddButton('إيرادات') }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
   });
 });
 

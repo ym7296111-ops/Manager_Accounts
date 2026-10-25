@@ -5,7 +5,7 @@ import { getSupabase } from '@/lib/supabase';
 /**
  * Classifications directory (`['project-settings', 'classifications']`).
  *
- * One flat read returns every row; the three-level tree is assembled here. The
+ * One flat read returns every row; the tree is assembled here, at any depth. The
  * expected volume is a few dozen rows, so there is no pagination, no cursor and
  * no per-level lazy fetch — and one request is also the only way to guarantee
  * the tree is internally consistent (three sequential reads could observe a
@@ -31,7 +31,7 @@ export interface ClassificationNode {
   readonly id: string;
   readonly code: string;
   readonly name: string;
-  /** 1 = category, 2 = group, 3 = item (and 4+ only if the schema is violated). */
+  /** 1 = main classification, 2+ = sub-classification. Derived, never capped. */
   readonly level: number;
   /** Mirrors the server's derived flag; true only when the node has no children. */
   readonly isLeaf: boolean;
