@@ -347,7 +347,10 @@ function TreeNode({
           role="region"
           aria-labelledby={buttonId}
           style={{ paddingInlineStart: INDENT_PX }}
-          className="border-primary/25 mt-1.5 space-y-1.5 border-s-2"
+          /* A 16px step alone is a weak signal on a 1400px-wide row, so each
+             nesting level also draws a guide rule and a faint tint: the panels
+             read as stacked bands even at level six. */
+          className="border-primary/30 bg-foreground/[0.025] mt-1.5 space-y-1.5 border-s-2 py-1 pe-2"
         >
           <div className="flex items-center justify-between gap-3 py-1">
             {/* The heading earns its place on the first two levels; deeper than
