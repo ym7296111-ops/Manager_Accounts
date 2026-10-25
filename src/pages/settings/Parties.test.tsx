@@ -4,6 +4,9 @@ import type * as PartiesModule from '@/hooks/useParties';
 import { PartiesError, type Party } from '@/hooks/useParties';
 import type * as PartiesMutationsModule from '@/hooks/usePartiesMutations';
 import { PartyWriteError } from '@/hooks/usePartiesMutations';
+import type * as SisterCompaniesModule from '@/hooks/useSisterCompanies';
+import type { SisterCompany } from '@/hooks/useSisterCompanies';
+import type * as SisterCompaniesMutationsModule from '@/hooks/useSisterCompaniesMutations';
 import { I18nProvider } from '@/i18n/I18nContext';
 import Parties from '@/pages/settings/Parties';
 
@@ -21,18 +24,32 @@ interface MutationStub {
   isPending: boolean;
 }
 
-const { queryState, mutations } = vi.hoisted(() => {
+interface SisterQueryStub {
+  isLoading: boolean;
+  isError: boolean;
+  isSuccess: boolean;
+  data: readonly SisterCompany[] | undefined;
+  error: unknown;
+  refetch: ReturnType<typeof vi.fn>;
+}
+
+const { queryState, sisterState, mutations } = vi.hoisted(() => {
   const make = (): { mutate: ReturnType<typeof vi.fn>; isPending: boolean } => ({
     mutate: vi.fn(),
     isPending: false,
   });
   return {
     queryState: { value: null as unknown as QueryStub },
+    sisterState: { value: null as unknown as SisterQueryStub },
     mutations: {
       create: make(),
       update: make(),
       toggle: make(),
       remove: make(),
+      createSister: make(),
+      renameSister: make(),
+      toggleSister: make(),
+      removeSister: make(),
     },
   };
 });
@@ -53,6 +70,22 @@ vi.mock('@/hooks/usePartiesMutations', async (importOriginal) => {
   };
 });
 
+vi.mock('@/hooks/useSisterCompanies', async (importOriginal) => {
+  const actual = await importOriginal<typeof SisterCompaniesModule>();
+  return { ...actual, useSisterCompanies: () => sisterState.value };
+});
+
+vi.mock('@/hooks/useSisterCompaniesMutations', async (importOriginal) => {
+  const actual = await importOriginal<typeof SisterCompaniesMutationsModule>();
+  return {
+    ...actual,
+    useCreateSisterCompany: () => mutations.createSister,
+    useRenameSisterCompany: () => mutations.renameSister,
+    useSetSisterCompanyActive: () => mutations.toggleSister,
+    useDeleteSisterCompany: () => mutations.removeSister,
+  };
+});
+
 const party = (patch: Partial<Party> & Pick<Party, 'id' | 'type' | 'code' | 'name'>): Party => ({
   taxNumber: null,
   commercialRegister: null,
@@ -66,39 +99,62 @@ const party = (patch: Partial<Party> & Pick<Party, 'id' | 'type' | 'code' | 'nam
   ...patch,
 });
 
-const DIRECTORY: readonly Party[] = [
-  party({
-    id: 'sup',
-    type: 'supplier',
-    code: 'SUP-001',
-    name: 'شركة النيل للتوريدات الصناعية',
-    creditLimit: 250000,
-    paymentTerms: 30,
-  }),
-  party({
-    id: 'cus',
-    type: 'customer',
-    code: 'CUS-001',
-    name: 'مؤسسة الأفق للتجارة والتوزيع',
-    taxNumber: '987654321',
-    email: 'purchases@horizon-trade.example.com',
-    creditLimit: 150000,
-    paymentTerms: 60,
-  }),
-  party({
-    id: 'sis',
-    type: 'sister_company',
-    code: 'SIS-001',
-    name: 'الشركة المتحدة للخدمات اللوجستية',
-  }),
-  party({
-    id: 'int',
-    type: 'internal',
-    code: 'INT-001',
-    name: 'إدارة الصيانة والتشغيل',
-    isActive: false,
-  }),
-];
+const LOCAL_SUPPLIER = party({
+  id: 'loc',
+  type: 'local_supplier',
+  code: 'LOC-001',
+  name: 'شركة النيل للتوريدات الصناعية',
+  creditLimit: 250000,
+  paymentTerms: 30,
+});
+
+const FOREIGN_SUPPLIER = party({
+  id: 'frn',
+  type: 'foreign_supplier',
+  code: 'FRN-001',
+  name: 'Nile Trading GmbH',
+});
+
+const CUSTOMER = party({
+  id: 'cus',
+  type: 'customer',
+  code: 'CUS-001',
+  name: 'مؤسسة الأفق للتجارة والتوزيع',
+  taxNumber: '987654321',
+  email: 'purchases@horizon-trade.example.com',
+  creditLimit: 150000,
+  paymentTerms: 60,
+});
+
+const INACTIVE_CUSTOMER = party({
+  id: 'cus2',
+  type: 'customer',
+  code: 'CUS-002',
+  name: 'عميل معطّل للاختبار',
+  isActive: false,
+});
+
+const DIRECTORY: readonly Party[] = [LOCAL_SUPPLIER, FOREIGN_SUPPLIER, CUSTOMER, INACTIVE_CUSTOMER];
+
+const SISTER_COMPANY: SisterCompany = {
+  id: 'sc1',
+  parentId: null,
+  level: 1,
+  code: 'SIS-001',
+  name: 'الشركة المتحدة للخدمات اللوجستية',
+  isActive: true,
+  branches: [
+    {
+      id: 'sc1-1',
+      parentId: 'sc1',
+      level: 2,
+      code: 'SIS-001-01',
+      name: 'المتحدة للنقل الثقيل',
+      isActive: true,
+      branches: [],
+    },
+  ],
+};
 
 function setQuery(patch: Partial<QueryStub> = {}) {
   const initial: QueryStub = {
@@ -113,6 +169,19 @@ function setQuery(patch: Partial<QueryStub> = {}) {
   return queryState.value;
 }
 
+function setSisterQuery(patch: Partial<SisterQueryStub> = {}) {
+  const initial: SisterQueryStub = {
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    data: [SISTER_COMPANY],
+    error: null,
+    refetch: vi.fn(),
+  };
+  sisterState.value = { ...initial, ...patch };
+  return sisterState.value;
+}
+
 function renderScreen() {
   return render(
     <I18nProvider>
@@ -123,6 +192,8 @@ function renderScreen() {
 
 const actionOf = (action: string, entity: string) =>
   screen.getByRole('button', { name: `${action} ${entity}` });
+
+const subTab = (name: string) => screen.getByRole('tab', { name });
 
 /** Invokes the callbacks the component passes to `mutate(vars, callbacks)`. */
 function callbacksOf(stub: MutationStub) {
@@ -153,6 +224,7 @@ function chooseType(dialog: HTMLElement, value: string) {
 
 beforeEach(() => {
   setQuery();
+  setSisterQuery();
   for (const stub of Object.values(mutations)) {
     stub.mutate.mockReset();
     stub.isPending = false;
@@ -162,61 +234,97 @@ beforeEach(() => {
   document.documentElement.dir = 'rtl';
 });
 
-describe('Parties — directory rendering', () => {
-  it('lists every party with its name, faint code, type badge and status', () => {
+describe('Parties — the three sub-tabs', () => {
+  it('renders inbound, outbound and sister-company tabs with inbound open first', () => {
     renderScreen();
 
-    for (const entry of DIRECTORY) {
-      expect(screen.getByText(entry.name)).toBeTruthy();
-      expect(screen.getByText(entry.code)).toBeTruthy();
-    }
-    /* One badge per type, named in text (never colour alone). */
-    expect(screen.getByText('مورّد')).toBeTruthy();
-    expect(screen.getByText('عميل')).toBeTruthy();
-    expect(screen.getByText('شركة شقيقة')).toBeTruthy();
-    expect(screen.getByText('جهة داخلية')).toBeTruthy();
-    /* Status travels as an accessible label: three active, one disabled. */
-    expect(screen.getAllByText('نشط')).toHaveLength(3);
-    expect(screen.getAllByText('معطّل')).toHaveLength(1);
-  });
+    expect(subTab('جهات وارد').getAttribute('aria-selected')).toBe('true');
+    expect(subTab('جهات صرف').getAttribute('aria-selected')).toBe('false');
+    expect(subTab('شركات شقيقة').getAttribute('aria-selected')).toBe('false');
 
-  it('filters the already-loaded list by type, with counts, and back', () => {
-    renderScreen();
-
-    const suppliersFilter = screen.getByRole('button', { name: /موردون/ });
-    expect(suppliersFilter.textContent).toContain('1');
-    fireEvent.click(suppliersFilter);
-
-    expect(suppliersFilter.getAttribute('aria-pressed')).toBe('true');
+    /* The inbound table holds both supplier kinds and no customer. */
     expect(screen.getByText('شركة النيل للتوريدات الصناعية')).toBeTruthy();
+    expect(screen.getByText('Nile Trading GmbH')).toBeTruthy();
     expect(screen.queryByText('مؤسسة الأفق للتجارة والتوزيع')).toBeNull();
-    expect(screen.queryByText('إدارة الصيانة والتشغيل')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: /الكل/ }));
-    expect(screen.getByText('مؤسسة الأفق للتجارة والتوزيع')).toBeTruthy();
-    expect(screen.getByText('إدارة الصيانة والتشغيل')).toBeTruthy();
   });
 
-  it('says so when a filter matches nothing, without collapsing into the empty state', () => {
-    setQuery({ data: [DIRECTORY[0]!] });
+  it('shows customers only in the outbound tab', () => {
+    renderScreen();
+    fireEvent.click(subTab('جهات صرف'));
+
+    expect(subTab('جهات صرف').getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText('مؤسسة الأفق للتجارة والتوزيع')).toBeTruthy();
+    expect(screen.getByText('عميل معطّل للاختبار')).toBeTruthy();
+    expect(screen.queryByText('شركة النيل للتوريدات الصناعية')).toBeNull();
+    expect(screen.queryByText('Nile Trading GmbH')).toBeNull();
+  });
+
+  it('mounts the sister-company tree instead of a table on the third tab', () => {
+    renderScreen();
+    fireEvent.click(subTab('شركات شقيقة'));
+
+    expect(screen.getByRole('heading', { name: 'شجرة الشركات الشقيقة' })).toBeTruthy();
+    expect(screen.getByText('الشركة المتحدة للخدمات اللوجستية')).toBeTruthy();
+    /* Only the active panel is mounted, so the inbound table is gone. */
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.queryByText('شركة النيل للتوريدات الصناعية')).toBeNull();
+  });
+});
+
+describe('Parties — table rendering', () => {
+  it('renders a table with name, code, type and status columns', () => {
     renderScreen();
 
-    fireEvent.click(screen.getByRole('button', { name: /عملاء/ }));
+    for (const header of ['الاسم', 'الكود', 'النوع', 'الحالة']) {
+      expect(screen.getByRole('columnheader', { name: header })).toBeTruthy();
+    }
 
-    expect(screen.getByText('لا توجد جهات مطابقة لهذه التصفية.')).toBeTruthy();
-    expect(screen.queryByText('لا توجد جهات بعد')).toBeNull();
+    const row = screen.getByRole('row', { name: /شركة النيل للتوريدات الصناعية/ });
+    expect(within(row).getByText('LOC-001')).toBeTruthy();
+    expect(within(row).getByText('مورّد محلي')).toBeTruthy();
+    expect(within(row).getByText('نشط')).toBeTruthy();
+
+    /* Each type badge is named in text, never colour alone. */
+    fireEvent.click(subTab('جهات صرف'));
+    const customerRow = screen.getByRole('row', { name: /مؤسسة الأفق للتجارة والتوزيع/ });
+    expect(within(customerRow).getByText('عميل')).toBeTruthy();
+    expect(within(customerRow).getByText('CUS-001')).toBeTruthy();
+  });
+
+  it('renders one disabled row and reports it as such', () => {
+    renderScreen();
+    fireEvent.click(subTab('جهات صرف'));
+
+    const row = screen.getByRole('row', { name: /عميل معطّل للاختبار/ });
+    expect(within(row).getByText('معطّل')).toBeTruthy();
   });
 });
 
 describe('Parties — empty, loading and permission states', () => {
-  it('renders the empty state when there are no parties', () => {
+  it('renders a scope-specific empty state when there are no parties', () => {
     setQuery({ data: [] });
     renderScreen();
 
-    expect(screen.getByText('لا توجد جهات بعد')).toBeTruthy();
-    expect(screen.getByText(/الكود يُولَّد تلقائياً حسب نوع الجهة/)).toBeTruthy();
+    expect(screen.getByText('لا توجد جهات وارد بعد')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'أضف أول مورّد محلي أو أجنبي. الكود يُولَّد تلقائياً حسب نوع الجهة (LOC / FRN).',
+      ),
+    ).toBeTruthy();
+
+    fireEvent.click(subTab('جهات صرف'));
+    expect(screen.getByText('لا توجد جهات صرف بعد')).toBeTruthy();
     /* Creating the first party stays one click away. */
     expect(screen.getByRole('button', { name: 'إضافة جهة' })).toBeTruthy();
+  });
+
+  it('does not offer an inbound empty state for an outbound-only directory', () => {
+    setQuery({ data: [CUSTOMER] });
+    renderScreen();
+
+    expect(screen.getByText('لا توجد جهات وارد بعد')).toBeTruthy();
+    fireEvent.click(subTab('جهات صرف'));
+    expect(screen.getByText('مؤسسة الأفق للتجارة والتوزيع')).toBeTruthy();
   });
 
   it('renders a loading indicator while the directory is in flight', () => {
@@ -226,7 +334,7 @@ describe('Parties — empty, loading and permission states', () => {
     expect(screen.getByText('جارٍ تحميل الجهات…')).toBeTruthy();
   });
 
-  it('surfaces a denied grant explicitly instead of showing an empty list', () => {
+  it('surfaces a denied grant explicitly instead of showing an empty table', () => {
     setQuery({
       isLoading: false,
       isError: true,
@@ -239,12 +347,23 @@ describe('Parties — empty, loading and permission states', () => {
     expect(screen.getByRole('alert').textContent).toContain('project.settings:manage');
     expect(screen.getByRole('button', { name: 'إعادة المحاولة' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'إضافة جهة' })).toBeNull();
-    expect(screen.queryByText('لا توجد جهات بعد')).toBeNull();
+    expect(screen.queryByText('لا توجد جهات وارد بعد')).toBeNull();
   });
 });
 
 describe('Parties — create', () => {
-  it('requires the one-time type choice and a valid name before any request', () => {
+  it('offers both supplier kinds on the inbound tab and no customer', () => {
+    renderScreen();
+    const dialog = openCreateDialog();
+
+    const select = within(dialog).getByLabelText<HTMLSelectElement>('نوع الجهة');
+    const options = within(select)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(options).toEqual(['اختر نوع الجهة…', 'مورّد محلي', 'مورّد أجنبي']);
+  });
+
+  it('requires the type and a valid name before any request', () => {
     renderScreen();
     const dialog = openCreateDialog();
 
@@ -256,38 +375,17 @@ describe('Parties — create', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
-  it('shows the credit terms only for suppliers and customers', () => {
+  it('creates a local supplier with its credit terms and closes on success', () => {
     renderScreen();
     const dialog = openCreateDialog();
 
-    /* Unchosen: nothing credit-shaped on screen yet. */
+    /* Credit terms appear once a type is chosen, for both supplier kinds. */
     expect(within(dialog).queryByLabelText('الحد الائتماني')).toBeNull();
-    expect(within(dialog).queryByLabelText('شروط الدفع')).toBeNull();
-
-    chooseType(dialog, 'supplier');
-    expect(within(dialog).getByLabelText('الحد الائتماني')).toBeTruthy();
-    expect(within(dialog).getByLabelText('شروط الدفع')).toBeTruthy();
+    chooseType(dialog, 'local_supplier');
     expect(within(dialog).getByText('حد الشراء الآجل المتفق عليه مع المورّد.')).toBeTruthy();
 
-    chooseType(dialog, 'sister_company');
-    expect(within(dialog).queryByLabelText('الحد الائتماني')).toBeNull();
-
-    chooseType(dialog, 'internal');
-    expect(within(dialog).queryByLabelText('الحد الائتماني')).toBeNull();
-    expect(within(dialog).queryByLabelText('شروط الدفع')).toBeNull();
-
-    chooseType(dialog, 'customer');
-    expect(within(dialog).getByLabelText('الحد الائتماني')).toBeTruthy();
-    expect(within(dialog).getByText('حد البيع الآجل الممنوح للعميل.')).toBeTruthy();
-  });
-
-  it('creates a customer with its credit terms and closes on success', () => {
-    renderScreen();
-    const dialog = openCreateDialog();
-
-    chooseType(dialog, 'customer');
     fireEvent.change(within(dialog).getByLabelText('اسم الجهة'), {
-      target: { value: 'عميل الاختبار الآلي' },
+      target: { value: 'مورّد الاختبار الآلي' },
     });
     fireEvent.change(within(dialog).getByLabelText('الحد الائتماني'), {
       target: { value: '5000' },
@@ -296,8 +394,8 @@ describe('Parties — create', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     expect(mutations.create.mutate.mock.calls[0]?.[0]).toEqual({
-      type: 'customer',
-      name: 'عميل الاختبار الآلي',
+      type: 'local_supplier',
+      name: 'مورّد الاختبار الآلي',
       taxNumber: null,
       commercialRegister: null,
       address: null,
@@ -313,27 +411,26 @@ describe('Parties — create', () => {
     expect(screen.getByRole('alert').textContent).toBe('تم الحفظ.');
   });
 
-  it('drops credit values typed before the type switched to an internal party', () => {
+  it('creates a customer from the outbound tab with the type fixed and no type control', () => {
     renderScreen();
+    fireEvent.click(subTab('جهات صرف'));
     const dialog = openCreateDialog();
 
-    chooseType(dialog, 'customer');
-    fireEvent.change(within(dialog).getByLabelText('الحد الائتماني'), {
-      target: { value: '5000' },
-    });
-    fireEvent.change(within(dialog).getByLabelText('شروط الدفع'), { target: { value: '30' } });
+    /* The tab decides: a customer is shown as text, not as a select. */
+    expect(within(dialog).queryByLabelText('نوع الجهة')).toBeNull();
+    expect(within(dialog).getByText('عميل')).toBeTruthy();
+    expect(
+      within(dialog).getByText('هذا التبويب يُنشئ عملاء فقط، ويأخذ الكود من تسلسل CUS.'),
+    ).toBeTruthy();
 
-    chooseType(dialog, 'internal');
     fireEvent.change(within(dialog).getByLabelText('اسم الجهة'), {
-      target: { value: 'إدارة الاختبار الآلي' },
+      target: { value: 'عميل الاختبار الآلي' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
-    /* The mutation layer strips again at the wire; the dialog must already
-       hand over nulls rather than the hidden leftovers. */
     expect(mutations.create.mutate.mock.calls[0]?.[0]).toMatchObject({
-      type: 'internal',
-      name: 'إدارة الاختبار الآلي',
+      type: 'customer',
+      name: 'عميل الاختبار الآلي',
       creditLimit: null,
       paymentTerms: null,
     });
@@ -343,7 +440,7 @@ describe('Parties — create', () => {
     renderScreen();
     const dialog = openCreateDialog();
 
-    chooseType(dialog, 'supplier');
+    chooseType(dialog, 'foreign_supplier');
     fireEvent.change(within(dialog).getByLabelText('اسم الجهة'), {
       target: { value: 'مورّد الاختبار' },
     });
@@ -360,7 +457,7 @@ describe('Parties — create', () => {
     renderScreen();
     const dialog = openCreateDialog();
 
-    chooseType(dialog, 'supplier');
+    chooseType(dialog, 'local_supplier');
     fireEvent.change(within(dialog).getByLabelText('اسم الجهة'), {
       target: { value: 'مورّد الاختبار' },
     });
@@ -377,6 +474,7 @@ describe('Parties — create', () => {
 describe('Parties — edit', () => {
   it('prefills the fields and renders type and code as read-only text', () => {
     renderScreen();
+    fireEvent.click(subTab('جهات صرف'));
     fireEvent.click(actionOf('تعديل', 'مؤسسة الأفق للتجارة والتوزيع'));
 
     const dialog = screen.getByRole('dialog');
@@ -396,40 +494,29 @@ describe('Parties — edit', () => {
     ).toBeTruthy();
   });
 
-  it('submits the edit with the stored type as context and no code anywhere', () => {
+  it('submits the edit with no type and no code anywhere', () => {
     renderScreen();
-    fireEvent.click(actionOf('تعديل', 'مؤسسة الأفق للتجارة والتوزيع'));
+    fireEvent.click(actionOf('تعديل', 'شركة النيل للتوريدات الصناعية'));
 
     const dialog = screen.getByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('اسم الجهة'), {
-      target: { value: 'الأفق للتجارة — الاسم الجديد' },
+      target: { value: 'النيل للتوريدات — الاسم الجديد' },
     });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
 
     const submitted = mutations.update.mutate.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(submitted).toMatchObject({
-      id: 'cus',
-      type: 'customer',
-      name: 'الأفق للتجارة — الاسم الجديد',
-      creditLimit: 150000,
-      paymentTerms: 60,
+      id: 'loc',
+      name: 'النيل للتوريدات — الاسم الجديد',
+      creditLimit: 250000,
+      paymentTerms: 30,
     });
     expect(submitted).not.toHaveProperty('code');
+    expect(submitted).not.toHaveProperty('type');
 
     settleWithSuccess(mutations.update);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('alert').textContent).toBe('تم الحفظ.');
-  });
-
-  it('offers no credit fields when editing an internal party', () => {
-    renderScreen();
-    fireEvent.click(actionOf('تعديل', 'إدارة الصيانة والتشغيل'));
-
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('INT-001')).toBeTruthy();
-    expect(within(dialog).queryByLabelText('الحد الائتماني')).toBeNull();
-    expect(within(dialog).queryByLabelText('شروط الدفع')).toBeNull();
-    expect(within(dialog).queryByRole('combobox')).toBeNull();
   });
 });
 
@@ -438,10 +525,11 @@ describe('Parties — activate and deactivate', () => {
     renderScreen();
 
     fireEvent.click(actionOf('تعطيل', 'شركة النيل للتوريدات الصناعية'));
-    expect(mutations.toggle.mutate.mock.calls[0]?.[0]).toEqual({ id: 'sup', isActive: false });
+    expect(mutations.toggle.mutate.mock.calls[0]?.[0]).toEqual({ id: 'loc', isActive: false });
 
-    fireEvent.click(actionOf('تفعيل', 'إدارة الصيانة والتشغيل'));
-    expect(mutations.toggle.mutate.mock.calls[1]?.[0]).toEqual({ id: 'int', isActive: true });
+    fireEvent.click(subTab('جهات صرف'));
+    fireEvent.click(actionOf('تفعيل', 'عميل معطّل للاختبار'));
+    expect(mutations.toggle.mutate.mock.calls[1]?.[0]).toEqual({ id: 'cus2', isActive: true });
   });
 
   it('reports a denied toggle instead of silently doing nothing', () => {
@@ -458,7 +546,12 @@ describe('Parties — delete', () => {
   it('is offered on every row in this phase (nothing references a party yet)', () => {
     renderScreen();
 
-    for (const entry of DIRECTORY) {
+    for (const entry of [LOCAL_SUPPLIER, FOREIGN_SUPPLIER]) {
+      expect(actionOf('حذف', entry.name)).toBeTruthy();
+    }
+
+    fireEvent.click(subTab('جهات صرف'));
+    for (const entry of [CUSTOMER, INACTIVE_CUSTOMER]) {
       expect(actionOf('حذف', entry.name)).toBeTruthy();
     }
   });
@@ -469,11 +562,11 @@ describe('Parties — delete', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.textContent).toContain('شركة النيل للتوريدات الصناعية');
-    expect(dialog.textContent).toContain('SUP-001');
+    expect(dialog.textContent).toContain('LOC-001');
     expect(mutations.remove.mutate).not.toHaveBeenCalled();
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'تأكيد الحذف' }));
-    expect(mutations.remove.mutate.mock.calls[0]?.[0]).toEqual({ id: 'sup' });
+    expect(mutations.remove.mutate.mock.calls[0]?.[0]).toEqual({ id: 'loc' });
 
     settleWithSuccess(mutations.remove);
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -485,7 +578,7 @@ describe('Parties — delete', () => {
 
   it('translates a refused delete (23503) into a references message and dismisses the dialog', () => {
     renderScreen();
-    fireEvent.click(actionOf('حذف', 'مؤسسة الأفق للتجارة والتوزيع'));
+    fireEvent.click(actionOf('حذف', 'Nile Trading GmbH'));
     fireEvent.click(screen.getByRole('button', { name: 'تأكيد الحذف' }));
 
     settleWithError(mutations.remove, new PartyWriteError('hasReferences'));

@@ -364,7 +364,7 @@ export const en: Record<TranslationKey, string> = {
     "Manage the project's master data: stations and warehouses, classifications, parties, and general settings.",
   'settings.project.tabs.stations': 'Stations & Warehouses',
   'settings.project.tabs.classifications': 'Classifications',
-  'settings.project.tabs.parties': 'Parties',
+  'settings.project.tabs.parties': 'Inbound & Outbound',
   'settings.project.tabs.general': 'General',
   'settings.project.stations.add': 'Add station',
   'settings.project.stations.addWarehouse': 'Add warehouse',
@@ -500,24 +500,36 @@ export const en: Record<TranslationKey, string> = {
     'The database connection is not configured in this environment.',
   'settings.project.classifications.error.network': 'Could not reach the server. Please try again.',
   'settings.project.classifications.error.unknown': 'Could not load classifications.',
-  'settings.project.parties.add': 'Add party',
-  'settings.project.parties.type.supplier': 'Supplier',
+  'settings.project.parties.heading': 'Inbound & outbound parties',
+  'settings.project.parties.description':
+    'Counterparties, split by the direction of the relationship: inbound parties (local and foreign suppliers), outbound parties (customers, with no local/foreign split) and sister companies as a parent → branches tree.',
+  'settings.project.parties.tabs.inbound': 'Inbound parties',
+  'settings.project.parties.tabs.outbound': 'Outbound parties',
+  'settings.project.parties.tabs.sister': 'Sister companies',
+  'settings.project.parties.inbound.description':
+    'The suppliers we buy from — local and foreign — each with its own code sequence (LOC / FRN).',
+  'settings.project.parties.outbound.description':
+    'The customers we sell to, with no local/foreign split. Their codes start with CUS.',
+  'settings.project.parties.type.localSupplier': 'Local supplier',
+  'settings.project.parties.type.foreignSupplier': 'Foreign supplier',
   'settings.project.parties.type.customer': 'Customer',
-  'settings.project.parties.type.sisterCompany': 'Sister company',
-  'settings.project.parties.type.internal': 'Internal party',
-  'settings.project.parties.filter.all': 'All',
-  'settings.project.parties.filter.supplier': 'Suppliers',
-  'settings.project.parties.filter.customer': 'Customers',
-  'settings.project.parties.filter.sisterCompany': 'Sister companies',
-  'settings.project.parties.filter.internal': 'Internal parties',
+  'settings.project.parties.table.name': 'Name',
+  'settings.project.parties.table.code': 'Code',
+  'settings.project.parties.table.type': 'Type',
+  'settings.project.parties.table.status': 'Status',
+  'settings.project.parties.table.actions': 'Actions',
+  'settings.project.parties.table.inboundCaption': 'Inbound parties table',
+  'settings.project.parties.table.outboundCaption': 'Outbound parties table',
   'settings.project.parties.status.active': 'Active',
   'settings.project.parties.status.inactive': 'Disabled',
   'settings.project.parties.loading': 'Loading parties…',
   'settings.project.parties.retry': 'Try again',
-  'settings.project.parties.empty.title': 'No parties yet',
-  'settings.project.parties.empty.description':
-    'Add your first party to see it here. Its code is generated automatically from its type.',
-  'settings.project.parties.empty.filtered': 'No parties match this filter.',
+  'settings.project.parties.empty.inbound.title': 'No inbound parties yet',
+  'settings.project.parties.empty.inbound.description':
+    'Add your first local or foreign supplier. The code is generated automatically from the type (LOC / FRN).',
+  'settings.project.parties.empty.outbound.title': 'No outbound parties yet',
+  'settings.project.parties.empty.outbound.description':
+    'Add your first customer. The code is generated automatically (CUS-001).',
   'settings.project.parties.error.forbidden':
     'You do not have permission to read parties (project.settings:manage).',
   'settings.project.parties.error.unavailable':
@@ -528,12 +540,15 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.parties.action.deactivate': 'Deactivate',
   'settings.project.parties.action.activate': 'Activate',
   'settings.project.parties.action.delete': 'Delete',
+  'settings.project.parties.add': 'Add party',
   'settings.project.parties.dialog.add': 'Add party',
   'settings.project.parties.dialog.edit': 'Edit party',
   'settings.project.parties.dialog.type': 'Party type',
   'settings.project.parties.dialog.typePlaceholder': 'Choose a party type…',
   'settings.project.parties.dialog.typeHint':
-    'The type is chosen at creation and cannot be changed later.',
+    'The type is chosen at creation and cannot be changed later; it decides which code sequence is used.',
+  'settings.project.parties.dialog.outboundTypeHint':
+    'This tab creates customers only; their codes come from the CUS sequence.',
   'settings.project.parties.dialog.immutable':
     'The type and code are fixed and cannot be edited after creation.',
   'settings.project.parties.dialog.code': 'Code (generated automatically)',
@@ -586,6 +601,75 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.parties.writeError.notFound':
     'This party no longer exists. Refresh the list and try again.',
   'settings.project.parties.writeError.unknown': 'The operation failed. Please try again.',
+  'settings.project.sisterCompanies.heading': 'Sister companies tree',
+  'settings.project.sisterCompanies.description':
+    'A parent company at the top with its branches below it. The code is generated automatically — SIS-001 for the parent, SIS-001-01 for its first branch — and neither the parent nor the code can change after creation.',
+  'settings.project.sisterCompanies.addParent': 'Add parent company',
+  'settings.project.sisterCompanies.addBranch': 'Add branch',
+  'settings.project.sisterCompanies.addBranchUnder': 'Add branch under “{parent}”',
+  'settings.project.sisterCompanies.branchesHeading': 'Branches',
+  'settings.project.sisterCompanies.branchCount': 'Branches: {count}',
+  'settings.project.sisterCompanies.noBranches':
+    'No branches under this company yet. You can add one now.',
+  'settings.project.sisterCompanies.status.active': 'Active',
+  'settings.project.sisterCompanies.status.inactive': 'Disabled',
+  'settings.project.sisterCompanies.loading': 'Loading sister companies…',
+  'settings.project.sisterCompanies.retry': 'Try again',
+  'settings.project.sisterCompanies.empty.title': 'No sister companies yet',
+  'settings.project.sisterCompanies.empty.description':
+    'Add the parent company first, then its branches. The code and level are generated by the server.',
+  'settings.project.sisterCompanies.action.edit': 'Edit',
+  'settings.project.sisterCompanies.action.deactivate': 'Deactivate',
+  'settings.project.sisterCompanies.action.activate': 'Activate',
+  'settings.project.sisterCompanies.action.delete': 'Delete',
+  'settings.project.sisterCompanies.dialog.addParent': 'Add parent company',
+  'settings.project.sisterCompanies.dialog.addBranch': 'Add branch',
+  'settings.project.sisterCompanies.dialog.edit': 'Rename',
+  'settings.project.sisterCompanies.dialog.name': 'Company name',
+  'settings.project.sisterCompanies.dialog.codePreview': 'Code',
+  'settings.project.sisterCompanies.dialog.code': 'Code (generated automatically)',
+  'settings.project.sisterCompanies.dialog.immutable':
+    'The parent, level and code are fixed after creation — only the name can change.',
+  'settings.project.sisterCompanies.dialog.rootHint':
+    'A new parent company will be created at level 1. The server generates its code and level.',
+  'settings.project.sisterCompanies.dialog.underParent':
+    'A new branch will be created under “{parent}”. The server generates its code and level.',
+  'settings.project.sisterCompanies.dialog.save': 'Save',
+  'settings.project.sisterCompanies.dialog.cancel': 'Cancel',
+  'settings.project.sisterCompanies.dialog.close': 'Close',
+  'settings.project.sisterCompanies.dialog.saving': 'Saving…',
+  'settings.project.sisterCompanies.validation.required': 'A name is required.',
+  'settings.project.sisterCompanies.validation.tooShort':
+    'The name must be at least two characters.',
+  'settings.project.sisterCompanies.delete.title': 'Delete sister company',
+  'settings.project.sisterCompanies.delete.body':
+    '“{name}” ({code}) will be permanently deleted. This cannot be undone.',
+  'settings.project.sisterCompanies.delete.confirm': 'Confirm delete',
+  'settings.project.sisterCompanies.success.saved': 'Saved.',
+  'settings.project.sisterCompanies.success.deleted': 'Deleted.',
+  'settings.project.sisterCompanies.dismiss': 'Dismiss alert',
+  'settings.project.sisterCompanies.error.forbidden':
+    'You do not have permission to read sister companies (project.settings:manage).',
+  'settings.project.sisterCompanies.error.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.sisterCompanies.error.network': 'Could not reach the server. Please try again.',
+  'settings.project.sisterCompanies.error.unknown': 'Could not load sister companies.',
+  'settings.project.sisterCompanies.writeError.forbidden':
+    'You do not have permission to perform this operation (project.settings:manage).',
+  'settings.project.sisterCompanies.writeError.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.sisterCompanies.writeError.network':
+    'Could not reach the server. Please try again.',
+  'settings.project.sisterCompanies.writeError.validation': 'The name is not valid.',
+  'settings.project.sisterCompanies.writeError.immutable':
+    'The parent company, code and level cannot be changed after creation.',
+  'settings.project.sisterCompanies.writeError.hasBranches':
+    'This company cannot be deleted because it still has branches. Delete them first.',
+  'settings.project.sisterCompanies.writeError.missingParent':
+    'The parent company no longer exists. Refresh the tree and try again.',
+  'settings.project.sisterCompanies.writeError.notFound':
+    'This company no longer exists. Refresh the tree and try again.',
+  'settings.project.sisterCompanies.writeError.unknown': 'The operation failed. Please try again.',
   'settings.project.tabs.generalPlaceholder': 'General settings content — coming soon.',
   'settings.appearance.desc':
     'Default language, theme, time zone and weekend days for this project.',

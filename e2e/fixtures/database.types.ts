@@ -59,10 +59,11 @@ export interface E2EDatabase {
         { id?: string; parent_id?: string | null; name: string; is_active?: boolean }
       >;
       /* `code` is deliberately absent from Insert: `parties_before_write` mints
-         it from a per-type sequence (SUP-001 / CUS-001 / SIS-001 / INT-001) and
+         it from a per-type sequence (LOC-001 / FRN-001 / CUS-001) and
          overwrites anything a client sends. `type` stays writable in Update
          only so the immutability spec can prove the database refuses to
-         change it (22023); the application client never sends it. */
+         change it (22023); the application client never sends it. The retired
+         `supplier` / `sister_company` / `internal` types are not modelled. */
       parties: Table<
         {
           id: string;
@@ -93,6 +94,36 @@ export interface E2EDatabase {
           email?: string | null;
           credit_limit?: number | null;
           payment_terms?: number | null;
+          is_active?: boolean;
+        }
+      >;
+      /* `code` and `level` are absent from Insert: `sister_companies_before_write`
+         mints SIS-001 for a parent and SIS-001-01 for a branch, and derives the
+         level from parent_id. `parent_id` stays writable in Update only so the
+         immutability spec can prove the database refuses to change it (22023). */
+      sister_companies: Table<
+        {
+          id: string;
+          parent_id: string | null;
+          level: number;
+          code: string;
+          name: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          parent_id?: string | null;
+          name: string;
+          is_active?: boolean;
+        },
+        {
+          id?: string;
+          parent_id?: string | null;
+          level?: number;
+          code?: string;
+          name?: string;
           is_active?: boolean;
         }
       >;

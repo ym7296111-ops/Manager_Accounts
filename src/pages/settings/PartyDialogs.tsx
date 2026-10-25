@@ -9,7 +9,6 @@ import {
   PARTY_TYPES,
   PAYMENT_TERMS_OPTIONS,
   isPartyType,
-  supportsCreditTerms,
   validatePartyForm,
   type PartyFormErrorCode,
   type PartyFormErrors,
@@ -27,23 +26,21 @@ import {
  * * `code` never appears as a field. It is minted server-side from a per-type
  *   sequence, so on create there is nothing to type, and on edit it renders as
  *   plain text.
- * * `type` is chosen exactly once. On create it is a required select that
- *   starts unchosen — defaulting it would risk minting a code from the wrong
- *   sequence, and the type can never be corrected afterwards. On edit it
- *   renders as plain text next to the code; the submit path
- *   (`usePartiesMutations`) has no branch that could send either column.
+ * * `type` is chosen exactly once. On create it is a select limited to the
+ *   sub-tab's own set (`allowedTypes`): the inbound tab offers local and
+ *   foreign suppliers, the outbound tab offers nothing but `customer`. On
+ *   edit it renders as plain text next to the code; the submit path
+ *   (`usePartiesMutations`) has no key that could send either column.
  *
- * The credit fields render only for suppliers and customers. Switching the
- * type in the create dialog hides them again, and `validatePartyForm` ignores
- * whatever they still hold, so leftover values cannot ride into a sister
- * company or an internal party.
+ * Credit terms are part of every party the form can produce — both supplier
+ * kinds and customers — so both fields are always rendered. Sister companies
+ * are a separate tree with their own dialogs and no credit columns at all.
  */
 
 const TYPE_LABEL_KEY: Record<PartyType, TranslationKey> = {
-  supplier: 'settings.project.parties.type.supplier',
+  local_supplier: 'settings.project.parties.type.localSupplier',
+  foreign_supplier: 'settings.project.parties.type.foreignSupplier',
   customer: 'settings.project.parties.type.customer',
-  sister_company: 'settings.project.parties.type.sisterCompany',
-  internal: 'settings.project.parties.type.internal',
 };
 
 /** One message per (field, code): a missing type and a missing name differ. */
@@ -153,6 +150,12 @@ export interface PartyFormDialogProps {
   readonly mode: 'create' | 'edit';
   /** Edit only: the row being edited. Its type and code render read-only. */
   readonly initialParty?: Party;
+  /**
+   * The types this sub-tab may create. One entry means the type is fixed by
+   * the tab (the outbound tab creates customers), several means the user picks
+   * (inbound: local or foreign supplier). Never consulted on edit.
+   */
+  readonly allowedTypes?: readonly PartyType[];
   readonly busy: boolean;
   readonly onSubmit: (values: PartyFormValues) => void;
   readonly onClose: () => void;
@@ -161,6 +164,7 @@ export interface PartyFormDialogProps {
 export function PartyFormDialog({
   mode,
   initialParty,
+  allowedTypes = PARTY_TYPES,
   busy,
   onSubmit,
   onClose,
@@ -180,28 +184,35 @@ export function PartyFormDialog({
   const typeRef = useRef<HTMLSelectElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  const [raw, setRaw] = useState<PartyFormRaw>(() =>
-    mode === 'edit' && initialParty !== undefined ? partyToRaw(initialParty) : EMPTY_FORM,
-  );
+  /* A single allowed type is fixed by the sub-tab, so the form starts with it
+     chosen; with two (inbound) the choice stays the user's. */
+  const fixedType: PartyType | null = allowedTypes.length === 1 ? allowedTypes[0]! : null;
+
+  const [raw, setRaw] = useState<PartyFormRaw>(() => {
+    if (mode === 'edit' && initialParty !== undefined) {
+      return partyToRaw(initialParty);
+    }
+    return fixedType === null ? EMPTY_FORM : { ...EMPTY_FORM, type: fixedType };
+  });
   const [errors, setErrors] = useState<PartyFormErrors>({});
 
   useEscapeKey(onClose, !busy);
 
   useEffect(() => {
-    if (mode === 'create') {
+    /* With a fixed type there is no select to focus, so the name takes focus. */
+    if (mode === 'create' && fixedType === null) {
       typeRef.current?.focus();
     } else {
       nameRef.current?.focus();
     }
-  }, [mode]);
+  }, [mode, fixedType]);
 
   const effectiveType: PartyType | null =
     mode === 'edit' && initialParty !== undefined
       ? initialParty.type
-      : isPartyType(raw.type)
+      : isPartyType(raw.type) && allowedTypes.includes(raw.type)
         ? raw.type
         : null;
-  const showCreditTerms = effectiveType !== null && supportsCreditTerms(effectiveType);
 
   function errorText(field: PartyFormField): string | undefined {
     const code = errors[field];
@@ -214,13 +225,8 @@ export function PartyFormDialog({
     setErrors((current) => {
       const next: PartyFormErrors = { ...current };
       delete next.type;
-      /* A type without credit terms unmounts both fields; an error left
-         behind for an invisible field would reappear if the user switched
-         back, long after the value that caused it. */
-      if (nextType === '' || !supportsCreditTerms(nextType)) {
-        delete next.creditLimit;
-        delete next.paymentTerms;
-      }
+      /* Switching between two supplier kinds keeps every field mounted, so a
+         credit error stays meaningful; only the type error is cleared. */
       return next;
     });
   }
@@ -239,7 +245,7 @@ export function PartyFormDialog({
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const result = validatePartyForm(raw);
+    const result = validatePartyForm(raw, allowedTypes);
     if (!result.ok) {
       setErrors(result.errors);
       return;
@@ -266,7 +272,23 @@ export function PartyFormDialog({
           database's own rules (the email CHECK is not the browser's grammar),
           and native bubbles would pre-empt them before submit ever fires. */}
       <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
-        {mode === 'create' ? (
+        {mode === 'create' && fixedType !== null ? (
+          /* The sub-tab decides the type: the outbound tab only ever creates a
+             customer, so there is nothing to choose and nothing to get wrong. */
+          <div className="space-y-1.5">
+            <span className="text-foreground block text-sm font-medium">
+              {t('settings.project.parties.dialog.type')}
+            </span>
+            <p className="text-muted-foreground text-sm">{t(TYPE_LABEL_KEY[fixedType])}</p>
+            <p className="text-muted-foreground text-xs">
+              {t(
+                fixedType === 'customer'
+                  ? 'settings.project.parties.dialog.outboundTypeHint'
+                  : 'settings.project.parties.dialog.typeHint',
+              )}
+            </p>
+          </div>
+        ) : mode === 'create' ? (
           <div>
             <label htmlFor={typeId} className="text-foreground text-sm font-medium">
               {t('settings.project.parties.dialog.type')}
@@ -282,7 +304,7 @@ export function PartyFormDialog({
               className={MODAL_FIELD_CLASS}
             >
               <option value="">{t('settings.project.parties.dialog.typePlaceholder')}</option>
-              {PARTY_TYPES.map((type) => (
+              {allowedTypes.map((type) => (
                 <option key={type} value={type}>
                   {t(TYPE_LABEL_KEY[type])}
                 </option>
@@ -402,9 +424,10 @@ export function PartyFormDialog({
 
         {/* Credit terms exist only across a legal-entity boundary: a supplier
             grants us a purchasing limit, a customer receives one from us.
-            Sister companies and internal parties render neither field, and
-            the mutation strips both values for them again at the wire. */}
-        {showCreditTerms && effectiveType !== null ? (
+            Every party the form can produce is such a counterparty, so both
+            fields are always shown; sister companies have their own table and
+            no credit columns at all. */}
+        {effectiveType !== null ? (
           <div className="space-y-1.5">
             <div className="grid gap-4 sm:grid-cols-2">
               <TextField
@@ -455,9 +478,9 @@ export function PartyFormDialog({
             </div>
             <p className="text-muted-foreground text-xs">
               {t(
-                effectiveType === 'supplier'
-                  ? 'settings.project.parties.dialog.creditSupplierHint'
-                  : 'settings.project.parties.dialog.creditCustomerHint',
+                effectiveType === 'customer'
+                  ? 'settings.project.parties.dialog.creditCustomerHint'
+                  : 'settings.project.parties.dialog.creditSupplierHint',
               )}
             </p>
           </div>

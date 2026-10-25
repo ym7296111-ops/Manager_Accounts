@@ -104,8 +104,8 @@ vi.mock('@/hooks/useParties', async (importOriginal) => {
       data: [
         {
           id: 'p1',
-          type: 'supplier',
-          code: 'SUP-001',
+          type: 'local_supplier',
+          code: 'LOC-001',
           name: 'شركة النيل للتوريدات الصناعية',
           taxNumber: null,
           commercialRegister: null,
@@ -200,7 +200,7 @@ describe('ProjectSettings', () => {
     expect(tabs[2]?.getAttribute('aria-selected')).toBe('true');
     // The parties tab now renders the live directory, not the placeholder.
     expect(screen.getByText('شركة النيل للتوريدات الصناعية')).toBeTruthy();
-    expect(screen.getByText('SUP-001')).toBeTruthy();
+    expect(screen.getByText('LOC-001')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'إضافة جهة' })).toBeTruthy();
     // Only the active panel is mounted, so the classifications tree is gone.
     expect(screen.queryByText('المواد والمستلزمات')).toBeNull();

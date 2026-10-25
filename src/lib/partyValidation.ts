@@ -12,42 +12,49 @@ import { validateName } from '@/lib/nameValidation';
  * one step stricter than `parties_name_not_blank`, as on every other
  * project-settings screen):
  *
- *   * email            → `parties_email_check` (the very same pattern);
- *   * credit_limit     → `parties_credit_limit_non_negative`, `numeric(18,2)`;
- *   * payment_terms    → one of 0 / 15 / 30 / 60 / 90 (`parties_payment_terms_check`);
- *   * credit fields on an internal party → refused by
- *     `parties_internal_no_credit_terms`; this module strips them for sister
- *     companies too, which is a UI rule the database deliberately leaves open.
+ *   * email          → `parties_email_check` (the very same pattern);
+ *   * credit_limit   → `parties_credit_limit_non_negative`, `numeric(18,2)`;
+ *   * payment_terms  → one of 0 / 15 / 30 / 60 / 90 (`parties_payment_terms_check`).
  *
  * Mirroring rather than approximating matters: the inline error and the
  * database must never disagree about what is acceptable.
+ *
+ * Since 20261108000000 the type set is exactly the two supplier kinds plus
+ * `customer`: `internal` is retired, and sister companies are their own tree
+ * (`sister_companies`), not a party type. Credit terms are therefore available
+ * on every type the form can produce.
  */
 
 export const PARTY_TYPES = [
-  'supplier',
+  'local_supplier',
+  'foreign_supplier',
   'customer',
-  'sister_company',
-  'internal',
 ] as const satisfies readonly PartyType[];
 
-export function isPartyType(value: unknown): value is PartyType {
-  return (
-    value === 'supplier' ||
-    value === 'customer' ||
-    value === 'sister_company' ||
-    value === 'internal'
-  );
+/** What the inbound sub-tab offers: local and foreign suppliers. */
+export const INBOUND_PARTY_TYPES = [
+  'local_supplier',
+  'foreign_supplier',
+] as const satisfies readonly PartyType[];
+
+/** What the outbound sub-tab offers: customers only, with no local/foreign split. */
+export const OUTBOUND_PARTY_TYPES = ['customer'] as const satisfies readonly PartyType[];
+
+/** The two halves the directory screen is split into. */
+export type PartyScope = 'inbound' | 'outbound';
+
+/** The types a scope may create, in the order its select offers them. */
+export function partyTypesForScope(scope: PartyScope): readonly PartyType[] {
+  return scope === 'inbound' ? INBOUND_PARTY_TYPES : OUTBOUND_PARTY_TYPES;
 }
 
-/**
- * Only the two external commercial types carry credit terms: a supplier
- * extends us a purchasing limit, a customer receives a sales limit from us.
- * Sister companies and internal departments show no credit fields, and the
- * payload builders strip both values for them regardless of what a caller (or
- * leftover form state after a type switch) carries.
- */
-export function supportsCreditTerms(type: PartyType): boolean {
-  return type === 'supplier' || type === 'customer';
+export function isPartyType(value: unknown): value is PartyType {
+  return value === 'local_supplier' || value === 'foreign_supplier' || value === 'customer';
+}
+
+/** True for the types the inbound sub-tab lists (both supplier kinds). */
+export function isInboundPartyType(type: PartyType): boolean {
+  return type === 'local_supplier' || type === 'foreign_supplier';
 }
 
 /** The `parties_payment_terms_check` set. `0` means "immediate"; absence is `null`. */
@@ -125,16 +132,18 @@ function optionalText(raw: string): string | null {
 /**
  * Validate and normalize the raw form in one pass.
  *
- * The credit fields are read only when the chosen type carries them. For a
- * sister company or an internal party the raw strings are ignored entirely —
- * the fields are not rendered, and whatever is left in the form state after a
- * type switch in the create dialog must not leak into the payload (nor block
- * the submit with an error on a field the user can no longer see).
+ * A type outside `allowedTypes` (when the caller passes the current sub-tab's
+ * set) is treated exactly like an unchosen one: the create dialog must not be
+ * able to mint a code from the other tab's sequence, even if its select was
+ * tampered with.
  */
-export function validatePartyForm(raw: PartyFormRaw): PartyFormValidation {
+export function validatePartyForm(
+  raw: PartyFormRaw,
+  allowedTypes: readonly PartyType[] = PARTY_TYPES,
+): PartyFormValidation {
   const errors: PartyFormErrors = {};
 
-  const type = isPartyType(raw.type) ? raw.type : null;
+  const type = isPartyType(raw.type) && allowedTypes.includes(raw.type) ? raw.type : null;
   if (type === null) {
     errors.type = 'required';
   }
@@ -151,26 +160,24 @@ export function validatePartyForm(raw: PartyFormRaw): PartyFormValidation {
   }
 
   let creditLimit: number | null = null;
-  let paymentTerms: PartyPaymentTerms | null = null;
-  if (type !== null && supportsCreditTerms(type)) {
-    const creditRaw = raw.creditLimit.trim();
-    if (creditRaw !== '') {
-      const parsed = Number(creditRaw);
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        errors.creditLimit = 'invalidCreditLimit';
-      } else {
-        creditLimit = roundCreditLimit(parsed);
-      }
+  const creditRaw = raw.creditLimit.trim();
+  if (creditRaw !== '') {
+    const parsed = Number(creditRaw);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      errors.creditLimit = 'invalidCreditLimit';
+    } else {
+      creditLimit = roundCreditLimit(parsed);
     }
+  }
 
-    const termsRaw = raw.paymentTerms.trim();
-    if (termsRaw !== '') {
-      const parsed = Number(termsRaw);
-      if (!isPartyPaymentTerms(parsed)) {
-        errors.paymentTerms = 'invalidPaymentTerms';
-      } else {
-        paymentTerms = parsed;
-      }
+  let paymentTerms: PartyPaymentTerms | null = null;
+  const termsRaw = raw.paymentTerms.trim();
+  if (termsRaw !== '') {
+    const parsed = Number(termsRaw);
+    if (!isPartyPaymentTerms(parsed)) {
+      errors.paymentTerms = 'invalidPaymentTerms';
+    } else {
+      paymentTerms = parsed;
     }
   }
 

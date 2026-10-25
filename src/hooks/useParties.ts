@@ -8,13 +8,15 @@ import { getSupabase } from '@/lib/supabase';
  * Parties directory (`['project-settings', 'parties']`).
  *
  * One flat read returns every party. The expected volume is a few dozen
- * counterparties — suppliers, customers, sister companies and internal
- * departments — so there is no pagination and no server-side filtering; the
- * screen's type filter runs over this list, exactly as the schema was designed
- * for (see `20261106000000_parties_schema.sql`).
+ * counterparties — local suppliers, foreign suppliers and customers — so there
+ * is no pagination and no server-side filtering; the screen's two sub-tabs
+ * split this list by type on the client, exactly as the schema was designed
+ * for (see `20261108000000_inbound_outbound_parties_and_sister_companies.sql`).
+ * Sister companies are *not* parties any more: they are a tree of their own
+ * (`useSisterCompanies`).
  *
  * Codes are minted by the `parties_before_write` trigger from a per-type
- * sequence (`SUP-001` / `CUS-001` / `SIS-001` / `INT-001`) and every row is
+ * sequence (`LOC-001` / `FRN-001` / `CUS-001`) and every row is
  * RLS-gated by `can_manage_project_settings()` (`project.settings:manage`).
  * The UI sends `type` once, on insert, and never sends `code`; both are
  * immutable afterwards (the trigger raises 22023), and `usePartiesMutations`
@@ -98,24 +100,23 @@ function readPaymentTerms(value: unknown): PartyPaymentTerms | null {
 }
 
 /**
- * Codes are zero-padded to three digits (`SUP-001`), so an ordinal comparison
- * is right up to 999 — but `SUP-1000` sorts before `SUP-101` in plain string
+ * Codes are zero-padded to three digits (`LOC-001`), so an ordinal comparison
+ * is right up to 999 — but `LOC-1000` sorts before `LOC-101` in plain string
  * order. The numeric-aware collator keeps creation order intact past the
  * padding width.
  */
 const CODE_COLLATOR = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
 /**
- * The directory reads type by type in the same order the filter offers them
- * (suppliers, customers, sister companies, internal), each block in code
- * order. Applied here rather than trusted from the server, so the render
- * order is deterministic regardless of the wire order.
+ * The directory reads type by type in the order the screen presents them
+ * (local suppliers, foreign suppliers, customers), each block in code order.
+ * Applied here rather than trusted from the server, so the render order is
+ * deterministic regardless of the wire order.
  */
 const TYPE_ORDER: Record<PartyType, number> = {
-  supplier: 0,
-  customer: 1,
-  sister_company: 2,
-  internal: 3,
+  local_supplier: 0,
+  foreign_supplier: 1,
+  customer: 2,
 };
 
 function byTypeThenCode(a: Party, b: Party): number {
