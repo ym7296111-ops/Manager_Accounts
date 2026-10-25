@@ -111,9 +111,18 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // mounted only on demand (dialogs portal to <body>, outside <main>).
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // The remaining tabs are still placeholders and issue no queries.
+  // The parties tab renders the seeded directory: one party per type, each
+  // with the code its own sequence minted. Writes again go through dialogs
+  // that portal to <body>, so `main` itself holds no form controls.
   await tabs.nth(2).click();
-  await expect(main.getByText('Parties content — coming soon.', { exact: true })).toBeVisible();
+  await expect(main.getByText('شركة النيل للتوريدات الصناعية')).toBeVisible();
+  await expect(main.getByText('SUP-001')).toBeVisible();
+  await expect(main.getByText('CUS-001')).toBeVisible();
+  await expect(main.getByText('SIS-001')).toBeVisible();
+  await expect(main.getByText('INT-001')).toBeVisible();
+  await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
+
+  // The remaining tab is still a placeholder and issues no queries.
 
   await tabs.nth(3).click();
   await expect(

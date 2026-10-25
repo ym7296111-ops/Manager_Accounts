@@ -112,6 +112,8 @@ describe('ProjectSettings separation from the general / branding screen', () => 
       'StationsWarehouses.tsx',
       'StationDialogs.tsx',
       'Classifications.tsx',
+      'Parties.tsx',
+      'PartyDialogs.tsx',
     ]) {
       expect(readSibling(name)).not.toContain('GeneralSettings');
     }

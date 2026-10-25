@@ -221,3 +221,72 @@ begin
     (v_maintenance, 'إصلاح أعطال', true);
 end;
 $seed_classifications$;
+
+
+-- ---------------------------------------------------------------------------
+-- Demo parties (Project Settings → Parties): one counterparty per type.
+--
+-- Local/e2e only, exactly like the stations and classifications seeds:
+-- `supabase db push --linked` never applies this file, so production stays
+-- empty until real parties are entered through the UI.
+--
+-- `code` is deliberately NOT supplied. `parties_before_write` mints it from
+-- the per-type sequence, so the four rows land as SUP-001 / CUS-001 / SIS-001
+-- / INT-001 and each sequence stays in step with the rows it numbered —
+-- writing explicit codes here would make the first UI-created party mint a
+-- code that already exists.
+--
+-- Credit terms are set only on the supplier and the customer. That mirrors
+-- the UI rule for sister companies, and for the internal party it is also a
+-- database rule (`parties_internal_no_credit_terms` would reject the row).
+-- ---------------------------------------------------------------------------
+do $seed_parties$
+declare
+  v_existing integer;
+begin
+  select count(*)::integer into v_existing from public.parties;
+  if v_existing > 0 then
+    return;
+  end if;
+
+  insert into public.parties (
+    type, name, tax_number, commercial_register, address,
+    contact_person, phone, email, credit_limit, payment_terms, is_active
+  )
+  values (
+    'supplier', 'شركة النيل للتوريدات الصناعية', '123456789', '101010',
+    'المنطقة الصناعية، مدينة السادس من أكتوبر', 'أحمد سامي', '+20238200000',
+    'sales@nile-supplies.example.com', 250000.00, 30, true
+  );
+
+  insert into public.parties (
+    type, name, tax_number, commercial_register, address,
+    contact_person, phone, email, credit_limit, payment_terms, is_active
+  )
+  values (
+    'customer', 'مؤسسة الأفق للتجارة والتوزيع', '987654321', '202020',
+    'شارع الجمهورية، القاهرة', 'منى خليل', '+20225700000',
+    'purchases@horizon-trade.example.com', 150000.00, 60, true
+  );
+
+  insert into public.parties (
+    type, name, tax_number, commercial_register, address,
+    contact_person, phone, email, credit_limit, payment_terms, is_active
+  )
+  values (
+    'sister_company', 'الشركة المتحدة للخدمات اللوجستية', '555444333', '303030',
+    'طريق مصر الإسماعيلية الصحراوي', 'خالد رمزي', '+20226300000',
+    'ops@united-logistics.example.com', null, null, true
+  );
+
+  insert into public.parties (
+    type, name, tax_number, commercial_register, address,
+    contact_person, phone, email, credit_limit, payment_terms, is_active
+  )
+  values (
+    'internal', 'إدارة الصيانة والتشغيل', null, null,
+    'المبنى الإداري الرئيسي', 'عمرو فتحي', '+20224000000',
+    null, null, null, true
+  );
+end;
+$seed_parties$;

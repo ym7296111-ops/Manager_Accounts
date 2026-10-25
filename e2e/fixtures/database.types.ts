@@ -58,6 +58,44 @@ export interface E2EDatabase {
         },
         { id?: string; parent_id?: string | null; name: string; is_active?: boolean }
       >;
+      /* `code` is deliberately absent from Insert: `parties_before_write` mints
+         it from a per-type sequence (SUP-001 / CUS-001 / SIS-001 / INT-001) and
+         overwrites anything a client sends. `type` stays writable in Update
+         only so the immutability spec can prove the database refuses to
+         change it (22023); the application client never sends it. */
+      parties: Table<
+        {
+          id: string;
+          type: string;
+          name: string;
+          code: string;
+          tax_number: string | null;
+          commercial_register: string | null;
+          address: string | null;
+          contact_person: string | null;
+          phone: string | null;
+          email: string | null;
+          credit_limit: number | null;
+          payment_terms: number | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          type: string;
+          name: string;
+          tax_number?: string | null;
+          commercial_register?: string | null;
+          address?: string | null;
+          contact_person?: string | null;
+          phone?: string | null;
+          email?: string | null;
+          credit_limit?: number | null;
+          payment_terms?: number | null;
+          is_active?: boolean;
+        }
+      >;
       app_identity_settings: Table<
         {
           id: boolean;

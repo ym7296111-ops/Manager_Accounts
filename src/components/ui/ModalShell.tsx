@@ -15,7 +15,10 @@ import type { ReactNode } from 'react';
  * * dismissal is refused while `busy` — a request in flight must finish before
  *   the dialog (and the values the user typed) can disappear;
  * * content portals to `document.body`, so no ancestor with `overflow: hidden`
- *   or a stacking context can clip it.
+ *   or a stacking context can clip it;
+ * * the panel is capped to the viewport height (minus the overlay padding)
+ *   and scrolls internally, so a tall form on a short viewport can never push
+ *   its title/close button or actions off-screen.
  */
 
 export interface ModalShellProps {
@@ -48,7 +51,7 @@ export function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="bg-card text-card-foreground border-border w-full max-w-md rounded-2xl border p-5 shadow-xl"
+        className="bg-card text-card-foreground border-border max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 shadow-xl"
       >
         <div className="flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-base font-semibold">

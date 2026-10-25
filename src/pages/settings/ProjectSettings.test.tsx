@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
 import type * as ClassificationsModule from '@/hooks/useClassifications';
+import type * as PartiesModule from '@/hooks/useParties';
 import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
@@ -90,6 +91,39 @@ vi.mock('@/hooks/useClassifications', async (importOriginal) => {
   };
 });
 
+/* The parties tab reads the directory on mount; stub it for the same reason
+   as the other two tabs — this test asserts the shell's wiring. */
+vi.mock('@/hooks/useParties', async (importOriginal) => {
+  const actual = await importOriginal<typeof PartiesModule>();
+  return {
+    ...actual,
+    useParties: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [
+        {
+          id: 'p1',
+          type: 'supplier',
+          code: 'SUP-001',
+          name: 'شركة النيل للتوريدات الصناعية',
+          taxNumber: null,
+          commercialRegister: null,
+          address: null,
+          contactPerson: null,
+          phone: null,
+          email: null,
+          creditLimit: 250000,
+          paymentTerms: 30,
+          isActive: true,
+        },
+      ],
+      error: null,
+      refetch: vi.fn(),
+    }),
+  };
+});
+
 function renderScreen() {
   /* The stations tab mounts real mutation hooks, which need a QueryClient even
      though the directory query itself is stubbed below. */
@@ -163,7 +197,13 @@ describe('ProjectSettings', () => {
     expect(screen.queryByText('ST-01')).toBeNull();
 
     fireEvent.click(tabs[2]!);
-    expect(screen.getByText('محتوى جهات الوارد والمنصرف قيد الإنشاء')).toBeTruthy();
+    expect(tabs[2]?.getAttribute('aria-selected')).toBe('true');
+    // The parties tab now renders the live directory, not the placeholder.
+    expect(screen.getByText('شركة النيل للتوريدات الصناعية')).toBeTruthy();
+    expect(screen.getByText('SUP-001')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'إضافة جهة' })).toBeTruthy();
+    // Only the active panel is mounted, so the classifications tree is gone.
+    expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
 
     fireEvent.click(tabs[3]!);
     expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();
