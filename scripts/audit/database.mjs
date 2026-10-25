@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 45);
+    assert.equal(migrations.length, 46);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1848,6 +1848,7 @@ try {
     assert.ok(migrations.includes('20261104030000_stations_and_warehouses.sql'));
     assert.ok(migrations.includes('20261104040000_classifications_schema.sql'));
     assert.ok(migrations.includes('20261105000000_classifications_unbounded_depth.sql'));
+    assert.ok(migrations.includes('20261106000000_parties_schema.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2161,6 +2162,392 @@ try {
       assert.equal(flaggedDeep.rows[0].level, 1);
     } finally {
       await db.query("select set_config('classifications.deriving_level', 'off', false)");
+    }
+  });
+  await test('parties: per-type sequence codes, immutable type/code, CHECK constraints, and RLS gate', async () => {
+    const columns = await db.query(
+      "select column_name from information_schema.columns where table_schema='public' and table_name='parties' order by ordinal_position",
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      [
+        'id',
+        'type',
+        'name',
+        'code',
+        'tax_number',
+        'commercial_register',
+        'address',
+        'contact_person',
+        'phone',
+        'email',
+        'credit_limit',
+        'payment_terms',
+        'is_active',
+        'created_at',
+        'updated_at',
+      ],
+    );
+
+    // Forced RLS + the four permissive project.settings:manage policies.
+    const rlsFlags = await db.query(
+      "select relrowsecurity, relforcerowsecurity from pg_class where oid='public.parties'::regclass",
+    );
+    assert.deepEqual(rlsFlags.rows[0], { relrowsecurity: true, relforcerowsecurity: true });
+
+    const policies = await db.query(
+      "select polname, polpermissive from pg_policy where polrelid='public.parties'::regclass and polname like 'parties_project_settings_%' order by polname",
+    );
+    assert.deepEqual(policies.rows, [
+      { polname: 'parties_project_settings_delete', polpermissive: true },
+      { polname: 'parties_project_settings_insert', polpermissive: true },
+      { polname: 'parties_project_settings_select', polpermissive: true },
+      { polname: 'parties_project_settings_update', polpermissive: true },
+    ]);
+
+    // Explicit table grants: authenticated gets CRUD, anon gets nothing.
+    for (const priv of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+      assert.equal(
+        (
+          await db.query('select has_table_privilege($1, $2, $3) as ok', [
+            'authenticated',
+            'public.parties',
+            priv,
+          ])
+        ).rows[0].ok,
+        true,
+        `authenticated must have ${priv} on public.parties`,
+      );
+      assert.equal(
+        (
+          await db.query('select has_table_privilege($1, $2, $3) as ok', [
+            'anon',
+            'public.parties',
+            priv,
+          ])
+        ).rows[0].ok,
+        false,
+        `anon must not have ${priv} on public.parties`,
+      );
+    }
+
+    // API roles cannot call nextval() directly on any of the four sequences,
+    // nor invoke the SECURITY DEFINER trigger function directly.
+    for (const seq of [
+      'public.party_supplier_code_seq',
+      'public.party_customer_code_seq',
+      'public.party_sister_company_code_seq',
+      'public.party_internal_code_seq',
+    ]) {
+      for (const role of ['anon', 'authenticated']) {
+        assert.equal(
+          (await db.query('select has_sequence_privilege($1, $2, $3) as ok', [role, seq, 'USAGE']))
+            .rows[0].ok,
+          false,
+          `${role} must not have USAGE on ${seq}`,
+        );
+      }
+    }
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      assert.equal(
+        (
+          await db.query(
+            "select has_function_privilege($1, 'public.parties_before_write()', 'EXECUTE') as ok",
+            [role],
+          )
+        ).rows[0].ok,
+        false,
+        `${role} must not execute parties_before_write()`,
+      );
+    }
+
+    const nextPartyCode = async (seqName, prefix) => {
+      const seq = await db.query(`select last_value, is_called from public.${seqName}`);
+      const last = Number(seq.rows[0].last_value);
+      const upcoming = seq.rows[0].is_called ? last + 1 : last;
+      return `${prefix}-${upcoming < 1000 ? String(upcoming).padStart(3, '0') : String(upcoming)}`;
+    };
+
+    const createdIds = [];
+    try {
+      // 1) Invalid `type` values are rejected with 23514 without burning any sequence value,
+      //    and NULL `type` fails NOT NULL with 23502.
+      const supNextBeforeBadType = await nextPartyCode('party_supplier_code_seq', 'SUP');
+      for (const badType of ['vendor', 'partner', '', 'SUPPLIER', ' supplier ']) {
+        await expectCode('23514', () =>
+          db.query('insert into public.parties (type, name) values ($1, $2)', [
+            badType,
+            'جهة مرفوضة',
+          ]),
+        );
+      }
+      await expectCode('23502', () =>
+        db.query('insert into public.parties (type, name) values (null, $1)', ['جهة بلا نوع']),
+      );
+      assert.equal(
+        await nextPartyCode('party_supplier_code_seq', 'SUP'),
+        supNextBeforeBadType,
+        'rejected party types must not advance any sequence',
+      );
+
+      // 2) Allowed `type` values each mint from their own independent sequence,
+      //    and client-supplied `code` is overwritten server-side.
+      const expectedSup1 = await nextPartyCode('party_supplier_code_seq', 'SUP');
+      const sup1 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.parties (
+               type, name, tax_number, commercial_register, address,
+               contact_person, phone, email, credit_limit, payment_terms
+             )
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             returning *`,
+            [
+              'supplier',
+              'شركة النيل للتوريدات',
+              '300-111-222',
+              'CR-10293',
+              'القاهرة - المنطقة الصناعية',
+              'أحمد محمود',
+              '+201001234567',
+              'sales@nile-supplies.example.com',
+              250000.5,
+              30,
+            ],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(sup1.id);
+      assert.equal(sup1.code, expectedSup1);
+      assert.match(sup1.code, /^SUP-\d{3,}$/);
+      assert.equal(sup1.is_active, true);
+      assert.equal(Number(sup1.credit_limit), 250000.5);
+      assert.equal(sup1.payment_terms, 30);
+
+      // Second supplier advances SUP independently; client-supplied bogus code is ignored.
+      const expectedSup2 = await nextPartyCode('party_supplier_code_seq', 'SUP');
+      const sup2 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'insert into public.parties (type, name, code) values ($1, $2, $3) returning id, code',
+            ['supplier', 'مورد ثانٍ للاختبار', 'CUS-999'],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(sup2.id);
+      assert.equal(sup2.code, expectedSup2);
+      assert.notEqual(sup2.code, 'CUS-999');
+
+      // Other three types each start / advance their own sequence independently.
+      for (const [partyType, seqName, prefix, label] of [
+        ['customer', 'party_customer_code_seq', 'CUS', 'عميل جملة للاختبار'],
+        ['sister_company', 'party_sister_company_code_seq', 'SIS', 'الشركة الشقيقة للنقل'],
+        ['internal', 'party_internal_code_seq', 'INT', 'إدارة الصيانة الداخلية'],
+      ]) {
+        const expected = await nextPartyCode(seqName, prefix);
+        const row = (
+          await asRole('authenticated', A, (c) =>
+            c.query(
+              'insert into public.parties (type, name) values ($1, $2) returning id, code, type',
+              [partyType, label],
+            ),
+          )
+        ).rows[0];
+        createdIds.push(row.id);
+        assert.equal(row.type, partyType);
+        assert.equal(row.code, expected);
+        assert.match(row.code, new RegExp(`^${prefix}-\\d{3,}$`));
+      }
+
+      // Padding width guard: 999 -> INT-999, 1000 -> INT-1000 (never truncated to INT-100).
+      const savedIntSeq = (
+        await db.query('select last_value, is_called from public.party_internal_code_seq')
+      ).rows[0];
+      try {
+        await db.query("select setval('public.party_internal_code_seq', 998, true)");
+        const row999 = (
+          await db.query(
+            "insert into public.parties (type, name) values ('internal', 'قسم 999') returning id, code",
+          )
+        ).rows[0];
+        const row1000 = (
+          await db.query(
+            "insert into public.parties (type, name) values ('internal', 'قسم 1000') returning id, code",
+          )
+        ).rows[0];
+        assert.equal(row999.code, 'INT-999');
+        assert.equal(row1000.code, 'INT-1000');
+        await db.query('delete from public.parties where id = any($1::uuid[])', [
+          [row999.id, row1000.id],
+        ]);
+      } finally {
+        await db.query('select setval($1, $2, $3)', [
+          'public.party_internal_code_seq',
+          savedIntSeq.last_value,
+          savedIntSeq.is_called,
+        ]);
+      }
+
+      // 3) Immutability on UPDATE: changing `type` or `code` is refused with 22023
+      //    both for direct SQL and for an authorized API caller.
+      await expectCode('22023', () =>
+        db.query("update public.parties set type = 'customer' where id = $1", [sup1.id]),
+      );
+      await expectCode('22023', () =>
+        db.query('update public.parties set type = null where id = $1', [sup1.id]),
+      );
+      await expectCode('22023', () =>
+        db.query("update public.parties set code = 'SUP-999' where id = $1", [sup1.id]),
+      );
+      await expectCode('22023', () =>
+        db.query('update public.parties set code = null where id = $1', [sup1.id]),
+      );
+      await expectCode('22023', () =>
+        asRole('authenticated', A, (c) =>
+          c.query("update public.parties set type = 'internal' where id = $1", [sup1.id]),
+        ),
+      );
+      await expectCode('22023', () =>
+        asRole('authenticated', A, (c) =>
+          c.query("update public.parties set code = 'CUS-001' where id = $1", [sup1.id]),
+        ),
+      );
+
+      // Mutable fields update cleanly and advance `updated_at` via set_updated_at().
+      await db.query(
+        "update public.parties set updated_at = now() - interval '5 minutes' where id = $1",
+        [sup1.id],
+      );
+      const beforeStamp = (
+        await db.query('select updated_at from public.parties where id = $1', [sup1.id])
+      ).rows[0].updated_at;
+      const updatedSup = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'update public.parties set name = $1, is_active = false where id = $2 returning name, is_active, updated_at, type, code',
+            ['شركة النيل للتوريدات المحدّثة', sup1.id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(updatedSup.name, 'شركة النيل للتوريدات المحدّثة');
+      assert.equal(updatedSup.is_active, false);
+      assert.equal(updatedSup.type, 'supplier');
+      assert.equal(updatedSup.code, sup1.code);
+      assert.ok(updatedSup.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
+
+      // 4) payment_terms: NULL and 0/15/30/60/90 succeed; everything else fails with 23514.
+      for (const validTerms of [null, 0, 15, 30, 60, 90]) {
+        const res = await db.query(
+          'update public.parties set payment_terms = $1 where id = $2 returning payment_terms',
+          [validTerms, sup1.id],
+        );
+        assert.equal(res.rows[0].payment_terms, validTerms);
+      }
+      for (const badTerms of [-30, -1, 1, 7, 10, 45, 75, 120]) {
+        await expectCode('23514', () =>
+          db.query('update public.parties set payment_terms = $1 where id = $2', [
+            badTerms,
+            sup1.id,
+          ]),
+        );
+        await expectCode('23514', () =>
+          db.query(
+            "insert into public.parties (type, name, payment_terms) values ('customer', 'عميل شروط خاطئة', $1)",
+            [badTerms],
+          ),
+        );
+      }
+
+      // 5) credit_limit: NULL, 0 and positive decimals succeed; negative values fail with 23514.
+      for (const validLimit of [null, 0, '0.00', '999999999999.99']) {
+        await db.query('update public.parties set credit_limit = $1 where id = $2', [
+          validLimit,
+          sup1.id,
+        ]);
+      }
+      for (const badLimit of [-0.01, -1, -50000]) {
+        await expectCode('23514', () =>
+          db.query('update public.parties set credit_limit = $1 where id = $2', [
+            badLimit,
+            sup1.id,
+          ]),
+        );
+        await expectCode('23514', () =>
+          db.query(
+            "insert into public.parties (type, name, credit_limit) values ('customer', 'عميل ائتمان سالب', $1)",
+            [badLimit],
+          ),
+        );
+      }
+
+      // 6) email: NULL and well-formed addresses succeed; malformed addresses fail with 23514.
+      for (const validEmail of [null, 'info@company.com', 'Billing.Dept+eg@sub.domain-eg.co.uk']) {
+        const res = await db.query(
+          'update public.parties set email = $1 where id = $2 returning email',
+          [validEmail, sup1.id],
+        );
+        assert.equal(res.rows[0].email, validEmail);
+      }
+      for (const badEmail of [
+        '',
+        '   ',
+        'not-an-email',
+        'missing-at.example.com',
+        '@missing-local.com',
+        'missing-domain@',
+        'user@localhost',
+        'user@domain.c',
+        'has space@domain.com',
+        'sales@company.com\n',
+      ]) {
+        await expectCode('23514', () =>
+          db.query('update public.parties set email = $1 where id = $2', [badEmail, sup1.id]),
+        );
+        await expectCode('23514', () =>
+          db.query(
+            "insert into public.parties (type, name, email) values ('customer', 'عميل بريد خاطئ', $1)",
+            [badEmail],
+          ),
+        );
+      }
+
+      // 7) Blank `name` is rejected with 23514.
+      for (const blankName of ['', '   ', '\t\n']) {
+        await expectCode('23514', () =>
+          db.query('update public.parties set name = $1 where id = $2', [blankName, sup1.id]),
+        );
+      }
+
+      // 8) Runtime RLS isolation: anon and non-privileged authenticated users are blocked.
+      await expectDenied(() =>
+        asRole('anon', null, (c) => c.query('select id from public.parties')),
+      );
+      const viewerRows = await asRole('authenticated', V, (c) =>
+        c.query('select id from public.parties'),
+      );
+      assert.equal(viewerRows.rowCount, 0, 'viewer without project.settings:manage sees 0 rows');
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query("insert into public.parties (type, name) values ('supplier', 'ممنوع')"),
+        ),
+      );
+      const viewerUpdate = await asRole('authenticated', V, (c) =>
+        c.query("update public.parties set name = 'ممنوع' where id = $1", [sup1.id]),
+      );
+      assert.equal(viewerUpdate.rowCount, 0);
+      const viewerDelete = await asRole('authenticated', V, (c) =>
+        c.query('delete from public.parties where id = $1', [sup1.id]),
+      );
+      assert.equal(viewerDelete.rowCount, 0);
+
+      // 9) Migration is idempotent on replay while live rows exist.
+      await db.query(
+        await readFile(`${ROOT}supabase/migrations/20261106000000_parties_schema.sql`, 'utf8'),
+      );
+    } finally {
+      if (createdIds.length > 0) {
+        await db.query('delete from public.parties where id = any($1::uuid[])', [createdIds]);
+      }
     }
   });
   await test('RLS on every public table and no anonymous SECURITY DEFINER execution', async () => {
