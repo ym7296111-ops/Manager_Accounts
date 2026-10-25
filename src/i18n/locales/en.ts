@@ -500,7 +500,92 @@ export const en: Record<TranslationKey, string> = {
     'The database connection is not configured in this environment.',
   'settings.project.classifications.error.network': 'Could not reach the server. Please try again.',
   'settings.project.classifications.error.unknown': 'Could not load classifications.',
-  'settings.project.tabs.partiesPlaceholder': 'Parties content — coming soon.',
+  'settings.project.parties.add': 'Add party',
+  'settings.project.parties.type.supplier': 'Supplier',
+  'settings.project.parties.type.customer': 'Customer',
+  'settings.project.parties.type.sisterCompany': 'Sister company',
+  'settings.project.parties.type.internal': 'Internal party',
+  'settings.project.parties.filter.all': 'All',
+  'settings.project.parties.filter.supplier': 'Suppliers',
+  'settings.project.parties.filter.customer': 'Customers',
+  'settings.project.parties.filter.sisterCompany': 'Sister companies',
+  'settings.project.parties.filter.internal': 'Internal parties',
+  'settings.project.parties.status.active': 'Active',
+  'settings.project.parties.status.inactive': 'Disabled',
+  'settings.project.parties.loading': 'Loading parties…',
+  'settings.project.parties.retry': 'Try again',
+  'settings.project.parties.empty.title': 'No parties yet',
+  'settings.project.parties.empty.description':
+    'Add your first party to see it here. Its code is generated automatically from its type.',
+  'settings.project.parties.empty.filtered': 'No parties match this filter.',
+  'settings.project.parties.error.forbidden':
+    'You do not have permission to read parties (project.settings:manage).',
+  'settings.project.parties.error.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.parties.error.network': 'Could not reach the server. Please try again.',
+  'settings.project.parties.error.unknown': 'Could not load parties.',
+  'settings.project.parties.action.edit': 'Edit',
+  'settings.project.parties.action.deactivate': 'Deactivate',
+  'settings.project.parties.action.activate': 'Activate',
+  'settings.project.parties.action.delete': 'Delete',
+  'settings.project.parties.dialog.add': 'Add party',
+  'settings.project.parties.dialog.edit': 'Edit party',
+  'settings.project.parties.dialog.type': 'Party type',
+  'settings.project.parties.dialog.typePlaceholder': 'Choose a party type…',
+  'settings.project.parties.dialog.typeHint':
+    'The type is chosen at creation and cannot be changed later.',
+  'settings.project.parties.dialog.immutable':
+    'The type and code are fixed and cannot be edited after creation.',
+  'settings.project.parties.dialog.code': 'Code (generated automatically)',
+  'settings.project.parties.dialog.name': 'Party name',
+  'settings.project.parties.dialog.taxNumber': 'Tax number',
+  'settings.project.parties.dialog.commercialRegister': 'Commercial register',
+  'settings.project.parties.dialog.address': 'Address',
+  'settings.project.parties.dialog.contactPerson': 'Contact person',
+  'settings.project.parties.dialog.phone': 'Phone',
+  'settings.project.parties.dialog.email': 'Email',
+  'settings.project.parties.dialog.creditLimit': 'Credit limit',
+  'settings.project.parties.dialog.creditSupplierHint':
+    'The agreed credit-purchasing limit with this supplier.',
+  'settings.project.parties.dialog.creditCustomerHint':
+    'The credit-sales limit granted to this customer.',
+  'settings.project.parties.dialog.paymentTerms': 'Payment terms',
+  'settings.project.parties.dialog.save': 'Save',
+  'settings.project.parties.dialog.cancel': 'Cancel',
+  'settings.project.parties.dialog.close': 'Close',
+  'settings.project.parties.dialog.saving': 'Saving…',
+  'settings.project.parties.paymentTerms.none': 'Unspecified',
+  'settings.project.parties.paymentTerms.immediate': 'Immediate — on receipt',
+  'settings.project.parties.paymentTerms.days': '{days} days',
+  'settings.project.parties.validation.typeRequired': 'Please choose a party type.',
+  'settings.project.parties.validation.required': 'A name is required.',
+  'settings.project.parties.validation.tooShort': 'The name must be at least two characters.',
+  'settings.project.parties.validation.invalidEmail':
+    'Enter a valid email address, or leave it empty.',
+  'settings.project.parties.validation.invalidCreditLimit':
+    'Enter a valid amount (zero or more), or leave it empty.',
+  'settings.project.parties.validation.invalidPaymentTerms': 'Choose valid payment terms.',
+  'settings.project.parties.delete.title': 'Delete party',
+  'settings.project.parties.delete.body':
+    '“{name}” ({code}) will be permanently deleted. This cannot be undone.',
+  'settings.project.parties.delete.confirm': 'Confirm delete',
+  'settings.project.parties.success.saved': 'Saved.',
+  'settings.project.parties.success.deleted': 'Deleted.',
+  'settings.project.parties.dismiss': 'Dismiss alert',
+  'settings.project.parties.writeError.forbidden':
+    'You do not have permission to perform this operation (project.settings:manage).',
+  'settings.project.parties.writeError.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.parties.writeError.network': 'Could not reach the server. Please try again.',
+  'settings.project.parties.writeError.validation':
+    'Some fields are not valid. Review the form and try again.',
+  'settings.project.parties.writeError.immutable':
+    "A party's type and code cannot be changed after creation.",
+  'settings.project.parties.writeError.hasReferences':
+    'This party cannot be deleted because documents reference it. Deactivate it instead.',
+  'settings.project.parties.writeError.notFound':
+    'This party no longer exists. Refresh the list and try again.',
+  'settings.project.parties.writeError.unknown': 'The operation failed. Please try again.',
   'settings.project.tabs.generalPlaceholder': 'General settings content — coming soon.',
   'settings.appearance.desc':
     'Default language, theme, time zone and weekend days for this project.',

@@ -5,17 +5,19 @@ import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
 import Classifications from '@/pages/settings/Classifications';
+import Parties from '@/pages/settings/Parties';
 import StationsWarehouses from '@/pages/settings/StationsWarehouses';
 
 /**
  * Project-settings screen (`/settings/project`).
  *
  * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes four tabs under the header. Two tabs are live — Stations & Warehouses
- * (nested single read) and Classifications (flat single read assembled into a
- * three-level tree) — and each fetches only while its own tab is mounted, so
- * switching tabs costs no background traffic. Parties and General are still
- * placeholders and issue no queries of their own.
+ * exposes four tabs under the header. Three tabs are live — Stations &
+ * Warehouses (nested single read), Classifications (flat single read assembled
+ * into a tree) and Parties (flat single read, filtered by type on the client) —
+ * and each fetches only while its own tab is mounted, so switching tabs costs
+ * no background traffic. General is still a placeholder and issues no queries
+ * of its own.
  */
 type ProjectSettingsTab = 'stations' | 'classifications' | 'parties' | 'general';
 
@@ -38,7 +40,6 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'parties',
     labelKey: 'settings.project.tabs.parties',
-    placeholderKey: 'settings.project.tabs.partiesPlaceholder',
   },
   {
     id: 'general',
@@ -123,6 +124,8 @@ export default function ProjectSettings() {
               <StationsWarehouses />
             ) : activeConfig.id === 'classifications' ? (
               <Classifications />
+            ) : activeConfig.id === 'parties' ? (
+              <Parties />
             ) : (
               <p className="text-muted-foreground text-sm leading-relaxed">
                 {activeConfig.placeholderKey !== undefined ? t(activeConfig.placeholderKey) : null}

@@ -542,6 +542,7 @@ export type Database = {
           commercial_register?: string | null;
           contact_person?: string | null;
           created_at?: string;
+          /** Supplier/customer only in the UI; a non-null value on an internal party violates `parties_internal_no_credit_terms` (23514). */
           credit_limit?: number | null;
           email?: string | null;
           id?: string;

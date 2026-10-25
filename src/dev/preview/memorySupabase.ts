@@ -17,7 +17,10 @@
  *   on delete, including flipping the parent back to a leaf;
  * * deleting a node that still has children raises 23503 (ON DELETE RESTRICT);
  * * a payload carrying `code`, `level` or `is_leaf` is rejected outright, so a
- *   regression in the client shows up in the preview instead of hiding.
+ *   regression in the client shows up in the preview instead of hiding;
+ * * party codes are minted per type (`SUP-001` / `CUS-001` / `SIS-001` /
+ *   `INT-001`), a payload carrying `code` — or `type` on update — is rejected,
+ *   and credit terms on an internal party raise 23514.
  *
  * What it does NOT reproduce: authentication, RLS, concurrency and the audit
  * trail. Those are exercised by the unit tests, the DB audit and Playwright
@@ -160,6 +163,118 @@ const warehouses: SimpleRow[] = [
   { id: 'w-4', station_id: 's-2', code: 'WH-004', name: 'مخزن العدد والأدوات', is_active: true },
 ];
 
+interface PartyPreviewRow {
+  id: string;
+  type: string;
+  code: string;
+  name: string;
+  tax_number: string | null;
+  commercial_register: string | null;
+  address: string | null;
+  contact_person: string | null;
+  phone: string | null;
+  email: string | null;
+  credit_limit: number | null;
+  payment_terms: number | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+const PARTY_PREFIX: Record<string, string> = {
+  supplier: 'SUP',
+  customer: 'CUS',
+  sister_company: 'SIS',
+  internal: 'INT',
+};
+
+/** Mirrors the parties block of `supabase/seed.sql` row for row (one per type). */
+const parties: PartyPreviewRow[] = [
+  {
+    id: 'p-sup',
+    type: 'supplier',
+    code: 'SUP-001',
+    name: 'شركة النيل للتوريدات الصناعية',
+    tax_number: '123456789',
+    commercial_register: '101010',
+    address: 'المنطقة الصناعية، مدينة السادس من أكتوبر',
+    contact_person: 'أحمد سامي',
+    phone: '+20238200000',
+    email: 'sales@nile-supplies.example.com',
+    credit_limit: 250000,
+    payment_terms: 30,
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'p-cus',
+    type: 'customer',
+    code: 'CUS-001',
+    name: 'مؤسسة الأفق للتجارة والتوزيع',
+    tax_number: '987654321',
+    commercial_register: '202020',
+    address: 'شارع الجمهورية، القاهرة',
+    contact_person: 'منى خليل',
+    phone: '+20225700000',
+    email: 'purchases@horizon-trade.example.com',
+    credit_limit: 150000,
+    payment_terms: 60,
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'p-sis',
+    type: 'sister_company',
+    code: 'SIS-001',
+    name: 'الشركة المتحدة للخدمات اللوجستية',
+    tax_number: '555444333',
+    commercial_register: '303030',
+    address: 'طريق مصر الإسماعيلية الصحراوي',
+    contact_person: 'خالد رمزي',
+    phone: '+20226300000',
+    email: 'ops@united-logistics.example.com',
+    credit_limit: null,
+    payment_terms: null,
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'p-int',
+    type: 'internal',
+    code: 'INT-001',
+    name: 'إدارة الصيانة والتشغيل',
+    tax_number: null,
+    commercial_register: null,
+    address: 'المبنى الإداري الرئيسي',
+    contact_person: 'عمرو فتحي',
+    phone: '+20224000000',
+    email: null,
+    credit_limit: null,
+    payment_terms: null,
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+];
+
+/** Every per-type sequence has already issued its `001` to the seed above. */
+const partySequences: Record<string, number> = {
+  supplier: 1,
+  customer: 1,
+  sister_company: 1,
+  internal: 1,
+};
+
+/** Mirrors `parties_before_write`: prefix by type, padded to three digits. */
+function mintPartyCode(type: string): string {
+  const next = (partySequences[type] ?? 0) + 1;
+  partySequences[type] = next;
+  return `${PARTY_PREFIX[type]}-${next < 1000 ? String(next).padStart(3, '0') : String(next)}`;
+}
+
 function writeName(value: unknown): string {
   const name = typeof value === 'string' ? value.trim() : '';
   if (name === '') {
@@ -236,6 +351,158 @@ function deleteClassification(filters: readonly (readonly [string, unknown])[]):
   classifications.splice(index, 1);
   refreshLeaf(row.parent_id);
   return [{ ...row }];
+}
+
+const PARTY_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/i;
+
+function partyOptionalText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+/** The parties CHECK family, so the preview refuses what the database refuses. */
+function checkPartyConstraints(row: {
+  type: string;
+  email: string | null;
+  credit_limit: number | null;
+  payment_terms: number | null;
+}) {
+  if (row.email !== null && !PARTY_EMAIL.test(row.email)) {
+    throw new DbError('23514', 'parties_email_check');
+  }
+  if (row.credit_limit !== null && row.credit_limit < 0) {
+    throw new DbError('23514', 'parties_credit_limit_non_negative');
+  }
+  if (row.payment_terms !== null && ![0, 15, 30, 60, 90].includes(row.payment_terms)) {
+    throw new DbError('23514', 'parties_payment_terms_check');
+  }
+  if (row.type === 'internal' && (row.credit_limit !== null || row.payment_terms !== null)) {
+    throw new DbError('23514', 'parties_internal_no_credit_terms');
+  }
+}
+
+function insertParty(payload: Record<string, unknown>): PartyPreviewRow {
+  /* The trigger would overwrite a sent code; rejecting it here makes a client
+     regression visible in the preview instead of silently tolerated. */
+  if ('code' in payload) {
+    throw new DbError('42501', 'preview: the client must not write "code"');
+  }
+  const type = typeof payload.type === 'string' ? payload.type : '';
+  if (!(type in PARTY_PREFIX)) {
+    throw new DbError('23514', 'parties_type_check');
+  }
+
+  const row: PartyPreviewRow = {
+    id: id('party'),
+    type,
+    /* Minted before the CHECKs run, like the trigger: a refused insert still
+       burns a sequence number, exactly as in the database. */
+    code: mintPartyCode(type),
+    name: writeName(payload.name),
+    tax_number: partyOptionalText(payload.tax_number),
+    commercial_register: partyOptionalText(payload.commercial_register),
+    address: partyOptionalText(payload.address),
+    contact_person: partyOptionalText(payload.contact_person),
+    phone: partyOptionalText(payload.phone),
+    email: partyOptionalText(payload.email),
+    credit_limit: typeof payload.credit_limit === 'number' ? payload.credit_limit : null,
+    payment_terms: typeof payload.payment_terms === 'number' ? payload.payment_terms : null,
+    is_active: payload.is_active === undefined ? true : payload.is_active === true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  };
+  checkPartyConstraints(row);
+  parties.push(row);
+  return { ...row };
+}
+
+function updateParty(
+  payload: Record<string, unknown>,
+  filters: readonly (readonly [string, unknown])[],
+): PartyPreviewRow {
+  /* The database refuses a CHANGED type/code with 22023; the preview refuses
+     their mere presence, so a client that starts sending either fails here. */
+  if ('code' in payload || 'type' in payload) {
+    throw new DbError('42501', 'preview: type and code are write-once (insert only)');
+  }
+  const row = matchOne(parties, filters);
+  if (row === null) {
+    throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
+  }
+
+  if ('name' in payload) {
+    row.name = writeName(payload.name);
+  }
+  if ('tax_number' in payload) {
+    row.tax_number = partyOptionalText(payload.tax_number);
+  }
+  if ('commercial_register' in payload) {
+    row.commercial_register = partyOptionalText(payload.commercial_register);
+  }
+  if ('address' in payload) {
+    row.address = partyOptionalText(payload.address);
+  }
+  if ('contact_person' in payload) {
+    row.contact_person = partyOptionalText(payload.contact_person);
+  }
+  if ('phone' in payload) {
+    row.phone = partyOptionalText(payload.phone);
+  }
+  if ('email' in payload) {
+    row.email = partyOptionalText(payload.email);
+  }
+  if ('credit_limit' in payload) {
+    row.credit_limit = typeof payload.credit_limit === 'number' ? payload.credit_limit : null;
+  }
+  if ('payment_terms' in payload) {
+    row.payment_terms = typeof payload.payment_terms === 'number' ? payload.payment_terms : null;
+  }
+  if ('is_active' in payload) {
+    row.is_active = payload.is_active === true;
+  }
+
+  checkPartyConstraints(row);
+  row.updated_at = nowIso();
+  return { ...row };
+}
+
+function deleteParty(filters: readonly (readonly [string, unknown])[]): PartyPreviewRow[] {
+  const row = matchOne(parties, filters);
+  if (row === null) {
+    return [];
+  }
+  parties.splice(parties.indexOf(row), 1);
+  return [{ ...row }];
+}
+
+function runParty(
+  operation: 'insert' | 'update' | 'delete' | 'select',
+  payload: Record<string, unknown> | undefined,
+  filters: readonly (readonly [string, unknown])[],
+  single: boolean,
+): Outcome {
+  try {
+    if (operation === 'insert') {
+      const row = insertParty(payload ?? {});
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'update') {
+      const row = updateParty(payload ?? {}, filters);
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'delete') {
+      return { data: deleteParty(filters), error: null };
+    }
+    const rows = parties
+      .slice()
+      .sort((a, b) => a.code.localeCompare(b.code, 'en', { numeric: true }))
+      .map((row) => ({ ...row }));
+    return { data: rows, error: null };
+  } catch (error) {
+    if (error instanceof DbError) {
+      return { data: null, error };
+    }
+    throw error;
+  }
 }
 
 function matchOne<T extends { id: string }>(
@@ -326,6 +593,9 @@ function builder(
   const execute = (): Outcome => {
     if (table === 'classifications') {
       return runClassification(operation, payload, filters, single);
+    }
+    if (table === 'parties') {
+      return runParty(operation, payload, filters, single);
     }
     if (operation === 'select' && table === 'stations') {
       return { data: projectStations(), error: null };
