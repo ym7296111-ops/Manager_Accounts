@@ -123,8 +123,11 @@ test.describe('classifications CRUD', () => {
     await main.getByRole('button', { name: addSubUnder(CATEGORY), exact: true }).click();
     dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Add sub-classification' })).toBeVisible();
-    // The dialog states where the node lands; it does not offer to change it.
-    await expect(dialog.getByText(CATEGORY, { exact: false })).toBeVisible();
+    /* The dialog states where the node lands — as a breadcrumb of the parent's
+       path — and does not offer to change it. Assert the breadcrumb line, not
+       the bare name: the explanatory paragraph also mentions the parent, and a
+       loose text match would resolve to both. */
+    await expect(dialog.getByText(`Path: ${CATEGORY}`, { exact: false })).toBeVisible();
     await dialog.getByLabel('sub-classification name').fill(GROUP);
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
