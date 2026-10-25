@@ -6,8 +6,10 @@
  * template tables (`20261002150000_notification_templates_schema.sql`), plus the
  * RPCs that are the only sanctioned access path, plus the app-identity
  * contracts used by Manager_Accounts, plus the project-settings
- * stations/warehouses tables
- * (`20261104030000_stations_and_warehouses.sql`). This file does NOT describe
+ * stations/warehouses, classifications and parties tables
+ * (`20261104030000_stations_and_warehouses.sql`,
+ * `20261104040000_classifications_schema.sql`,
+ * `20261106000000_parties_schema.sql`). This file does NOT describe
  * the rest of the schema (profiles, RBAC, backups, support, workspaces,
  * localization); regenerate the complete file against the linked project when
  * those contracts are needed by the client.
@@ -28,6 +30,10 @@
  */
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
+
+export type PartyType = 'supplier' | 'customer' | 'sister_company' | 'internal';
+
+export type PartyPaymentTerms = 0 | 15 | 30 | 60 | 90;
 
 export type Database = {
   public: {
@@ -510,6 +516,63 @@ export type Database = {
             referencedColumns: ['id'];
           },
         ];
+      };
+      parties: {
+        Row: {
+          address: string | null;
+          code: string;
+          commercial_register: string | null;
+          contact_person: string | null;
+          created_at: string;
+          credit_limit: number | null;
+          email: string | null;
+          id: string;
+          is_active: boolean;
+          name: string;
+          payment_terms: PartyPaymentTerms | null;
+          phone: string | null;
+          tax_number: string | null;
+          type: PartyType;
+          updated_at: string;
+        };
+        Insert: {
+          address?: string | null;
+          /** Minted server-side by `parties_before_write` (SUP-001 / CUS-001 / SIS-001 / INT-001); ignored if sent. */
+          code?: string;
+          commercial_register?: string | null;
+          contact_person?: string | null;
+          created_at?: string;
+          credit_limit?: number | null;
+          email?: string | null;
+          id?: string;
+          is_active?: boolean;
+          name: string;
+          payment_terms?: PartyPaymentTerms | null;
+          phone?: string | null;
+          tax_number?: string | null;
+          type: PartyType;
+          updated_at?: string;
+        };
+        Update: {
+          address?: string | null;
+          /** Immutable after creation; updating raises 22023. */
+          code?: string;
+          commercial_register?: string | null;
+          contact_person?: string | null;
+          created_at?: string;
+          credit_limit?: number | null;
+          email?: string | null;
+          id?: string;
+          is_active?: boolean;
+          name?: string;
+          payment_terms?: PartyPaymentTerms | null;
+          phone?: string | null;
+          tax_number?: string | null;
+          /** Immutable after creation; updating raises 22023. */
+          type?: PartyType;
+          updated_at?: string;
+        };
+        Relationships: [];
       };
       stations: {
         Row: {
