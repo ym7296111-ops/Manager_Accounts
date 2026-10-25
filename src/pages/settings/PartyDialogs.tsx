@@ -2,489 +2,159 @@ import { Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { MODAL_BUTTON_CLASS, MODAL_FIELD_CLASS, useEscapeKey } from '@/components/ui/modalStyles';
-import type { Party } from '@/hooks/useParties';
-import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
-import type { PartyType } from '@/lib/database.types';
-import {
-  PARTY_TYPES,
-  PAYMENT_TERMS_OPTIONS,
-  isPartyType,
-  validatePartyForm,
-  type PartyFormErrorCode,
-  type PartyFormErrors,
-  type PartyFormField,
-  type PartyFormRaw,
-  type PartyFormValues,
-} from '@/lib/partyValidation';
+import { useI18n } from '@/i18n/I18nContext';
+import type { PartyBranch } from '@/lib/database.types';
+import { validateName } from '@/lib/nameValidation';
 
 /**
- * Dialogs for the parties write path.
+ * Dialogs for the parties tree.
  *
- * The two identity columns are handled with the same discipline as the codes
- * on the stations and classifications screens, plus one step further:
+ * A party's identity is the server's:
  *
- * * `code` never appears as a field. It is minted server-side from a per-type
- *   sequence, so on create there is nothing to type, and on edit it renders as
- *   plain text.
- * * `type` is chosen exactly once. On create it is a select limited to the
- *   sub-tab's own set (`allowedTypes`): the inbound tab offers local and
- *   foreign suppliers, the outbound tab offers nothing but `customer`. On
- *   edit it renders as plain text next to the code; the submit path
- *   (`usePartiesMutations`) has no key that could send either column.
+ * * `code` never appears as a field. `parties_before_write` mints `IN-###` for
+ *   an inbound party and `OUT-###` for an outbound one, from that branch's own
+ *   sequence; on edit it renders as plain text.
+ * * `branch` is chosen exactly once, by *which* root's "add" button opened the
+ *   dialog. There is no branch control to get wrong, and no path that could
+ *   send it on an update (the trigger refuses a change with 22023).
  *
- * Credit terms are part of every party the form can produce — both supplier
- * kinds and customers — so both fields are always rendered. Sister companies
- * are a separate tree with their own dialogs and no credit columns at all.
+ * The only editable field is the name. A party carries no other attribute: the
+ * commercial profile (tax number, commercial register, address, contact
+ * person, phone, email, credit limit, payment terms) was retired with its
+ * columns in 20261109000000.
  */
-
-const TYPE_LABEL_KEY: Record<PartyType, TranslationKey> = {
-  local_supplier: 'settings.project.parties.type.localSupplier',
-  foreign_supplier: 'settings.project.parties.type.foreignSupplier',
-  customer: 'settings.project.parties.type.customer',
-};
-
-/** One message per (field, code): a missing type and a missing name differ. */
-function errorKeyFor(field: PartyFormField, code: PartyFormErrorCode): TranslationKey {
-  if (field === 'type') {
-    return 'settings.project.parties.validation.typeRequired';
-  }
-  if (field === 'name') {
-    return code === 'required'
-      ? 'settings.project.parties.validation.required'
-      : 'settings.project.parties.validation.tooShort';
-  }
-  if (field === 'email') {
-    return 'settings.project.parties.validation.invalidEmail';
-  }
-  if (field === 'creditLimit') {
-    return 'settings.project.parties.validation.invalidCreditLimit';
-  }
-  return 'settings.project.parties.validation.invalidPaymentTerms';
-}
-
-const EMPTY_FORM: PartyFormRaw = {
-  type: '',
-  name: '',
-  taxNumber: '',
-  commercialRegister: '',
-  address: '',
-  contactPerson: '',
-  phone: '',
-  email: '',
-  creditLimit: '',
-  paymentTerms: '',
-};
-
-/** The edit dialog's starting point: the stored row, stringified for inputs. */
-function partyToRaw(party: Party): PartyFormRaw {
-  return {
-    type: party.type,
-    name: party.name,
-    taxNumber: party.taxNumber ?? '',
-    commercialRegister: party.commercialRegister ?? '',
-    address: party.address ?? '',
-    contactPerson: party.contactPerson ?? '',
-    phone: party.phone ?? '',
-    email: party.email ?? '',
-    creditLimit: party.creditLimit === null ? '' : String(party.creditLimit),
-    paymentTerms: party.paymentTerms === null ? '' : String(party.paymentTerms),
-  };
-}
-
-/**
- * One labelled text input with its inline error. These are a counterparty's
- * details, not the signed-in user's, so every field opts out of autofill.
- */
-function TextField({
-  id,
-  label,
-  value,
-  onChange,
-  disabled,
-  error,
-  inputType = 'text',
-  inputMode,
-  dir,
-  inputRef,
-}: {
-  readonly id: string;
-  readonly label: string;
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-  readonly disabled: boolean;
-  readonly error?: string;
-  readonly inputType?: string;
-  readonly inputMode?: 'decimal' | 'email' | 'tel';
-  readonly dir?: 'ltr';
-  readonly inputRef?: React.RefObject<HTMLInputElement | null>;
-}) {
-  return (
-    <div>
-      <label htmlFor={id} className="text-foreground text-sm font-medium">
-        {label}
-      </label>
-      <input
-        id={id}
-        ref={inputRef}
-        type={inputType}
-        inputMode={inputMode}
-        dir={dir}
-        value={value}
-        disabled={disabled}
-        autoComplete="off"
-        aria-invalid={error !== undefined}
-        aria-describedby={error !== undefined ? `${id}-error` : undefined}
-        onChange={(event) => onChange(event.target.value)}
-        className={MODAL_FIELD_CLASS}
-      />
-      {error !== undefined ? (
-        <p id={`${id}-error`} role="alert" className="text-destructive mt-1.5 text-xs">
-          {error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
 
 export interface PartyFormDialogProps {
+  /** Create: the root whose "add" button opened the dialog. */
+  readonly branch: PartyBranch;
   readonly mode: 'create' | 'edit';
-  /** Edit only: the row being edited. Its type and code render read-only. */
-  readonly initialParty?: Party;
-  /**
-   * The types this sub-tab may create. One entry means the type is fixed by
-   * the tab (the outbound tab creates customers), several means the user picks
-   * (inbound: local or foreign supplier). Never consulted on edit.
-   */
-  readonly allowedTypes?: readonly PartyType[];
+  /** Edit: the stored name, prefilled. */
+  readonly initialName?: string;
+  /** Edit: the stored code, rendered read-only. */
+  readonly code?: string;
   readonly busy: boolean;
-  readonly onSubmit: (values: PartyFormValues) => void;
+  readonly onSubmit: (name: string) => void;
   readonly onClose: () => void;
 }
 
+/** The shape of the code the server is about to mint, for the one-line hint. */
+const CODE_SHAPE: Record<PartyBranch, string> = {
+  inbound: 'IN-###',
+  outbound: 'OUT-###',
+};
+
 export function PartyFormDialog({
+  branch,
   mode,
-  initialParty,
-  allowedTypes = PARTY_TYPES,
+  initialName,
+  code,
   busy,
   onSubmit,
   onClose,
 }: PartyFormDialogProps) {
   const { t } = useI18n();
   const titleId = useId();
-  const typeId = useId();
   const nameId = useId();
-  const taxNumberId = useId();
-  const commercialRegisterId = useId();
-  const addressId = useId();
-  const contactPersonId = useId();
-  const phoneId = useId();
-  const emailId = useId();
-  const creditLimitId = useId();
-  const paymentTermsId = useId();
-  const typeRef = useRef<HTMLSelectElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  /* A single allowed type is fixed by the sub-tab, so the form starts with it
-     chosen; with two (inbound) the choice stays the user's. */
-  const fixedType: PartyType | null = allowedTypes.length === 1 ? allowedTypes[0]! : null;
-
-  const [raw, setRaw] = useState<PartyFormRaw>(() => {
-    if (mode === 'edit' && initialParty !== undefined) {
-      return partyToRaw(initialParty);
-    }
-    return fixedType === null ? EMPTY_FORM : { ...EMPTY_FORM, type: fixedType };
-  });
-  const [errors, setErrors] = useState<PartyFormErrors>({});
+  const [name, setName] = useState(initialName ?? '');
+  const [error, setError] = useState<'required' | 'tooShort' | null>(null);
 
   useEscapeKey(onClose, !busy);
 
   useEffect(() => {
-    /* With a fixed type there is no select to focus, so the name takes focus. */
-    if (mode === 'create' && fixedType === null) {
-      typeRef.current?.focus();
-    } else {
-      nameRef.current?.focus();
-    }
-  }, [mode, fixedType]);
+    nameRef.current?.focus();
+  }, []);
 
-  const effectiveType: PartyType | null =
-    mode === 'edit' && initialParty !== undefined
-      ? initialParty.type
-      : isPartyType(raw.type) && allowedTypes.includes(raw.type)
-        ? raw.type
-        : null;
-
-  function errorText(field: PartyFormField): string | undefined {
-    const code = errors[field];
-    return code === undefined ? undefined : t(errorKeyFor(field, code));
-  }
-
-  function handleTypeChange(value: string) {
-    const nextType: PartyType | '' = isPartyType(value) ? value : '';
-    setRaw((current) => ({ ...current, type: nextType }));
-    setErrors((current) => {
-      const next: PartyFormErrors = { ...current };
-      delete next.type;
-      /* Switching between two supplier kinds keeps every field mounted, so a
-         credit error stays meaningful; only the type error is cleared. */
-      return next;
-    });
-  }
-
-  function handleFieldChange(field: Exclude<keyof PartyFormRaw, 'type'>, value: string) {
-    setRaw((current) => ({ ...current, [field]: value }));
-    setErrors((current) => {
-      if (!(field in current)) {
-        return current;
-      }
-      const next: PartyFormErrors = { ...current };
-      delete next[field as PartyFormField];
-      return next;
-    });
-  }
+  const titleKey =
+    mode === 'create'
+      ? branch === 'inbound'
+        ? 'settings.project.parties.dialog.addInbound'
+        : 'settings.project.parties.dialog.addOutbound'
+      : 'settings.project.parties.dialog.edit';
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const result = validatePartyForm(raw, allowedTypes);
+    const result = validateName(name);
     if (!result.ok) {
-      setErrors(result.errors);
+      setError(result.code);
       return;
     }
-    setErrors({});
+    setError(null);
     onSubmit(result.value);
   }
-
-  const typeError = errorText('type');
 
   return (
     <ModalShell
       titleId={titleId}
-      title={t(
-        mode === 'create'
-          ? 'settings.project.parties.dialog.add'
-          : 'settings.project.parties.dialog.edit',
-      )}
+      title={t(titleKey)}
       closeLabel={t('settings.project.parties.dialog.close')}
       onClose={onClose}
       busy={busy}
     >
-      {/* noValidate: the localized, field-level errors below mirror the
-          database's own rules (the email CHECK is not the browser's grammar),
-          and native bubbles would pre-empt them before submit ever fires. */}
+      {/* noValidate: the localized inline error mirrors the shared name rule,
+          which is one step stricter than the database's blank-name CHECK. */}
       <form onSubmit={handleSubmit} noValidate className="mt-4 space-y-4">
-        {mode === 'create' && fixedType !== null ? (
-          /* The sub-tab decides the type: the outbound tab only ever creates a
-             customer, so there is nothing to choose and nothing to get wrong. */
+        {mode === 'edit' && code !== undefined ? (
           <div className="space-y-1.5">
             <span className="text-foreground block text-sm font-medium">
-              {t('settings.project.parties.dialog.type')}
+              {t('settings.project.parties.dialog.code')}
             </span>
-            <p className="text-muted-foreground text-sm">{t(TYPE_LABEL_KEY[fixedType])}</p>
-            <p className="text-muted-foreground text-xs">
-              {t(
-                fixedType === 'customer'
-                  ? 'settings.project.parties.dialog.outboundTypeHint'
-                  : 'settings.project.parties.dialog.typeHint',
-              )}
-            </p>
-          </div>
-        ) : mode === 'create' ? (
-          <div>
-            <label htmlFor={typeId} className="text-foreground text-sm font-medium">
-              {t('settings.project.parties.dialog.type')}
-            </label>
-            <select
-              id={typeId}
-              ref={typeRef}
-              value={raw.type}
-              disabled={busy}
-              aria-invalid={typeError !== undefined}
-              aria-describedby={typeError !== undefined ? `${typeId}-error` : `${typeId}-hint`}
-              onChange={(event) => handleTypeChange(event.target.value)}
-              className={MODAL_FIELD_CLASS}
-            >
-              <option value="">{t('settings.project.parties.dialog.typePlaceholder')}</option>
-              {allowedTypes.map((type) => (
-                <option key={type} value={type}>
-                  {t(TYPE_LABEL_KEY[type])}
-                </option>
-              ))}
-            </select>
-            {typeError !== undefined ? (
-              <p id={`${typeId}-error`} role="alert" className="text-destructive mt-1.5 text-xs">
-                {typeError}
-              </p>
-            ) : (
-              <p id={`${typeId}-hint`} className="text-muted-foreground mt-1.5 text-xs">
-                {t('settings.project.parties.dialog.typeHint')}
-              </p>
-            )}
-          </div>
-        ) : initialParty !== undefined ? (
-          /* Edit: the identity is information, not input. Neither value is a
-             form control, so nothing here can be submitted back. */
-          <div className="space-y-1.5">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <span className="text-foreground block text-sm font-medium">
-                  {t('settings.project.parties.dialog.type')}
-                </span>
-                <p className="text-muted-foreground mt-1 text-sm">
-                  {t(TYPE_LABEL_KEY[initialParty.type])}
-                </p>
-              </div>
-              <div>
-                <span className="text-foreground block text-sm font-medium">
-                  {t('settings.project.parties.dialog.code')}
-                </span>
-                <p className="text-muted-foreground mt-1 font-mono text-sm">{initialParty.code}</p>
-              </div>
-            </div>
+            <p className="text-muted-foreground font-mono text-sm">{code}</p>
             <p className="text-muted-foreground text-xs">
               {t('settings.project.parties.dialog.immutable')}
             </p>
           </div>
-        ) : null}
-
-        <TextField
-          id={nameId}
-          label={t('settings.project.parties.dialog.name')}
-          value={raw.name}
-          onChange={(value) => handleFieldChange('name', value)}
-          disabled={busy}
-          error={errorText('name')}
-          inputRef={nameRef}
-        />
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <TextField
-            id={taxNumberId}
-            label={t('settings.project.parties.dialog.taxNumber')}
-            value={raw.taxNumber}
-            onChange={(value) => handleFieldChange('taxNumber', value)}
-            disabled={busy}
-            dir="ltr"
-          />
-          <TextField
-            id={commercialRegisterId}
-            label={t('settings.project.parties.dialog.commercialRegister')}
-            value={raw.commercialRegister}
-            onChange={(value) => handleFieldChange('commercialRegister', value)}
-            disabled={busy}
-            dir="ltr"
-          />
-        </div>
+        ) : (
+          <div className="space-y-1.5">
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              {branch === 'inbound'
+                ? t('settings.project.parties.dialog.inboundHint')
+                : t('settings.project.parties.dialog.outboundHint')}
+            </p>
+            {/* The code stays out of the sentence and inside `dir="ltr"`: a
+                hyphenated code reordered by the RTL paragraph direction would
+                read as a different code. */}
+            <div className="flex items-baseline gap-2">
+              <span className="text-foreground text-sm font-medium">
+                {t('settings.project.parties.dialog.codePreview')}
+              </span>
+              <span dir="ltr" className="text-muted-foreground font-mono text-sm">
+                {CODE_SHAPE[branch]}
+              </span>
+            </div>
+          </div>
+        )}
 
         <div>
-          <label htmlFor={addressId} className="text-foreground text-sm font-medium">
-            {t('settings.project.parties.dialog.address')}
+          <label htmlFor={nameId} className="text-foreground text-sm font-medium">
+            {t('settings.project.parties.dialog.name')}
           </label>
-          <textarea
-            id={addressId}
-            rows={2}
-            value={raw.address}
+          <input
+            id={nameId}
+            ref={nameRef}
+            type="text"
+            value={name}
             disabled={busy}
             autoComplete="off"
-            onChange={(event) => handleFieldChange('address', event.target.value)}
+            aria-invalid={error !== null}
+            aria-describedby={error !== null ? `${nameId}-error` : undefined}
+            onChange={(event) => {
+              setName(event.target.value);
+              setError(null);
+            }}
             className={MODAL_FIELD_CLASS}
           />
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <TextField
-            id={contactPersonId}
-            label={t('settings.project.parties.dialog.contactPerson')}
-            value={raw.contactPerson}
-            onChange={(value) => handleFieldChange('contactPerson', value)}
-            disabled={busy}
-          />
-          <TextField
-            id={phoneId}
-            label={t('settings.project.parties.dialog.phone')}
-            value={raw.phone}
-            onChange={(value) => handleFieldChange('phone', value)}
-            disabled={busy}
-            inputType="tel"
-            inputMode="tel"
-            dir="ltr"
-          />
-        </div>
-
-        <TextField
-          id={emailId}
-          label={t('settings.project.parties.dialog.email')}
-          value={raw.email}
-          onChange={(value) => handleFieldChange('email', value)}
-          disabled={busy}
-          error={errorText('email')}
-          inputType="email"
-          inputMode="email"
-          dir="ltr"
-        />
-
-        {/* Credit terms exist only across a legal-entity boundary: a supplier
-            grants us a purchasing limit, a customer receives one from us.
-            Every party the form can produce is such a counterparty, so both
-            fields are always shown; sister companies have their own table and
-            no credit columns at all. */}
-        {effectiveType !== null ? (
-          <div className="space-y-1.5">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <TextField
-                id={creditLimitId}
-                label={t('settings.project.parties.dialog.creditLimit')}
-                value={raw.creditLimit}
-                onChange={(value) => handleFieldChange('creditLimit', value)}
-                disabled={busy}
-                error={errorText('creditLimit')}
-                inputType="number"
-                inputMode="decimal"
-                dir="ltr"
-              />
-              <div>
-                <label htmlFor={paymentTermsId} className="text-foreground text-sm font-medium">
-                  {t('settings.project.parties.dialog.paymentTerms')}
-                </label>
-                <select
-                  id={paymentTermsId}
-                  value={raw.paymentTerms}
-                  disabled={busy}
-                  aria-invalid={errorText('paymentTerms') !== undefined}
-                  aria-describedby={
-                    errorText('paymentTerms') !== undefined ? `${paymentTermsId}-error` : undefined
-                  }
-                  onChange={(event) => handleFieldChange('paymentTerms', event.target.value)}
-                  className={MODAL_FIELD_CLASS}
-                >
-                  <option value="">{t('settings.project.parties.paymentTerms.none')}</option>
-                  {/* 0 is a real term ("on receipt"), not the empty choice. */}
-                  <option value="0">{t('settings.project.parties.paymentTerms.immediate')}</option>
-                  {PAYMENT_TERMS_OPTIONS.filter((days) => days !== 0).map((days) => (
-                    <option key={days} value={String(days)}>
-                      {t('settings.project.parties.paymentTerms.days', { days })}
-                    </option>
-                  ))}
-                </select>
-                {errorText('paymentTerms') !== undefined ? (
-                  <p
-                    id={`${paymentTermsId}-error`}
-                    role="alert"
-                    className="text-destructive mt-1.5 text-xs"
-                  >
-                    {errorText('paymentTerms')}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            <p className="text-muted-foreground text-xs">
+          {error !== null ? (
+            <p id={`${nameId}-error`} role="alert" className="text-destructive mt-1.5 text-xs">
               {t(
-                effectiveType === 'customer'
-                  ? 'settings.project.parties.dialog.creditCustomerHint'
-                  : 'settings.project.parties.dialog.creditSupplierHint',
+                error === 'required'
+                  ? 'settings.project.parties.validation.required'
+                  : 'settings.project.parties.validation.tooShort',
               )}
             </p>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
 
         <div className="flex items-center justify-end gap-2 pt-1">
           <button

@@ -17,7 +17,7 @@ import StationsWarehouses from '@/pages/settings/StationsWarehouses';
  *
  *   1. المحطات والمخازن        stations + warehouses (nested single read)
  *   2. التصنيفات               classifications (flat read assembled into a tree)
- *   3. جهات الوارد والمنصرف     parties (flat read, two sub-tabs by direction)
+ *   3. جهات الوارد وأغراض الصرف  parties (a two-root tree: inbound / outbound)
  *   4. الشركات الشقيقة          sister companies (a two-level parent → branch tree)
  *   5. عام                     a placeholder
  *

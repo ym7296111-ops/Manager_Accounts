@@ -501,35 +501,20 @@ export const en: Record<TranslationKey, string> = {
     'The database connection is not configured in this environment.',
   'settings.project.classifications.error.network': 'Could not reach the server. Please try again.',
   'settings.project.classifications.error.unknown': 'Could not load classifications.',
-  'settings.project.parties.heading': 'Inbound & outbound parties',
+  'settings.project.parties.heading': 'Inbound parties & outbound purposes',
   'settings.project.parties.description':
-    'Counterparties, split by the direction of the relationship: inbound parties (local and foreign suppliers) and outbound parties (customers, with no local/foreign split). Sister companies have a tab of their own under Project Settings.',
-  'settings.project.parties.tabs.inbound': 'Inbound parties',
-  'settings.project.parties.tabs.outbound': 'Outbound parties',
-  'settings.project.parties.inbound.description':
-    'The suppliers we buy from — local and foreign — each with its own code sequence (LOC / FRN).',
-  'settings.project.parties.outbound.description':
-    'The customers we sell to, with no local/foreign split. Their codes start with CUS.',
-  'settings.project.parties.type.localSupplier': 'Local supplier',
-  'settings.project.parties.type.foreignSupplier': 'Foreign supplier',
-  'settings.project.parties.type.customer': 'Customer',
-  'settings.project.parties.table.name': 'Name',
-  'settings.project.parties.table.code': 'Code',
-  'settings.project.parties.table.type': 'Type',
-  'settings.project.parties.table.status': 'Status',
-  'settings.project.parties.table.actions': 'Actions',
-  'settings.project.parties.table.inboundCaption': 'Inbound parties table',
-  'settings.project.parties.table.outboundCaption': 'Outbound parties table',
+    'A two-level tree: two roots — inbound parties and outbound purposes — each opening onto one flat list of its parties. A party is a name and a code, nothing else; the code is minted from its root’s own sequence (IN / OUT).',
+  'settings.project.parties.roots.inbound': 'Inbound parties',
+  'settings.project.parties.roots.outbound': 'Outbound purposes',
+  'settings.project.parties.count': 'Parties: {count}',
+  'settings.project.parties.listHeading': 'Parties',
+  'settings.project.parties.add': 'Add party',
+  'settings.project.parties.addUnder': 'Add a party under “{root}”',
   'settings.project.parties.status.active': 'Active',
   'settings.project.parties.status.inactive': 'Disabled',
   'settings.project.parties.loading': 'Loading parties…',
   'settings.project.parties.retry': 'Try again',
-  'settings.project.parties.empty.inbound.title': 'No inbound parties yet',
-  'settings.project.parties.empty.inbound.description':
-    'Add your first local or foreign supplier. The code is generated automatically from the type (LOC / FRN).',
-  'settings.project.parties.empty.outbound.title': 'No outbound parties yet',
-  'settings.project.parties.empty.outbound.description':
-    'Add your first customer. The code is generated automatically (CUS-001).',
+  'settings.project.parties.empty.branch': 'No parties under this root yet.',
   'settings.project.parties.error.forbidden':
     'You do not have permission to read parties (project.settings:manage).',
   'settings.project.parties.error.unavailable':
@@ -540,49 +525,27 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.parties.action.deactivate': 'Deactivate',
   'settings.project.parties.action.activate': 'Activate',
   'settings.project.parties.action.delete': 'Delete',
-  'settings.project.parties.add': 'Add party',
-  'settings.project.parties.dialog.add': 'Add party',
+  'settings.project.parties.dialog.addInbound': 'Add an inbound party',
+  'settings.project.parties.dialog.addOutbound': 'Add an outbound party',
   'settings.project.parties.dialog.edit': 'Edit party',
-  'settings.project.parties.dialog.type': 'Party type',
-  'settings.project.parties.dialog.typePlaceholder': 'Choose a party type…',
-  'settings.project.parties.dialog.typeHint':
-    'The type is chosen at creation and cannot be changed later; it decides which code sequence is used.',
-  'settings.project.parties.dialog.outboundTypeHint':
-    'This tab creates customers only; their codes come from the CUS sequence.',
+  'settings.project.parties.dialog.inboundHint':
+    'The party will sit under “Inbound parties” and take its code from the IN sequence.',
+  'settings.project.parties.dialog.outboundHint':
+    'The party will sit under “Outbound purposes” and take its code from the OUT sequence.',
+  'settings.project.parties.dialog.codePreview': 'Code',
   'settings.project.parties.dialog.immutable':
-    'The type and code are fixed and cannot be edited after creation.',
+    'The root and the code are fixed and cannot change after creation.',
   'settings.project.parties.dialog.code': 'Code (generated automatically)',
   'settings.project.parties.dialog.name': 'Party name',
-  'settings.project.parties.dialog.taxNumber': 'Tax number',
-  'settings.project.parties.dialog.commercialRegister': 'Commercial register',
-  'settings.project.parties.dialog.address': 'Address',
-  'settings.project.parties.dialog.contactPerson': 'Contact person',
-  'settings.project.parties.dialog.phone': 'Phone',
-  'settings.project.parties.dialog.email': 'Email',
-  'settings.project.parties.dialog.creditLimit': 'Credit limit',
-  'settings.project.parties.dialog.creditSupplierHint':
-    'The agreed credit-purchasing limit with this supplier.',
-  'settings.project.parties.dialog.creditCustomerHint':
-    'The credit-sales limit granted to this customer.',
-  'settings.project.parties.dialog.paymentTerms': 'Payment terms',
   'settings.project.parties.dialog.save': 'Save',
   'settings.project.parties.dialog.cancel': 'Cancel',
   'settings.project.parties.dialog.close': 'Close',
   'settings.project.parties.dialog.saving': 'Saving…',
-  'settings.project.parties.paymentTerms.none': 'Unspecified',
-  'settings.project.parties.paymentTerms.immediate': 'Immediate — on receipt',
-  'settings.project.parties.paymentTerms.days': '{days} days',
-  'settings.project.parties.validation.typeRequired': 'Please choose a party type.',
   'settings.project.parties.validation.required': 'A name is required.',
   'settings.project.parties.validation.tooShort': 'The name must be at least two characters.',
-  'settings.project.parties.validation.invalidEmail':
-    'Enter a valid email address, or leave it empty.',
-  'settings.project.parties.validation.invalidCreditLimit':
-    'Enter a valid amount (zero or more), or leave it empty.',
-  'settings.project.parties.validation.invalidPaymentTerms': 'Choose valid payment terms.',
   'settings.project.parties.delete.title': 'Delete party',
   'settings.project.parties.delete.body':
-    '“{name}” ({code}) will be permanently deleted. This cannot be undone.',
+    '“{name}” ({code}) will be deleted permanently. This cannot be undone.',
   'settings.project.parties.delete.confirm': 'Confirm delete',
   'settings.project.parties.success.saved': 'Saved.',
   'settings.project.parties.success.deleted': 'Deleted.',
@@ -592,12 +555,11 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.parties.writeError.unavailable':
     'The database connection is not configured in this environment.',
   'settings.project.parties.writeError.network': 'Could not reach the server. Please try again.',
-  'settings.project.parties.writeError.validation':
-    'Some fields are not valid. Review the form and try again.',
+  'settings.project.parties.writeError.validation': 'The name is not valid.',
   'settings.project.parties.writeError.immutable':
-    "A party's type and code cannot be changed after creation.",
+    'The root and the code cannot be changed. Refresh the list and try again.',
   'settings.project.parties.writeError.hasReferences':
-    'This party cannot be deleted because documents reference it. Deactivate it instead.',
+    'This party cannot be deleted because documents refer to it. Delete the documents or keep the party disabled.',
   'settings.project.parties.writeError.notFound':
     'This party no longer exists. Refresh the list and try again.',
   'settings.project.parties.writeError.unknown': 'The operation failed. Please try again.',

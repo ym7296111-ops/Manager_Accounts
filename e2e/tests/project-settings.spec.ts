@@ -116,25 +116,42 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // mounted only on demand (dialogs portal to <body>, outside <main>).
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // The parties tab renders two sub-tabs. Inbound is open first and holds the
-  // two seeded supplier kinds, each with the code its own sequence minted; the
-  // customer belongs to the outbound tab.
+  // The parties tab renders a two-root tree — inbound and outbound — with one
+  // flat level of parties under each. Codes come from `supabase/seed.sql`: two
+  // inbound parties (IN-001, IN-002) and one outbound party (OUT-001). The
+  // roots replace the old sub-tab strip: there is no nested tablist at all.
   await tabs.nth(2).click();
-  const partiesTabs = main.getByRole('tablist', { name: 'Inbound & outbound parties' });
-  await expect(partiesTabs.getByRole('tab')).toHaveCount(2);
-  await expect(partiesTabs.getByRole('tab', { name: 'Sister companies' })).toHaveCount(0);
-  await expect(partiesTabs.getByRole('tab', { name: 'Inbound parties' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
+  await expect(main.getByRole('tablist')).toHaveCount(1);
+  const inboundRoot = main.locator('#parties-root-inbound');
+  const outboundRoot = main.locator('#parties-root-outbound');
+  await expect(inboundRoot).toHaveAttribute('aria-expanded', 'true');
+  await expect(outboundRoot).toHaveAttribute('aria-expanded', 'true');
   await expect(main.getByText('شركة النيل للتوريدات الصناعية')).toBeVisible();
-  await expect(main.getByText('LOC-001')).toBeVisible();
-  await expect(main.getByText('FRN-001')).toBeVisible();
-  await expect(main.getByText('CUS-001')).toHaveCount(0);
+  await expect(main.getByText('IN-001', { exact: true })).toBeVisible();
+  await expect(main.getByText('Nile Trading GmbH')).toBeVisible();
+  await expect(main.getByText('IN-002', { exact: true })).toBeVisible();
+  await expect(main.getByText('OUT-001', { exact: true })).toBeVisible();
 
-  await partiesTabs.getByRole('tab', { name: 'Outbound parties' }).click();
-  await expect(main.getByText('CUS-001')).toBeVisible();
-  await expect(main.getByText('LOC-001')).toHaveCount(0);
+  /* Each party sits under its own root: the inbound panel holds no outbound
+     row, and the outbound panel holds nothing inbound. */
+  const inboundPanel = main.locator('#parties-root-panel-inbound');
+  const outboundPanel = main.locator('#parties-root-panel-outbound');
+  await expect(inboundPanel.getByText('OUT-001', { exact: true })).toHaveCount(0);
+  await expect(inboundPanel.getByText('مؤسسة الأفق للتجارة والتوزيع')).toHaveCount(0);
+  await expect(outboundPanel.getByText('IN-001', { exact: true })).toHaveCount(0);
+  await expect(outboundPanel.getByText('مؤسسة الأفق للتجارة والتوزيع')).toBeVisible();
+
+  /* A party is a name and a code: the row shows nothing else (no tax number,
+     no credit limit, no email column). */
+  await expect(main.locator('table')).toHaveCount(0);
+
+  /* Collapsing one root leaves the other open. */
+  await inboundRoot.click();
+  await expect(inboundRoot).toHaveAttribute('aria-expanded', 'false');
+  await expect(main.getByText('IN-001', { exact: true })).toHaveCount(0);
+  await expect(main.getByText('OUT-001', { exact: true })).toBeVisible();
+  await inboundRoot.click();
+  await expect(main.getByText('IN-001', { exact: true })).toBeVisible();
 
   // The sister-companies tab opens the tree directly — no sub-tabs of its own.
   await tabs.nth(3).click();

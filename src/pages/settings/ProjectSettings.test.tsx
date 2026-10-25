@@ -105,17 +105,9 @@ vi.mock('@/hooks/useParties', async (importOriginal) => {
       data: [
         {
           id: 'p1',
-          type: 'local_supplier',
-          code: 'LOC-001',
+          branch: 'inbound',
+          code: 'IN-001',
           name: 'شركة النيل للتوريدات الصناعية',
-          taxNumber: null,
-          commercialRegister: null,
-          address: null,
-          contactPerson: null,
-          phone: null,
-          email: null,
-          creditLimit: 250000,
-          paymentTerms: 30,
           isActive: true,
         },
       ],
@@ -203,7 +195,7 @@ describe('ProjectSettings', () => {
     expect(tabs).toHaveLength(5);
     expect(tabs[0]?.textContent).toBe('المحطات والمخازن');
     expect(tabs[1]?.textContent).toBe('التصنيفات');
-    expect(tabs[2]?.textContent).toBe('جهات الوارد والمنصرف');
+    expect(tabs[2]?.textContent).toBe('جهات الوارد وأغراض الصرف');
     /* Sister companies is a top-level tab of its own, ahead of General. */
     expect(tabs[3]?.textContent).toBe('الشركات الشقيقة');
     expect(tabs[4]?.textContent).toBe('عام');
@@ -238,10 +230,12 @@ describe('ProjectSettings', () => {
 
     fireEvent.click(tabs[2]!);
     expect(tabs[2]?.getAttribute('aria-selected')).toBe('true');
-    // The parties tab now renders the live directory, not the placeholder.
+    // The parties tab now renders the live two-root tree, not the placeholder.
     expect(screen.getByText('شركة النيل للتوريدات الصناعية')).toBeTruthy();
-    expect(screen.getByText('LOC-001')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'إضافة جهة' })).toBeTruthy();
+    expect(screen.getByText('IN-001')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'إضافة جهة داخل «جهات الوارد»' })).toBeTruthy();
+    /* The roots replace the old sub-tab strip entirely. */
+    expect(screen.queryAllByRole('tab')).toHaveLength(5);
     // Only the active panel is mounted, so the classifications tree is gone.
     expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
 
@@ -252,8 +246,8 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('SIS-001', { exact: true })).toBeTruthy();
     expect(screen.queryByRole('tab', { name: 'شركات شقيقة' })).toBeNull();
     expect(screen.queryByRole('tablist', { name: 'الشركات الشقيقة' })).toBeNull();
-    // …and the parties table left with its panel.
-    expect(screen.queryByText('LOC-001')).toBeNull();
+    // …and the parties tree left with its panel.
+    expect(screen.queryByText('IN-001')).toBeNull();
 
     fireEvent.click(tabs[4]!);
     expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();

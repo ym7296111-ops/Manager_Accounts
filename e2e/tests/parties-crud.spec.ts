@@ -6,46 +6,46 @@ import type { E2EDatabase } from '../fixtures/database.types.ts';
 /**
  * Parties and sister companies, end to end against the local Supabase stack.
  *
- * «جهات الوارد والمنصرف» is two sub-tabs, and «الشركات الشقيقة» is a top-level
- * tab of Project Settings in its own right:
+ * «جهات الوارد وأغراض الصرف» is a two-level tree with two fixed roots, and
+ * «الشركات الشقيقة» is a top-level tab of Project Settings in its own right:
  *
- *   Inbound parties   local + foreign suppliers   LOC-### / FRN-###
- *   Outbound parties  customers only              CUS-###
- *   Sister companies  a two-level tree            SIS-### / SIS-###-##
+ *   Inbound parties    → IN-###    one flat level under the root
+ *   Outbound purposes  → OUT-###   one flat level under the root
+ *   Sister companies     SIS-### / SIS-###-##   a separate tab, untouched
+ *
+ * A party is a name, a code and an active flag — nothing else. The commercial
+ * profile (tax number, commercial register, address, contact person, phone,
+ * email, credit limit, payment terms) was retired with its columns, so no test
+ * below looks for one, and one test asserts the dialog has a single field.
  *
  * Runs as the signed-in owner (see `e2e/auth.setup.ts`), in English, over the
- * directory written by `supabase/seed.sql`: one local supplier (LOC-001), one
- * foreign supplier (FRN-001), one customer (CUS-001) and the sister tree
+ * directory written by `supabase/seed.sql`: two inbound parties (IN-001,
+ * IN-002) and one outbound party (OUT-001), plus the sister tree
  * SIS-001 → SIS-001-01 / SIS-001-02.
  *
  * Codes are asserted by FORMAT (prefix + digits), never as fixed sequence
- * numbers: each sequence has already issued its `001` to the seed, and any
- * test (or retry) advances it further. What matters is that each type mints
- * from its own sequence with its own prefix — exactly what the creates below
- * prove — and that the outbound tab cannot mint anything but CUS.
+ * numbers: each branch sequence has already issued the codes the seed holds,
+ * and any test (or retry) advances it further. What matters is that each root
+ * mints from its own sequence — exactly what the creates below prove.
  *
  * Every test deletes what it created, so the file is order independent.
  */
 
-const LOCAL = 'مورّد محلي آلي';
-const FOREIGN = 'Automated Foreign Supplier';
-const CUSTOMER = 'عميل الاختبار الآلي';
-const EDIT_CUSTOMER = 'عميل التعديل الآلي';
-const EDIT_RENAMED = 'عميل التعديل — الاسم الجديد';
+const INBOUND_NAME = 'مورّد الوارد الآلي';
+const INBOUND_RENAMED = 'مورّد الوارد — الاسم الجديد';
+const OUTBOUND_NAME = 'جهة الصرف الآلية';
 const PARENT = 'شركة شقيقة آلية';
 const BRANCH = 'فرع آلي';
 
-const CODE_PATTERN: Record<string, RegExp> = {
-  local_supplier: /^LOC-\d{3,}$/,
-  foreign_supplier: /^FRN-\d{3,}$/,
-  customer: /^CUS-\d{3,}$/,
-};
+const INBOUND_CODE = /^IN-\d{3,}$/;
+const OUTBOUND_CODE = /^OUT-\d{3,}$/;
 
 async function openPartiesTab(page: Page) {
   await page.goto('/settings/project');
   const main = page.getByRole('main');
   await main.getByRole('tab', { name: 'Inbound & Outbound' }).click();
-  await expect(main.getByRole('tab', { name: 'Inbound parties' })).toBeVisible();
+  await expect(main.locator('#parties-root-inbound')).toBeVisible();
+  await expect(main.locator('#parties-root-outbound')).toBeVisible();
   return main;
 }
 
@@ -62,12 +62,7 @@ async function openSisterTab(page: Page) {
   return main;
 }
 
-async function selectSubTab(main: ReturnType<Page['getByRole']>, name: string) {
-  await main.getByRole('tab', { name }).click();
-  await expect(main.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true');
-}
-
-async function deleteParty(page: Page, main: ReturnType<Page['getByRole']>, name: string) {
+async function deleteParty(main: ReturnType<Page['getByRole']>, page: Page, name: string) {
   await main.getByRole('button', { name: `Delete ${name}` }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('heading', { name: 'Delete party' })).toBeVisible();
@@ -90,180 +85,138 @@ async function ownerClient() {
   return client;
 }
 
-test.describe('parties — inbound and outbound tabs', () => {
-  test('the inbound tab creates local and foreign suppliers with their own prefixes', async ({
-    page,
-  }) => {
+test.describe('parties — the two-root tree', () => {
+  test('the inbound root creates a party from its own sequence', async ({ page }) => {
     const main = await openPartiesTab(page);
 
-    // The seeded inbound rows are on screen; the customer belongs to the other tab.
-    await expect(main.getByText('LOC-001')).toBeVisible();
-    await expect(main.getByText('FRN-001')).toBeVisible();
-    await expect(main.getByText('CUS-001')).toHaveCount(0);
+    // Seeded rows: two inbound, one outbound, each under its own root.
+    const inboundPanel = main.locator('#parties-root-panel-inbound');
+    const outboundPanel = main.locator('#parties-root-panel-outbound');
+    await expect(inboundPanel.getByText('IN-001', { exact: true })).toBeVisible();
+    await expect(inboundPanel.getByText('IN-002', { exact: true })).toBeVisible();
+    await expect(outboundPanel.getByText('OUT-001', { exact: true })).toBeVisible();
+    await expect(inboundPanel.getByText('OUT-001', { exact: true })).toHaveCount(0);
+    await expect(outboundPanel.getByText('IN-001', { exact: true })).toHaveCount(0);
 
-    const cases = [
-      { type: 'local_supplier', name: LOCAL, badge: 'Local supplier' },
-      { type: 'foreign_supplier', name: FOREIGN, badge: 'Foreign supplier' },
-    ] as const;
+    await main.getByRole('button', { name: 'Add a party under “Inbound parties”' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Add an inbound party' })).toBeVisible();
 
-    const mintedCodes = new Set<string>();
+    /* The root decides the branch: there is no branch/type control, and the
+       hint names the IN sequence the code will come from. */
+    await expect(dialog.locator('select')).toHaveCount(0);
+    await expect(dialog.getByText(/IN sequence/)).toBeVisible();
+    await expect(dialog.getByText('IN-###')).toBeVisible();
 
-    for (const entry of cases) {
-      await main.getByRole('button', { name: 'Add party' }).click();
-      const dialog = page.getByRole('dialog');
-      await expect(dialog.getByRole('heading', { name: 'Add party' })).toBeVisible();
+    /* A party is a name and nothing else: exactly one field. */
+    await expect(dialog.getByRole('textbox')).toHaveCount(1);
+    await expect(dialog.locator('textarea, input[type="email"], input[type="tel"]')).toHaveCount(0);
 
-      /* The inbound type select offers the two supplier kinds and a customer
-         is not among them. */
-      const options = await dialog.getByLabel('Party type').locator('option').allTextContents();
-      expect(options).toEqual(['Choose a party type…', 'Local supplier', 'Foreign supplier']);
+    await dialog.getByLabel('Party name').fill(INBOUND_NAME);
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
-      await dialog.getByLabel('Party type').selectOption(entry.type);
-      await dialog.getByLabel('Party name').fill(entry.name);
-      await dialog.getByRole('button', { name: 'Save' }).click();
-      await expect(page.getByRole('dialog')).toHaveCount(0);
-
-      const row = main.getByRole('row', { name: new RegExp(entry.name) });
-      await expect(row).toBeVisible();
-      await expect(row.getByText(entry.badge, { exact: true })).toBeVisible();
-
-      const code = (await row.getByText(CODE_PATTERN[entry.type]!).textContent())?.trim() ?? '';
-      expect(code).toMatch(CODE_PATTERN[entry.type]!);
-      expect(mintedCodes.has(code)).toBe(false);
-      mintedCodes.add(code);
-    }
+    const row = inboundPanel.getByRole('listitem').filter({ hasText: INBOUND_NAME });
+    await expect(row).toBeVisible();
+    const code = (await row.getByText(INBOUND_CODE).textContent())?.trim() ?? '';
+    expect(code).toMatch(INBOUND_CODE);
+    expect(code).not.toBe('IN-001');
 
     // ---- toggle is_active: the row stays, the affordance flips -------------
-    await main.getByRole('button', { name: `Deactivate ${LOCAL}` }).click();
-    await expect(main.getByRole('button', { name: `Activate ${LOCAL}` })).toBeVisible();
-    await expect(main.getByText(LOCAL)).toBeVisible();
-    await main.getByRole('button', { name: `Activate ${LOCAL}` }).click();
-    await expect(main.getByRole('button', { name: `Deactivate ${LOCAL}` })).toBeVisible();
+    await main.getByRole('button', { name: `Deactivate ${INBOUND_NAME}` }).click();
+    await expect(main.getByRole('button', { name: `Activate ${INBOUND_NAME}` })).toBeVisible();
+    await expect(main.getByText(INBOUND_NAME)).toBeVisible();
+    await main.getByRole('button', { name: `Activate ${INBOUND_NAME}` }).click();
+    await expect(main.getByRole('button', { name: `Deactivate ${INBOUND_NAME}` })).toBeVisible();
 
-    // ---- cleanup ------------------------------------------------------------
-    for (const entry of cases) {
-      await deleteParty(page, main, entry.name);
-    }
+    // ---- rename: the code the trigger minted does not move ------------------
+    await main.getByRole('button', { name: `Edit ${INBOUND_NAME}` }).click();
+    const edit = page.getByRole('dialog');
+    await expect(edit.getByRole('heading', { name: 'Edit party' })).toBeVisible();
+    await expect(edit.getByLabel('Party name')).toHaveValue(INBOUND_NAME);
+    /* The identity is text, never input: one field, no select, and the code is
+       shown read-only. */
+    await expect(edit.getByRole('textbox')).toHaveCount(1);
+    await expect(edit.locator('select')).toHaveCount(0);
+    await expect(edit.getByText('Code (generated automatically)')).toBeVisible();
+    await expect(edit.getByText(code, { exact: true })).toBeVisible();
+
+    await edit.getByLabel('Party name').fill(INBOUND_RENAMED);
+    await edit.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    const renamed = inboundPanel.getByRole('listitem').filter({ hasText: INBOUND_RENAMED });
+    await expect(renamed.getByText(code, { exact: true })).toBeVisible();
+    await expect(main.getByText(INBOUND_NAME)).toHaveCount(0);
+
+    await deleteParty(main, page, INBOUND_RENAMED);
   });
 
-  test('the outbound tab creates customers only, with the type fixed by the tab', async ({
-    page,
-  }) => {
+  test('the outbound root creates a party from the OUT sequence', async ({ page }) => {
     const main = await openPartiesTab(page);
-    await selectSubTab(main, 'Outbound parties');
+    const outboundPanel = main.locator('#parties-root-panel-outbound');
 
-    await expect(main.getByText('CUS-001')).toBeVisible();
-    await expect(main.getByText(LOCAL)).toHaveCount(0);
+    await expect(outboundPanel.getByText('OUT-001', { exact: true })).toBeVisible();
+    await expect(main.getByText(INBOUND_NAME)).toHaveCount(0);
 
-    await main.getByRole('button', { name: 'Add party' }).click();
+    await main.getByRole('button', { name: 'Add a party under “Outbound purposes”' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: 'Add an outbound party' })).toBeVisible();
+    await expect(dialog.locator('select')).toHaveCount(0);
+    await expect(dialog.getByText(/OUT sequence/)).toBeVisible();
+    await expect(dialog.getByText('OUT-###')).toBeVisible();
+
+    await dialog.getByLabel('Party name').fill(OUTBOUND_NAME);
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    const row = outboundPanel.getByRole('listitem').filter({ hasText: OUTBOUND_NAME });
+    const code = (await row.getByText(OUTBOUND_CODE).textContent())?.trim() ?? '';
+    expect(code).toMatch(OUTBOUND_CODE);
+
+    /* The new row landed under the outbound root, not the inbound one. */
+    await expect(main.locator('#parties-root-panel-inbound').getByText(OUTBOUND_NAME)).toHaveCount(
+      0,
+    );
+
+    await deleteParty(main, page, OUTBOUND_NAME);
+  });
+
+  test('refuses a blank or one-character name before any request', async ({ page }) => {
+    const main = await openPartiesTab(page);
+
+    await main.getByRole('button', { name: 'Add a party under “Inbound parties”' }).click();
     const dialog = page.getByRole('dialog');
 
-    /* No type control at all: the tab decides. */
-    await expect(dialog.getByLabel('Party type')).toHaveCount(0);
-    await expect(dialog.getByText('Customer', { exact: true })).toBeVisible();
-    await expect(
-      dialog.getByText('This tab creates customers only; their codes come from the CUS sequence.'),
-    ).toBeVisible();
-
-    await dialog.getByLabel('Party name').fill(CUSTOMER);
-    await dialog.getByLabel('Credit limit').fill('5000');
     await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-
-    const row = main.getByRole('row', { name: new RegExp(CUSTOMER) });
-    const code = (await row.getByText(CODE_PATTERN.customer!).textContent())?.trim() ?? '';
-    expect(code).toMatch(CODE_PATTERN.customer!);
-    await expect(row.getByText('Customer', { exact: true })).toBeVisible();
-
-    await deleteParty(page, main, CUSTOMER);
-  });
-
-  test('owner edits a customer while type and code stay read-only', async ({ page }) => {
-    const main = await openPartiesTab(page);
-    await selectSubTab(main, 'Outbound parties');
-
-    // ---- create with contact + credit details -------------------------------
-    await main.getByRole('button', { name: 'Add party' }).click();
-    let dialog = page.getByRole('dialog');
-    await dialog.getByLabel('Party name').fill(EDIT_CUSTOMER);
-    await dialog.getByLabel('Email').fill('auto@edit-customer.example.com');
-    await dialog.getByLabel('Credit limit').fill('5000');
-    await dialog.getByLabel('Payment terms').selectOption('30');
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-
-    const row = main.getByRole('row', { name: new RegExp(EDIT_CUSTOMER) });
-    const createdCode = (await row.getByText(CODE_PATTERN.customer!).textContent())?.trim();
-    expect(createdCode).toBeTruthy();
-
-    // ---- edit: identity is text, never input --------------------------------
-    await main.getByRole('button', { name: `Edit ${EDIT_CUSTOMER}` }).click();
-    dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: 'Edit party' })).toBeVisible();
-    await expect(dialog.getByLabel('Party name')).toHaveValue(EDIT_CUSTOMER);
-    await expect(dialog.getByLabel('Credit limit')).toHaveValue('5000');
-    await expect(dialog.getByLabel('Payment terms')).toHaveValue('30');
-
-    await expect(dialog.getByText('Code (generated automatically)')).toBeVisible();
-    await expect(dialog.getByText(createdCode!)).toBeVisible();
-    // No type select exists on edit; the only select is the payment terms.
-    await expect(dialog.getByLabel('Party type')).toHaveCount(0);
-    await expect(dialog.locator('select')).toHaveCount(1);
-    // Seven text-like inputs (name, tax, register, contact, phone, email,
-    // credit) plus the address textarea — no extra field for the code.
-    await expect(dialog.locator('input')).toHaveCount(7);
-    await expect(dialog.locator('textarea')).toHaveCount(1);
-
-    await dialog.getByLabel('Party name').fill(EDIT_RENAMED);
-    await dialog.getByLabel('Credit limit').fill('7500');
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-
-    /* The rename landed; the code the trigger minted did not move. */
-    const renamedRow = main.getByRole('row', { name: new RegExp(EDIT_RENAMED) });
-    await expect(renamedRow.getByText(createdCode!)).toBeVisible();
-    await expect(main.getByText(EDIT_CUSTOMER)).toHaveCount(0);
-
-    // The edited credit limit round-trips back into the form.
-    await main.getByRole('button', { name: `Edit ${EDIT_RENAMED}` }).click();
-    dialog = page.getByRole('dialog');
-    await expect(dialog.getByLabel('Credit limit')).toHaveValue('7500');
-    await dialog.getByRole('button', { name: 'Close' }).click();
-    await expect(page.getByRole('dialog')).toHaveCount(0);
-
-    await deleteParty(page, main, EDIT_RENAMED);
-  });
-
-  test('refuses invalid input before any request', async ({ page }) => {
-    const main = await openPartiesTab(page);
-
-    await main.getByRole('button', { name: 'Add party' }).click();
-    const dialog = page.getByRole('dialog');
-
-    // The type is a one-time choice: submitting unchosen is refused inline.
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(dialog.getByText('Please choose a party type.')).toBeVisible();
     await expect(dialog.getByText('A name is required.')).toBeVisible();
     await expect(dialog).toBeVisible();
 
-    await dialog.getByLabel('Party type').selectOption('local_supplier');
     await dialog.getByLabel('Party name').fill('ع');
     await dialog.getByRole('button', { name: 'Save' }).click();
     await expect(dialog.getByText('The name must be at least two characters.')).toBeVisible();
 
-    await dialog.getByLabel('Party name').fill('مورّد التحقق الآلي');
-    await dialog.getByLabel('Email').fill('not-an-email');
-    await dialog.getByLabel('Credit limit').fill('-5');
-    await dialog.getByRole('button', { name: 'Save' }).click();
-    await expect(dialog.getByText('Enter a valid email address, or leave it empty.')).toBeVisible();
-    await expect(
-      dialog.getByText('Enter a valid amount (zero or more), or leave it empty.'),
-    ).toBeVisible();
-    await expect(dialog).toBeVisible();
-
     await dialog.getByRole('button', { name: 'Close' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    await expect(main.getByText('مورّد التحقق الآلي')).toHaveCount(0);
+    await expect(main.getByText('ع', { exact: true })).toHaveCount(0);
+  });
+
+  test('a root with no parties still shows its root, its count and its add button', async ({
+    page,
+  }) => {
+    const main = await openPartiesTab(page);
+
+    /* Collapsing and re-opening keeps both roots and their counts in place. */
+    const inboundRoot = main.locator('#parties-root-inbound');
+    await expect(inboundRoot).toContainText('parties');
+    await inboundRoot.click();
+    await expect(inboundRoot).toHaveAttribute('aria-expanded', 'false');
+    await expect(main.locator('#parties-root-panel-inbound')).toHaveCount(0);
+    await inboundRoot.click();
+    await expect(main.locator('#parties-root-panel-inbound')).toBeVisible();
+
+    /* The scaffold is fixed: two roots, never derived from the rows. */
+    await expect(main.locator('[id^="parties-root-"]')).toHaveCount(2);
   });
 });
 
@@ -346,30 +299,18 @@ test.describe('parties authorization & immutability', () => {
     expect(readError).toBeNull();
     expect(visible).toEqual([]);
 
-    const { data: treeVisible, error: treeError } = await client
-      .from('sister_companies')
-      .select('id, code');
-    expect(treeError).toBeNull();
-    expect(treeVisible).toEqual([]);
-
     const { error: insertError } = await client
       .from('parties')
-      .insert({ type: 'local_supplier', name: 'مورّد ممنوع' })
+      .insert({ branch: 'inbound', name: 'جهة ممنوعة' })
       .select('id');
     expect(insertError?.code).toBe('42501');
-
-    const { error: treeInsertError } = await client
-      .from('sister_companies')
-      .insert({ name: 'شركة ممنوعة' })
-      .select('id');
-    expect(treeInsertError?.code).toBe('42501');
 
     /* Under RLS an UPDATE/DELETE the caller cannot see matches zero rows and
        raises no error; the affected-row count is what proves nothing moved. */
     const { data: updated, error: updateError } = await client
       .from('parties')
       .update({ is_active: false })
-      .eq('code', 'LOC-001')
+      .eq('code', 'IN-001')
       .select('id, is_active');
     expect(updateError).toBeNull();
     expect(updated).toEqual([]);
@@ -377,7 +318,7 @@ test.describe('parties authorization & immutability', () => {
     const { data: deleted, error: deleteError } = await client
       .from('parties')
       .delete()
-      .eq('code', 'LOC-001')
+      .eq('code', 'IN-001')
       .select('id');
     expect(deleteError).toBeNull();
     expect(deleted).toEqual([]);
@@ -390,24 +331,24 @@ test.describe('parties authorization & immutability', () => {
     const { data: untouched } = await service
       .from('parties')
       .select('is_active')
-      .eq('code', 'LOC-001')
+      .eq('code', 'IN-001')
       .single();
     expect(untouched?.is_active).toBe(true);
 
     await page.goto('/settings/project');
   });
 
-  test('the database refuses the retired types and any type/code change', async () => {
+  test('the database refuses a branch/code change and an unknown branch', async () => {
     const client = await ownerClient();
     const { supabaseUrl, anonKey } = await readFixtures();
 
-    // A type is write-once: the trigger raises 22023 even for the owner.
-    const { error: typeChange } = await client
+    // A branch is write-once: the trigger raises 22023 even for the owner.
+    const { error: branchChange } = await client
       .from('parties')
-      .update({ type: 'customer' })
-      .eq('code', 'LOC-001')
+      .update({ branch: 'outbound' })
+      .eq('code', 'IN-001')
       .select('id');
-    expect(typeChange?.code).toBe('22023');
+    expect(branchChange?.code).toBe('22023');
 
     /* A hand-rolled API consumer is not bound by the app client's types, so
        drive the forgery attempts through an untyped client. */
@@ -424,32 +365,46 @@ test.describe('parties authorization & immutability', () => {
     // Code is immutable too.
     const { error: codeChange } = await raw
       .from('parties')
-      .update({ code: 'LOC-999' })
-      .eq('code', 'LOC-001')
+      .update({ code: 'IN-999' })
+      .eq('code', 'IN-001')
       .select('id');
     expect(codeChange?.code).toBe('22023');
 
     // A code sent on insert is overwritten by the sequence mint.
     const { data: forged, error: forgeError } = await raw
       .from('parties')
-      .insert({ type: 'foreign_supplier', name: 'جهة تجاوز الكود', code: 'LOC-999' })
+      .insert({ branch: 'outbound', name: 'جهة تجاوز الكود', code: 'IN-999' })
       .select('id, code')
       .single();
     expect(forgeError).toBeNull();
-    expect(forged?.code).toMatch(CODE_PATTERN.foreign_supplier!);
-    expect(forged?.code).not.toBe('LOC-999');
+    expect(forged?.code).toMatch(OUTBOUND_CODE);
+    expect(forged?.code).not.toBe('IN-999');
     await raw.from('parties').delete().eq('id', forged!.id);
 
-    /* The retired vocabulary is rejected by `parties_type_check` (23514): an
-       internal department is no longer a counterparty, and sister companies
-       have their own table. */
-    for (const retired of ['supplier', 'internal', 'sister_company']) {
+    /* The retired vocabulary is gone: an old type is simply not a column, and a
+       branch outside the two roots is rejected by `parties_branch_check`
+       (23514). A missing branch fails NOT NULL (23502). */
+    for (const retiredBranch of ['supplier', 'local_supplier', 'customer', 'internal', '']) {
       const { error } = await raw
         .from('parties')
-        .insert({ type: retired, name: `نوع متقاعد ${retired}` })
+        .insert({ branch: retiredBranch, name: `فرع متقاعد ${retiredBranch}` })
         .select('id');
       expect(error?.code).toBe('23514');
     }
+
+    const { error: missingBranch } = await raw
+      .from('parties')
+      .insert({ name: 'جهة بلا فرع' })
+      .select('id');
+    expect(missingBranch?.code).toBe('23502');
+
+    /* The profile columns are gone from the schema, so PostgREST rejects a
+       payload that names one instead of silently dropping it. */
+    const { error: retiredColumn } = await raw
+      .from('parties')
+      .insert({ branch: 'inbound', name: 'جهة بحقل متقاعد', email: 'x@example.com' })
+      .select('id');
+    expect(retiredColumn).not.toBeNull();
 
     /* Sister companies: parent_id and code are write-once (22023), the tree is
        exactly two levels, and a parent with branches cannot be deleted. */
