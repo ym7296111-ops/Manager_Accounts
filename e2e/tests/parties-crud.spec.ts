@@ -6,7 +6,8 @@ import type { E2EDatabase } from '../fixtures/database.types.ts';
 /**
  * Parties and sister companies, end to end against the local Supabase stack.
  *
- * «جهات الوارد والمنصرف» is three sub-tabs:
+ * «جهات الوارد والمنصرف» is two sub-tabs, and «الشركات الشقيقة» is a top-level
+ * tab of Project Settings in its own right:
  *
  *   Inbound parties   local + foreign suppliers   LOC-### / FRN-###
  *   Outbound parties  customers only              CUS-###
@@ -45,6 +46,19 @@ async function openPartiesTab(page: Page) {
   const main = page.getByRole('main');
   await main.getByRole('tab', { name: 'Inbound & Outbound' }).click();
   await expect(main.getByRole('tab', { name: 'Inbound parties' })).toBeVisible();
+  return main;
+}
+
+/** Opens the sister-companies tree through its own top-level tab. */
+async function openSisterTab(page: Page) {
+  await page.goto('/settings/project');
+  const main = page.getByRole('main');
+  await main.getByRole('tab', { name: 'Sister companies' }).click();
+  await expect(main.getByRole('tab', { name: 'Sister companies' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await expect(main.getByRole('heading', { name: 'Sister companies tree' })).toBeVisible();
   return main;
 }
 
@@ -253,12 +267,11 @@ test.describe('parties — inbound and outbound tabs', () => {
   });
 });
 
-test.describe('sister companies tree', () => {
+test.describe('sister companies tree — a top-level project-settings tab', () => {
   test('owner adds a parent company and a branch, and the server derives both codes', async ({
     page,
   }) => {
-    const main = await openPartiesTab(page);
-    await selectSubTab(main, 'Sister companies');
+    const main = await openSisterTab(page);
 
     await expect(main.getByText('SIS-001', { exact: true })).toBeVisible();
 

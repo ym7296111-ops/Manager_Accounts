@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
 import type * as ClassificationsModule from '@/hooks/useClassifications';
 import type * as PartiesModule from '@/hooks/useParties';
+import type * as SisterCompaniesModule from '@/hooks/useSisterCompanies';
 import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
@@ -124,6 +125,43 @@ vi.mock('@/hooks/useParties', async (importOriginal) => {
   };
 });
 
+/* The sister-companies tab reads its tree on mount; stub it for the same
+   reason as the other three — this test asserts the shell's wiring. */
+vi.mock('@/hooks/useSisterCompanies', async (importOriginal) => {
+  const actual = await importOriginal<typeof SisterCompaniesModule>();
+  return {
+    ...actual,
+    useSisterCompanies: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [
+        {
+          id: 'sc1',
+          parentId: null,
+          level: 1,
+          code: 'SIS-001',
+          name: 'الشركة المتحدة للخدمات اللوجستية',
+          isActive: true,
+          branches: [
+            {
+              id: 'sc1-1',
+              parentId: 'sc1',
+              level: 2,
+              code: 'SIS-001-01',
+              name: 'المتحدة للنقل الثقيل',
+              isActive: true,
+              branches: [],
+            },
+          ],
+        },
+      ],
+      error: null,
+      refetch: vi.fn(),
+    }),
+  };
+});
+
 function renderScreen() {
   /* The stations tab mounts real mutation hooks, which need a QueryClient even
      though the directory query itself is stubbed below. */
@@ -147,7 +185,7 @@ describe('ProjectSettings', () => {
     window.localStorage.clear();
   });
 
-  it('renders the project settings shell with four tabs in the specified order', () => {
+  it('renders the project settings shell with five tabs in the specified order', () => {
     renderScreen();
 
     expect(screen.getByRole('heading', { name: 'ضبط المشروع' })).toBeTruthy();
@@ -162,11 +200,13 @@ describe('ProjectSettings', () => {
     expect(tablist).toBeTruthy();
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(4);
+    expect(tabs).toHaveLength(5);
     expect(tabs[0]?.textContent).toBe('المحطات والمخازن');
     expect(tabs[1]?.textContent).toBe('التصنيفات');
     expect(tabs[2]?.textContent).toBe('جهات الوارد والمنصرف');
-    expect(tabs[3]?.textContent).toBe('عام');
+    /* Sister companies is a top-level tab of its own, ahead of General. */
+    expect(tabs[3]?.textContent).toBe('الشركات الشقيقة');
+    expect(tabs[4]?.textContent).toBe('عام');
 
     // First tab is active by default, and it now renders the read-only accordion
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
@@ -205,7 +245,17 @@ describe('ProjectSettings', () => {
     // Only the active panel is mounted, so the classifications tree is gone.
     expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
 
+    // The sister-companies tab opens the tree directly, with no sub-tabs.
     fireEvent.click(tabs[3]!);
+    expect(tabs[3]?.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'شجرة الشركات الشقيقة' })).toBeTruthy();
+    expect(screen.getByText('SIS-001', { exact: true })).toBeTruthy();
+    expect(screen.queryByRole('tab', { name: 'شركات شقيقة' })).toBeNull();
+    expect(screen.queryByRole('tablist', { name: 'الشركات الشقيقة' })).toBeNull();
+    // …and the parties table left with its panel.
+    expect(screen.queryByText('LOC-001')).toBeNull();
+
+    fireEvent.click(tabs[4]!);
     expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();
 
     fireEvent.click(tabs[0]!);

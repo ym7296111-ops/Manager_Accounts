@@ -354,6 +354,7 @@ export const ar = {
   'settings.project.tabs.stations': 'المحطات والمخازن',
   'settings.project.tabs.classifications': 'التصنيفات',
   'settings.project.tabs.parties': 'جهات الوارد والمنصرف',
+  'settings.project.tabs.sisterCompanies': 'الشركات الشقيقة',
   'settings.project.tabs.general': 'عام',
   'settings.project.stations.add': 'إضافة محطة',
   'settings.project.stations.addWarehouse': 'إضافة مخزن',
@@ -485,10 +486,9 @@ export const ar = {
   'settings.project.classifications.error.unknown': 'تعذّر تحميل التصنيفات.',
   'settings.project.parties.heading': 'جهات الوارد والمنصرف',
   'settings.project.parties.description':
-    'الجهات مصنّفة بحسب اتجاه التعامل: جهات وارد (موردون محليون وأجانب)، وجهات صرف (عملاء)، وشركات شقيقة في شجرة شركة أم ← فروع.',
+    'الجهات مصنّفة بحسب اتجاه التعامل: جهات وارد (موردون محليون وأجانب)، وجهات صرف (عملاء). الشركات الشقيقة لها تبويب مستقل في ضبط المشروع.',
   'settings.project.parties.tabs.inbound': 'جهات وارد',
   'settings.project.parties.tabs.outbound': 'جهات صرف',
-  'settings.project.parties.tabs.sister': 'شركات شقيقة',
   'settings.project.parties.inbound.description':
     'الموردون الذين نشتري منهم: محليون وأجانب، ولكل نوع تسلسل أكواد خاص (LOC / FRN).',
   'settings.project.parties.outbound.description':

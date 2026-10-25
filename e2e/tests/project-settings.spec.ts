@@ -32,17 +32,20 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
     ),
   ).toBeVisible();
 
-  // Four tabs in the specified order, directly under the header. The parties
+  // Five tabs in the specified order, directly under the header. The parties
   // panel mounts a nested tablist of its own, so the top-level tabs are
   // selected by their stable ids rather than by role.
   const tablist = main.getByRole('tablist').first();
   await expect(tablist).toBeVisible();
   const tabs = main.locator('[id^="project-settings-tab-"]');
-  await expect(tabs).toHaveCount(4);
+  await expect(tabs).toHaveCount(5);
   await expect(tabs.nth(0)).toHaveText('Stations & Warehouses');
   await expect(tabs.nth(1)).toHaveText('Classifications');
   await expect(tabs.nth(2)).toHaveText('Inbound & Outbound');
-  await expect(tabs.nth(3)).toHaveText('General');
+  // Sister companies sits at the top level now, as a peer of the directories;
+  // General remains last.
+  await expect(tabs.nth(3)).toHaveText('Sister companies');
+  await expect(tabs.nth(4)).toHaveText('General');
 
   // First tab is active and renders the accordion over `supabase/seed.sql`.
   // Codes are asserted rather than labels: they are language-independent.
@@ -113,12 +116,13 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // mounted only on demand (dialogs portal to <body>, outside <main>).
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // The parties tab renders three sub-tabs. Inbound is open first and holds
-  // the two seeded supplier kinds, each with the code its own sequence minted;
-  // the customer belongs to the outbound tab.
+  // The parties tab renders two sub-tabs. Inbound is open first and holds the
+  // two seeded supplier kinds, each with the code its own sequence minted; the
+  // customer belongs to the outbound tab.
   await tabs.nth(2).click();
   const partiesTabs = main.getByRole('tablist', { name: 'Inbound & outbound parties' });
-  await expect(partiesTabs.getByRole('tab')).toHaveCount(3);
+  await expect(partiesTabs.getByRole('tab')).toHaveCount(2);
+  await expect(partiesTabs.getByRole('tab', { name: 'Sister companies' })).toHaveCount(0);
   await expect(partiesTabs.getByRole('tab', { name: 'Inbound parties' })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -132,10 +136,13 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('CUS-001')).toBeVisible();
   await expect(main.getByText('LOC-001')).toHaveCount(0);
 
-  await partiesTabs.getByRole('tab', { name: 'Sister companies' }).click();
+  // The sister-companies tab opens the tree directly — no sub-tabs of its own.
+  await tabs.nth(3).click();
+  await expect(tabs.nth(3)).toHaveAttribute('aria-selected', 'true');
   /* Exact: the section description also names SIS-001 as the code shape. */
   await expect(main.getByText('SIS-001', { exact: true })).toBeVisible();
   await expect(main.getByRole('heading', { name: 'Sister companies tree' })).toBeVisible();
+  await expect(main.getByRole('tablist')).toHaveCount(1);
 
   // Writes again go through dialogs that portal to <body>, so `main` itself
   // holds no form controls.
@@ -143,7 +150,7 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
 
   // The remaining tab is still a placeholder and issues no queries.
 
-  await tabs.nth(3).click();
+  await tabs.nth(4).click();
   await expect(
     main.getByText('General settings content — coming soon.', { exact: true }),
   ).toBeVisible();
@@ -172,7 +179,7 @@ test('hard load of /settings/project serves the screen, never a 404', async ({ p
   await expect(page.getByText('Page not found')).toHaveCount(0);
   await expect(page.getByText('الصفحة غير موجودة')).toHaveCount(0);
 
-  /* The real screen — header plus the four tabs — is what loads. */
+  /* The real screen — header plus the five tabs — is what loads. */
   await expect(page.getByRole('heading', { name: 'Project Settings', exact: true })).toBeVisible();
   await expect(page.getByRole('tablist')).toBeVisible();
 });

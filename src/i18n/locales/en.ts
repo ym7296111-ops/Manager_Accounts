@@ -365,6 +365,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.tabs.stations': 'Stations & Warehouses',
   'settings.project.tabs.classifications': 'Classifications',
   'settings.project.tabs.parties': 'Inbound & Outbound',
+  'settings.project.tabs.sisterCompanies': 'Sister companies',
   'settings.project.tabs.general': 'General',
   'settings.project.stations.add': 'Add station',
   'settings.project.stations.addWarehouse': 'Add warehouse',
@@ -502,10 +503,9 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.classifications.error.unknown': 'Could not load classifications.',
   'settings.project.parties.heading': 'Inbound & outbound parties',
   'settings.project.parties.description':
-    'Counterparties, split by the direction of the relationship: inbound parties (local and foreign suppliers), outbound parties (customers, with no local/foreign split) and sister companies as a parent → branches tree.',
+    'Counterparties, split by the direction of the relationship: inbound parties (local and foreign suppliers) and outbound parties (customers, with no local/foreign split). Sister companies have a tab of their own under Project Settings.',
   'settings.project.parties.tabs.inbound': 'Inbound parties',
   'settings.project.parties.tabs.outbound': 'Outbound parties',
-  'settings.project.parties.tabs.sister': 'Sister companies',
   'settings.project.parties.inbound.description':
     'The suppliers we buy from — local and foreign — each with its own code sequence (LOC / FRN).',
   'settings.project.parties.outbound.description':

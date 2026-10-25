@@ -4,9 +4,6 @@ import type * as PartiesModule from '@/hooks/useParties';
 import { PartiesError, type Party } from '@/hooks/useParties';
 import type * as PartiesMutationsModule from '@/hooks/usePartiesMutations';
 import { PartyWriteError } from '@/hooks/usePartiesMutations';
-import type * as SisterCompaniesModule from '@/hooks/useSisterCompanies';
-import type { SisterCompany } from '@/hooks/useSisterCompanies';
-import type * as SisterCompaniesMutationsModule from '@/hooks/useSisterCompaniesMutations';
 import { I18nProvider } from '@/i18n/I18nContext';
 import Parties from '@/pages/settings/Parties';
 
@@ -24,32 +21,18 @@ interface MutationStub {
   isPending: boolean;
 }
 
-interface SisterQueryStub {
-  isLoading: boolean;
-  isError: boolean;
-  isSuccess: boolean;
-  data: readonly SisterCompany[] | undefined;
-  error: unknown;
-  refetch: ReturnType<typeof vi.fn>;
-}
-
-const { queryState, sisterState, mutations } = vi.hoisted(() => {
+const { queryState, mutations } = vi.hoisted(() => {
   const make = (): { mutate: ReturnType<typeof vi.fn>; isPending: boolean } => ({
     mutate: vi.fn(),
     isPending: false,
   });
   return {
     queryState: { value: null as unknown as QueryStub },
-    sisterState: { value: null as unknown as SisterQueryStub },
     mutations: {
       create: make(),
       update: make(),
       toggle: make(),
       remove: make(),
-      createSister: make(),
-      renameSister: make(),
-      toggleSister: make(),
-      removeSister: make(),
     },
   };
 });
@@ -67,22 +50,6 @@ vi.mock('@/hooks/usePartiesMutations', async (importOriginal) => {
     useUpdateParty: () => mutations.update,
     useSetPartyActive: () => mutations.toggle,
     useDeleteParty: () => mutations.remove,
-  };
-});
-
-vi.mock('@/hooks/useSisterCompanies', async (importOriginal) => {
-  const actual = await importOriginal<typeof SisterCompaniesModule>();
-  return { ...actual, useSisterCompanies: () => sisterState.value };
-});
-
-vi.mock('@/hooks/useSisterCompaniesMutations', async (importOriginal) => {
-  const actual = await importOriginal<typeof SisterCompaniesMutationsModule>();
-  return {
-    ...actual,
-    useCreateSisterCompany: () => mutations.createSister,
-    useRenameSisterCompany: () => mutations.renameSister,
-    useSetSisterCompanyActive: () => mutations.toggleSister,
-    useDeleteSisterCompany: () => mutations.removeSister,
   };
 });
 
@@ -136,26 +103,6 @@ const INACTIVE_CUSTOMER = party({
 
 const DIRECTORY: readonly Party[] = [LOCAL_SUPPLIER, FOREIGN_SUPPLIER, CUSTOMER, INACTIVE_CUSTOMER];
 
-const SISTER_COMPANY: SisterCompany = {
-  id: 'sc1',
-  parentId: null,
-  level: 1,
-  code: 'SIS-001',
-  name: 'الشركة المتحدة للخدمات اللوجستية',
-  isActive: true,
-  branches: [
-    {
-      id: 'sc1-1',
-      parentId: 'sc1',
-      level: 2,
-      code: 'SIS-001-01',
-      name: 'المتحدة للنقل الثقيل',
-      isActive: true,
-      branches: [],
-    },
-  ],
-};
-
 function setQuery(patch: Partial<QueryStub> = {}) {
   const initial: QueryStub = {
     isLoading: false,
@@ -167,19 +114,6 @@ function setQuery(patch: Partial<QueryStub> = {}) {
   };
   queryState.value = { ...initial, ...patch };
   return queryState.value;
-}
-
-function setSisterQuery(patch: Partial<SisterQueryStub> = {}) {
-  const initial: SisterQueryStub = {
-    isLoading: false,
-    isError: false,
-    isSuccess: true,
-    data: [SISTER_COMPANY],
-    error: null,
-    refetch: vi.fn(),
-  };
-  sisterState.value = { ...initial, ...patch };
-  return sisterState.value;
 }
 
 function renderScreen() {
@@ -224,7 +158,6 @@ function chooseType(dialog: HTMLElement, value: string) {
 
 beforeEach(() => {
   setQuery();
-  setSisterQuery();
   for (const stub of Object.values(mutations)) {
     stub.mutate.mockReset();
     stub.isPending = false;
@@ -234,13 +167,16 @@ beforeEach(() => {
   document.documentElement.dir = 'rtl';
 });
 
-describe('Parties — the three sub-tabs', () => {
-  it('renders inbound, outbound and sister-company tabs with inbound open first', () => {
+describe('Parties — the two sub-tabs', () => {
+  it('renders only inbound and outbound tabs, with inbound open first', () => {
     renderScreen();
 
+    expect(screen.getAllByRole('tab')).toHaveLength(2);
     expect(subTab('جهات وارد').getAttribute('aria-selected')).toBe('true');
     expect(subTab('جهات صرف').getAttribute('aria-selected')).toBe('false');
-    expect(subTab('شركات شقيقة').getAttribute('aria-selected')).toBe('false');
+    /* Sister companies are a top-level tab of Project Settings now, not a
+       a third sub-tab here. */
+    expect(screen.queryByRole('tab', { name: 'شركات شقيقة' })).toBeNull();
 
     /* The inbound table holds both supplier kinds and no customer. */
     expect(screen.getByText('شركة النيل للتوريدات الصناعية')).toBeTruthy();
@@ -259,15 +195,15 @@ describe('Parties — the three sub-tabs', () => {
     expect(screen.queryByText('Nile Trading GmbH')).toBeNull();
   });
 
-  it('mounts the sister-company tree instead of a table on the third tab', () => {
+  it('keeps the sister-company tree out of this screen entirely', () => {
     renderScreen();
-    fireEvent.click(subTab('شركات شقيقة'));
 
-    expect(screen.getByRole('heading', { name: 'شجرة الشركات الشقيقة' })).toBeTruthy();
-    expect(screen.getByText('الشركة المتحدة للخدمات اللوجستية')).toBeTruthy();
-    /* Only the active panel is mounted, so the inbound table is gone. */
-    expect(screen.queryByRole('table')).toBeNull();
-    expect(screen.queryByText('شركة النيل للتوريدات الصناعية')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'شجرة الشركات الشقيقة' })).toBeNull();
+    expect(screen.queryByText('الشركة المتحدة للخدمات اللوجستية')).toBeNull();
+    /* Both remaining panes are tables. */
+    expect(screen.getByRole('table')).toBeTruthy();
+    fireEvent.click(subTab('جهات صرف'));
+    expect(screen.getByRole('table')).toBeTruthy();
   });
 });
 

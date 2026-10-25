@@ -1,9 +1,10 @@
 /**
  * Screenshot pass for the review (not part of the suite).
  *
- * Drives the preview harness on :4173 and captures the classifications tree and
- * the three «جهات الوارد والمنصرف» sub-tabs in Arabic (default), plus English,
- * dark and mobile frames. It also exercises the two rules the review asks
+ * Drives the preview harness on :4173 and captures the classifications tree,
+ * the two «جهات الوارد والمنصرف» sub-tabs and the «الشركات الشقيقة» tab (a
+ * top-level tab of its own) in Arabic (default), plus English, dark and mobile
+ * frames. It also exercises the two rules the review asks
  * about: the outbound tab offers no type control, and a parent company with
  * branches cannot be deleted.
  */
@@ -130,9 +131,12 @@ await page.screenshot({ path: `${OUT}/parties-add-outbound.png` });
 await page.getByRole('dialog').getByRole('button', { name: 'إغلاق' }).click();
 
 // ---------------------------------------------------------------------------
-// Parties — sister companies: parent → branches tree, violet, building icon.
+// Sister companies — a top-level tab now: the parent → branches tree opens
+// directly, with no sub-tabs of its own.
 // ---------------------------------------------------------------------------
-await openPartiesSubTab('sister');
+await openSettingsTab('sisterCompanies', 'شجرة الشركات الشقيقة');
+const sisterSubTabs = await page.locator('[id^="parties-subtab-"]').count();
+expect(sisterSubTabs === 0, 'the sister-companies tab must not carry sub-tabs');
 await page.getByText('الشركة المتحدة للخدمات اللوجستية').waitFor();
 await page.screenshot({ path: `${OUT}/parties-sister.png` });
 
@@ -203,7 +207,7 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'networkidle' });
 await page.evaluate(() => document.documentElement.classList.add('dark'));
-await page.locator('#parties-subtab-sister').click();
+await page.locator('#project-settings-tab-sisterCompanies').click();
 await toggleNamed('الشركة المتحدة للخدمات اللوجستية').click();
 await page.getByText('SIS-001-01', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-sister-dark.png` });

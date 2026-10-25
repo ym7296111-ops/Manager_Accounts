@@ -1,20 +1,22 @@
-import { ArrowDownToLine, ArrowUpFromLine, Building2, type LucideIcon } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import PartiesDirectory from '@/pages/settings/PartiesDirectory';
-import SisterCompanies from '@/pages/settings/SisterCompanies';
 
 /**
- * Parties — «جهات الوارد والمنصرف» — split into the three groups the company
- * actually works with:
+ * Parties — «جهات الوارد والمنصرف» — split by the direction of the relationship
+ * into the two flat groups the company actually works with:
  *
  *   inbound   green   ArrowDownToLine   local suppliers + foreign suppliers
  *   outbound  orange  ArrowUpFromLine   customers (no local/foreign split)
- *   sister    violet  Building2         a two-level tree: parent → branches
  *
  * Each group is a sub-tab of its own, with its own icon and colour, and only
- * the open sub-tab is mounted — so switching costs no background queries, and
- * the inbound/outbound tables and the sister tree keep separate caches.
+ * the open sub-tab is mounted — so switching costs no background queries and
+ * the two tables keep separate caches.
+ *
+ * Sister companies deliberately do NOT live here: that screen is a two-level
+ * parent → branch tree with its own purpose (intercompany transfers), while
+ * these two are flat lists. It is a top-level tab of Project Settings.
  *
  * The split is also a write rule, not decoration: the create dialog in the
  * inbound tab offers `local_supplier` / `foreign_supplier` only, and the
@@ -26,7 +28,7 @@ import SisterCompanies from '@/pages/settings/SisterCompanies';
  * 20261108000000, and the UI carries no trace of it.
  */
 
-export type PartiesSubTab = 'inbound' | 'outbound' | 'sister';
+export type PartiesSubTab = 'inbound' | 'outbound';
 
 interface SubTabConfig {
   readonly id: PartiesSubTab;
@@ -52,13 +54,6 @@ const SUB_TABS: readonly SubTabConfig[] = [
     icon: ArrowUpFromLine,
     activeClass: 'border-orange-500/50 bg-orange-500/10 text-orange-600 dark:text-orange-400',
     iconClass: 'text-orange-600 dark:text-orange-400',
-  },
-  {
-    id: 'sister',
-    labelKey: 'settings.project.parties.tabs.sister',
-    icon: Building2,
-    activeClass: 'border-violet-500/50 bg-violet-500/10 text-violet-600 dark:text-violet-400',
-    iconClass: 'text-violet-600 dark:text-violet-400',
   },
 ];
 
@@ -120,11 +115,7 @@ export default function Parties() {
         id={`parties-subtabpanel-${activeConfig.id}`}
         aria-labelledby={`parties-subtab-${activeConfig.id}`}
       >
-        {activeConfig.id === 'sister' ? (
-          <SisterCompanies />
-        ) : (
-          <PartiesDirectory scope={activeConfig.id} />
-        )}
+        <PartiesDirectory scope={activeConfig.id} />
       </div>
     </section>
   );
