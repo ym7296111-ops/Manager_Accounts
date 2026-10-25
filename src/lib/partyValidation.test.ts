@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
+  INBOUND_PARTY_TYPES,
+  OUTBOUND_PARTY_TYPES,
+  PARTY_TYPES,
+  isInboundPartyType,
   isPartyPaymentTerms,
   isPartyType,
   isValidPartyEmail,
+  partyTypesForScope,
   roundCreditLimit,
-  supportsCreditTerms,
   validatePartyForm,
   type PartyFormRaw,
 } from '@/lib/partyValidation';
 
 function raw(patch: Partial<PartyFormRaw> = {}): PartyFormRaw {
   return {
-    type: 'supplier',
+    type: 'local_supplier',
     name: 'شركة النيل للتوريدات',
     taxNumber: '',
     commercialRegister: '',
@@ -26,22 +30,32 @@ function raw(patch: Partial<PartyFormRaw> = {}): PartyFormRaw {
 }
 
 describe('party type helpers', () => {
-  it('accepts exactly the four CHECK types', () => {
-    expect(isPartyType('supplier')).toBe(true);
+  it('accepts exactly the three CHECK types', () => {
+    expect(PARTY_TYPES).toEqual(['local_supplier', 'foreign_supplier', 'customer']);
+    expect(isPartyType('local_supplier')).toBe(true);
+    expect(isPartyType('foreign_supplier')).toBe(true);
     expect(isPartyType('customer')).toBe(true);
-    expect(isPartyType('sister_company')).toBe(true);
-    expect(isPartyType('internal')).toBe(true);
     expect(isPartyType('')).toBe(false);
     expect(isPartyType('vendor')).toBe(false);
     expect(isPartyType(null)).toBe(false);
     expect(isPartyType(42)).toBe(false);
   });
 
-  it('grants credit terms to suppliers and customers only', () => {
-    expect(supportsCreditTerms('supplier')).toBe(true);
-    expect(supportsCreditTerms('customer')).toBe(true);
-    expect(supportsCreditTerms('sister_company')).toBe(false);
-    expect(supportsCreditTerms('internal')).toBe(false);
+  it('retires the old vocabulary: supplier, sister_company and internal are not types', () => {
+    expect(isPartyType('supplier')).toBe(false);
+    expect(isPartyType('sister_company')).toBe(false);
+    expect(isPartyType('internal')).toBe(false);
+  });
+
+  it('splits the types across the two sub-tabs', () => {
+    expect(INBOUND_PARTY_TYPES).toEqual(['local_supplier', 'foreign_supplier']);
+    expect(OUTBOUND_PARTY_TYPES).toEqual(['customer']);
+    expect(partyTypesForScope('inbound')).toEqual(['local_supplier', 'foreign_supplier']);
+    expect(partyTypesForScope('outbound')).toEqual(['customer']);
+
+    expect(isInboundPartyType('local_supplier')).toBe(true);
+    expect(isInboundPartyType('foreign_supplier')).toBe(true);
+    expect(isInboundPartyType('customer')).toBe(false);
   });
 
   it('accepts exactly the payment-terms set', () => {
@@ -75,7 +89,7 @@ describe('roundCreditLimit', () => {
 });
 
 describe('validatePartyForm', () => {
-  it('normalizes a full supplier form (trim, nulls, parsed credit terms)', () => {
+  it('normalizes a full local-supplier form (trim, nulls, parsed credit terms)', () => {
     const result = validatePartyForm(
       raw({
         name: '  شركة النيل للتوريدات الصناعية  ',
@@ -93,7 +107,7 @@ describe('validatePartyForm', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        type: 'supplier',
+        type: 'local_supplier',
         name: 'شركة النيل للتوريدات الصناعية',
         taxNumber: '123456789',
         commercialRegister: null,
@@ -107,9 +121,31 @@ describe('validatePartyForm', () => {
     });
   });
 
+  it('accepts a foreign supplier with its own type', () => {
+    const result = validatePartyForm(raw({ type: 'foreign_supplier', name: 'Nile Trading GmbH' }));
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.type).toBe('foreign_supplier');
+      expect(result.value.name).toBe('Nile Trading GmbH');
+    }
+  });
+
   it('requires the one-time type choice', () => {
     const result = validatePartyForm(raw({ type: '' }));
     expect(result).toEqual({ ok: false, errors: { type: 'required' } });
+  });
+
+  it('refuses a type outside the sub-tab it was opened from', () => {
+    /* The outbound tab allows customers only: a tampered form that asks for a
+       local supplier must be refused before it can mint from LOC. */
+    const result = validatePartyForm(raw({ type: 'local_supplier' }), OUTBOUND_PARTY_TYPES);
+    expect(result).toEqual({ ok: false, errors: { type: 'required' } });
+
+    const inbound = validatePartyForm(raw({ type: 'customer' }), INBOUND_PARTY_TYPES);
+    expect(inbound).toEqual({ ok: false, errors: { type: 'required' } });
+
+    const customer = validatePartyForm(raw({ type: 'customer' }), OUTBOUND_PARTY_TYPES);
+    expect(customer.ok).toBe(true);
   });
 
   it('reports the shared name rule (required, then two characters)', () => {
@@ -151,7 +187,7 @@ describe('validatePartyForm', () => {
     }
   });
 
-  it('rejects negative, non-numeric and out-of-set credit values for credit types', () => {
+  it('rejects negative, non-numeric and out-of-set credit values', () => {
     expect(validatePartyForm(raw({ creditLimit: '-5' }))).toEqual({
       ok: false,
       errors: { creditLimit: 'invalidCreditLimit' },
@@ -166,28 +202,15 @@ describe('validatePartyForm', () => {
     });
   });
 
-  it('strips credit terms for sister companies instead of carrying them through', () => {
+  it('carries credit terms for customers too — every remaining type is a counterparty', () => {
     const result = validatePartyForm(
-      raw({ type: 'sister_company', creditLimit: '5000', paymentTerms: '30' }),
+      raw({ type: 'customer', creditLimit: '5000', paymentTerms: '30' }),
+      OUTBOUND_PARTY_TYPES,
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.creditLimit).toBeNull();
-      expect(result.value.paymentTerms).toBeNull();
-    }
-  });
-
-  it('ignores leftover credit garbage for internal parties (the fields are not rendered)', () => {
-    /* A user can pick "customer", type into the credit fields, then switch to
-       "internal": the hidden leftovers must neither block the submit nor leak
-       into the normalized values. */
-    const result = validatePartyForm(
-      raw({ type: 'internal', creditLimit: 'garbage', paymentTerms: '999' }),
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.creditLimit).toBeNull();
-      expect(result.value.paymentTerms).toBeNull();
+      expect(result.value.creditLimit).toBe(5000);
+      expect(result.value.paymentTerms).toBe(30);
     }
   });
 });

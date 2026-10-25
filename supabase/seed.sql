@@ -224,69 +224,69 @@ $seed_classifications$;
 
 
 -- ---------------------------------------------------------------------------
--- Demo parties (Project Settings → Parties): one counterparty per type.
+-- Demo parties (Project Settings → جهات الوارد والمنصرف): two inbound
+-- counterparties (one local supplier, one foreign supplier) and one outbound
+-- customer, plus a sister-company tree with two branches.
 --
 -- Local/e2e only, exactly like the stations and classifications seeds:
 -- `supabase db push --linked` never applies this file, so production stays
--- empty until real parties are entered through the UI.
+-- empty until real counterparties are entered through the UI.
 --
--- `code` is deliberately NOT supplied. `parties_before_write` mints it from
--- the per-type sequence, so the four rows land as SUP-001 / CUS-001 / SIS-001
--- / INT-001 and each sequence stays in step with the rows it numbered —
--- writing explicit codes here would make the first UI-created party mint a
--- code that already exists.
---
--- Credit terms are set only on the supplier and the customer. That mirrors
--- the UI rule for sister companies, and for the internal party it is also a
--- database rule (`parties_internal_no_credit_terms` would reject the row).
+-- `code` is deliberately NOT supplied. `parties_before_write` mints it from the
+-- per-type sequence, so the rows land as LOC-001 / FRN-001 / CUS-001 and each
+-- sequence stays in step with the rows it numbered — writing explicit codes
+-- here would make the first UI-created party mint a code that already exists.
+-- The sister-company codes (SIS-001, SIS-001-01, SIS-001-02) are minted the
+-- same way by `sister_companies_before_write`.
 -- ---------------------------------------------------------------------------
 do $seed_parties$
 declare
   v_existing integer;
+  v_sister uuid;
 begin
   select count(*)::integer into v_existing from public.parties;
-  if v_existing > 0 then
-    return;
+  if v_existing = 0 then
+    insert into public.parties (
+      type, name, tax_number, commercial_register, address,
+      contact_person, phone, email, credit_limit, payment_terms, is_active
+    )
+    values (
+      'local_supplier', 'شركة النيل للتوريدات الصناعية', '123456789', '101010',
+      'المنطقة الصناعية، مدينة السادس من أكتوبر', 'أحمد سامي', '+20238200000',
+      'sales@nile-supplies.example.com', 250000.00, 30, true
+    );
+
+    insert into public.parties (
+      type, name, tax_number, commercial_register, address,
+      contact_person, phone, email, credit_limit, payment_terms, is_active
+    )
+    values (
+      'foreign_supplier', 'Nile Trading GmbH', 'DE-556677', 'HRB-99881',
+      'Hafenstraße 12, Hamburg', 'Lena Fischer', '+494012345678',
+      'orders@nile-trading.example.com', 500000.00, 15, true
+    );
+
+    insert into public.parties (
+      type, name, tax_number, commercial_register, address,
+      contact_person, phone, email, credit_limit, payment_terms, is_active
+    )
+    values (
+      'customer', 'مؤسسة الأفق للتجارة والتوزيع', '987654321', '202020',
+      'شارع الجمهورية، القاهرة', 'منى خليل', '+20225700000',
+      'purchases@horizon-trade.example.com', 150000.00, 60, true
+    );
   end if;
 
-  insert into public.parties (
-    type, name, tax_number, commercial_register, address,
-    contact_person, phone, email, credit_limit, payment_terms, is_active
-  )
-  values (
-    'supplier', 'شركة النيل للتوريدات الصناعية', '123456789', '101010',
-    'المنطقة الصناعية، مدينة السادس من أكتوبر', 'أحمد سامي', '+20238200000',
-    'sales@nile-supplies.example.com', 250000.00, 30, true
-  );
+  select count(*)::integer into v_existing from public.sister_companies;
+  if v_existing = 0 then
+    insert into public.sister_companies (name, is_active)
+    values ('الشركة المتحدة للخدمات اللوجستية', true)
+    returning id into v_sister;
 
-  insert into public.parties (
-    type, name, tax_number, commercial_register, address,
-    contact_person, phone, email, credit_limit, payment_terms, is_active
-  )
-  values (
-    'customer', 'مؤسسة الأفق للتجارة والتوزيع', '987654321', '202020',
-    'شارع الجمهورية، القاهرة', 'منى خليل', '+20225700000',
-    'purchases@horizon-trade.example.com', 150000.00, 60, true
-  );
-
-  insert into public.parties (
-    type, name, tax_number, commercial_register, address,
-    contact_person, phone, email, credit_limit, payment_terms, is_active
-  )
-  values (
-    'sister_company', 'الشركة المتحدة للخدمات اللوجستية', '555444333', '303030',
-    'طريق مصر الإسماعيلية الصحراوي', 'خالد رمزي', '+20226300000',
-    'ops@united-logistics.example.com', null, null, true
-  );
-
-  insert into public.parties (
-    type, name, tax_number, commercial_register, address,
-    contact_person, phone, email, credit_limit, payment_terms, is_active
-  )
-  values (
-    'internal', 'إدارة الصيانة والتشغيل', null, null,
-    'المبنى الإداري الرئيسي', 'عمرو فتحي', '+20224000000',
-    null, null, null, true
-  );
+    insert into public.sister_companies (parent_id, name, is_active)
+    values
+      (v_sister, 'المتحدة للنقل الثقيل', true),
+      (v_sister, 'المتحدة للتخليص الجمركي', false);
+  end if;
 end;
 $seed_parties$;

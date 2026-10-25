@@ -131,7 +131,7 @@ beforeEach(() => {
 });
 
 const createInput = (patch: Partial<CreatePartyInput> = {}): CreatePartyInput => ({
-  type: 'supplier',
+  type: 'local_supplier',
   name: 'شركة النيل للتوريدات',
   ...patch,
 });
@@ -149,7 +149,7 @@ describe('buildCreatePayload', () => {
     );
 
     expect(payload).toEqual({
-      type: 'supplier',
+      type: 'local_supplier',
       name: 'شركة النيل للتوريدات الصناعية',
       tax_number: '123456789',
       commercial_register: null,
@@ -169,14 +169,15 @@ describe('buildCreatePayload', () => {
     expect(payload.payment_terms).toBeNull();
   });
 
-  it('omits both credit keys for sister companies and internal parties, even when supplied', () => {
-    for (const type of ['sister_company', 'internal'] as const) {
-      const payload = buildCreatePayload(
-        createInput({ type, creditLimit: 5000, paymentTerms: 30 }),
-      );
-      expect(payload).not.toHaveProperty('credit_limit');
-      expect(payload).not.toHaveProperty('payment_terms');
-    }
+  it('sends both credit keys for every remaining type, including a foreign supplier', () => {
+    const payload = buildCreatePayload(
+      createInput({ type: 'foreign_supplier', creditLimit: 5000, paymentTerms: 30 }),
+    );
+    expect(payload).toMatchObject({
+      type: 'foreign_supplier',
+      credit_limit: 5000,
+      payment_terms: 30,
+    });
   });
 
   it('refuses an invalid name, email, credit value or type before any request can happen', () => {
@@ -188,6 +189,10 @@ describe('buildCreatePayload', () => {
       { creditLimit: Number.NaN },
       { paymentTerms: 45 as CreatePartyInput['paymentTerms'] },
       { type: 'vendor' as PartyType },
+      /* Retired types cannot mint codes any more. */
+      { type: 'supplier' as PartyType },
+      { type: 'internal' as PartyType },
+      { type: 'sister_company' as PartyType },
     ];
     for (const patch of invalid) {
       expect(() => buildCreatePayload(createInput(patch))).toThrowError(PartyWriteError);
@@ -197,7 +202,7 @@ describe('buildCreatePayload', () => {
 
 describe('buildUpdatePayload', () => {
   it('never carries the immutable type or code', () => {
-    const payload = buildUpdatePayload('customer', {
+    const payload = buildUpdatePayload({
       name: 'مؤسسة الأفق للتجارة',
       creditLimit: 150000,
       paymentTerms: 60,
@@ -212,19 +217,19 @@ describe('buildUpdatePayload', () => {
     });
   });
 
-  it('omits credit keys (not nulls) for a sister company, so an edit cannot wipe unseen values', () => {
-    const payload = buildUpdatePayload('sister_company', {
-      name: 'الشركة المتحدة',
-      creditLimit: 9000,
-      paymentTerms: 90,
+  it('writes explicit nulls when the user clears the credit terms', () => {
+    const payload = buildUpdatePayload({
+      name: 'مؤسسة الأفق للتجارة',
+      creditLimit: null,
+      paymentTerms: null,
     });
-    expect(payload).not.toHaveProperty('credit_limit');
-    expect(payload).not.toHaveProperty('payment_terms');
+    expect(payload.credit_limit).toBeNull();
+    expect(payload.payment_terms).toBeNull();
   });
 
-  it('rejects an invalid name and an unknown rule-context type', () => {
-    expect(() => buildUpdatePayload('supplier', { name: '' })).toThrowError(PartyWriteError);
-    expect(() => buildUpdatePayload('vendor' as PartyType, { name: 'اسم صالح' })).toThrowError(
+  it('rejects an invalid name and an out-of-set credit value', () => {
+    expect(() => buildUpdatePayload({ name: '' })).toThrowError(PartyWriteError);
+    expect(() => buildUpdatePayload({ name: 'اسم صالح', paymentTerms: 45 as never })).toThrowError(
       PartyWriteError,
     );
   });
@@ -311,7 +316,6 @@ describe('useUpdateParty', () => {
 
     result.current.mutate({
       id: 'p1',
-      type: 'customer',
       name: 'مؤسسة الأفق للتجارة والتوزيع',
       creditLimit: 150000,
       paymentTerms: 60,
@@ -328,27 +332,26 @@ describe('useUpdateParty', () => {
     expect(recorded.eq).toEqual(['id', 'p1']);
   });
 
-  it('strips credit terms from an internal party update', async () => {
+  it('clears credit terms by sending nulls, not by omitting the keys', async () => {
     const { result } = mountHook(() => useUpdateParty());
 
     result.current.mutate({
       id: 'p9',
-      type: 'internal',
-      name: 'إدارة الصيانة والتشغيل',
-      creditLimit: 1234,
-      paymentTerms: 15,
+      name: 'عميل بلا ائتمان',
+      creditLimit: null,
+      paymentTerms: null,
     });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(recorded.update).not.toHaveProperty('credit_limit');
-    expect(recorded.update).not.toHaveProperty('payment_terms');
+    expect(recorded.update).toHaveProperty('credit_limit', null);
+    expect(recorded.update).toHaveProperty('payment_terms', null);
   });
 
   it('reports a row that vanished as notFound', async () => {
     respondWith(null, { code: 'PGRST116' });
     const { result } = mountHook(() => useUpdateParty());
 
-    result.current.mutate({ id: 'gone', type: 'supplier', name: 'اسم صالح' });
+    result.current.mutate({ id: 'gone', name: 'اسم صالح' });
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect((result.current.error as PartyWriteError).code).toBe('notFound');
   });

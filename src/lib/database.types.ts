@@ -9,7 +9,9 @@
  * stations/warehouses, classifications and parties tables
  * (`20261104030000_stations_and_warehouses.sql`,
  * `20261104040000_classifications_schema.sql`,
- * `20261106000000_parties_schema.sql`). This file does NOT describe
+ * `20261106000000_parties_schema.sql`,
+ * `20261108000000_inbound_outbound_parties_and_sister_companies.sql`). This
+ * file does NOT describe
  * the rest of the schema (profiles, RBAC, backups, support, workspaces,
  * localization); regenerate the complete file against the linked project when
  * those contracts are needed by the client.
@@ -31,7 +33,13 @@
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type PartyType = 'supplier' | 'customer' | 'sister_company' | 'internal';
+/**
+ * The counterparty types the directory holds (20261108000000). Inbound tabs
+ * hold `local_supplier` / `foreign_supplier`; the outbound tab holds
+ * `customer`. `internal` and the flat `sister_company` type are retired —
+ * sister companies are a tree of their own, see `sister_companies`.
+ */
+export type PartyType = 'local_supplier' | 'foreign_supplier' | 'customer';
 
 export type PartyPaymentTerms = 0 | 15 | 30 | 60 | 90;
 
@@ -537,12 +545,12 @@ export type Database = {
         };
         Insert: {
           address?: string | null;
-          /** Minted server-side by `parties_before_write` (SUP-001 / CUS-001 / SIS-001 / INT-001); ignored if sent. */
+          /** Minted server-side by `parties_before_write` (LOC-001 / FRN-001 / CUS-001); ignored if sent. */
           code?: string;
           commercial_register?: string | null;
           contact_person?: string | null;
           created_at?: string;
-          /** Supplier/customer only in the UI; a non-null value on an internal party violates `parties_internal_no_credit_terms` (23514). */
+          /** Allowed on every remaining type (both supplier kinds and customers), see `parties_credit_terms_external_only`. */
           credit_limit?: number | null;
           email?: string | null;
           id?: string;
@@ -574,6 +582,53 @@ export type Database = {
           updated_at?: string;
         };
         Relationships: [];
+      };
+      sister_companies: {
+        Row: {
+          code: string;
+          created_at: string;
+          id: string;
+          is_active: boolean;
+          /** 1 for a parent company, 2 for a branch; derived server-side. */
+          level: number;
+          name: string;
+          parent_id: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          /** Minted server-side (SIS-001 for a parent, SIS-001-01 for a branch); never send it. */
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          /** Derived server-side from `parent_id`; ignored if sent. */
+          level?: number;
+          name: string;
+          parent_id?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          /** Immutable after creation; updating raises 22023. */
+          code?: string;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          /** Immutable after creation; updating raises 22023. */
+          level?: number;
+          name?: string;
+          /** Immutable after creation; updating raises 22023. */
+          parent_id?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'sister_companies_parent_id_fkey';
+            columns: ['parent_id'];
+            isOneToOne: false;
+            referencedRelation: 'sister_companies';
+            referencedColumns: ['id'];
+          },
+        ];
       };
       stations: {
         Row: {

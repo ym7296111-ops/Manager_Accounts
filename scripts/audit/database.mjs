@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 47);
+    assert.equal(migrations.length, 48);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1850,6 +1850,9 @@ try {
     assert.ok(migrations.includes('20261105000000_classifications_unbounded_depth.sql'));
     assert.ok(migrations.includes('20261106000000_parties_schema.sql'));
     assert.ok(migrations.includes('20261107000000_parties_internal_no_credit_terms.sql'));
+    assert.ok(
+      migrations.includes('20261108000000_inbound_outbound_parties_and_sister_companies.sql'),
+    );
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2165,7 +2168,7 @@ try {
       await db.query("select set_config('classifications.deriving_level', 'off', false)");
     }
   });
-  await test('parties: per-type sequence codes, immutable type/code, CHECK constraints, and RLS gate', async () => {
+  await test('parties: inbound/outbound types, per-type codes, immutable identity, CHECKs, and RLS gate', async () => {
     const columns = await db.query(
       "select column_name from information_schema.columns where table_schema='public' and table_name='parties' order by ordinal_position",
     );
@@ -2188,6 +2191,39 @@ try {
         'created_at',
         'updated_at',
       ],
+    );
+
+    // The retired vocabulary is gone from the schema entirely.
+    const typeCheck = await db.query(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_type_check'",
+    );
+    assert.ok(typeCheck.rows[0]?.def.includes('local_supplier'));
+    assert.ok(typeCheck.rows[0]?.def.includes('foreign_supplier'));
+    assert.ok(typeCheck.rows[0]?.def.includes('customer'));
+    assert.equal(typeCheck.rows[0]?.def.includes('internal'), false);
+    assert.equal(typeCheck.rows[0]?.def.includes("'supplier'"), false);
+    assert.equal(typeCheck.rows[0]?.def.includes('sister_company'), false);
+
+    const codeCheck = await db.query(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_code_matches_type'",
+    );
+    for (const prefix of ['LOC-', 'FRN-', 'CUS-']) {
+      assert.ok(
+        codeCheck.rows[0]?.def.includes(prefix),
+        `parties_code_matches_type must name ${prefix}`,
+      );
+    }
+    assert.equal(codeCheck.rows[0]?.def.includes('SUP-'), false);
+    assert.equal(codeCheck.rows[0]?.def.includes('SIS-'), false);
+    assert.equal(codeCheck.rows[0]?.def.includes('INT-'), false);
+
+    assert.ok(
+      (
+        await db.query(
+          "select 1 from pg_constraint where conrelid='public.parties'::regclass and conname='parties_credit_terms_external_only'",
+        )
+      ).rowCount,
+      'parties_credit_terms_external_only must exist',
     );
 
     // Forced RLS + the four permissive project.settings:manage policies.
@@ -2232,13 +2268,13 @@ try {
       );
     }
 
-    // API roles cannot call nextval() directly on any of the four sequences,
-    // nor invoke the SECURITY DEFINER trigger function directly.
+    // API roles cannot call nextval() directly on any live sequence, nor
+    // invoke the SECURITY DEFINER trigger function directly. The three
+    // sequences of the retired vocabulary must be gone.
     for (const seq of [
-      'public.party_supplier_code_seq',
+      'public.party_local_supplier_code_seq',
+      'public.party_foreign_supplier_code_seq',
       'public.party_customer_code_seq',
-      'public.party_sister_company_code_seq',
-      'public.party_internal_code_seq',
     ]) {
       for (const role of ['anon', 'authenticated']) {
         assert.equal(
@@ -2248,6 +2284,17 @@ try {
           `${role} must not have USAGE on ${seq}`,
         );
       }
+    }
+    for (const retired of [
+      'party_supplier_code_seq',
+      'party_sister_company_code_seq',
+      'party_internal_code_seq',
+    ]) {
+      assert.equal(
+        (await db.query('select to_regclass($1) as oid', [`public.${retired}`])).rows[0].oid,
+        null,
+        `${retired} must not exist any more`,
+      );
     }
     for (const role of ['anon', 'authenticated', 'service_role']) {
       assert.equal(
@@ -2271,10 +2318,19 @@ try {
 
     const createdIds = [];
     try {
-      // 1) Invalid `type` values are rejected with 23514 without burning any sequence value,
-      //    and NULL `type` fails NOT NULL with 23502.
-      const supNextBeforeBadType = await nextPartyCode('party_supplier_code_seq', 'SUP');
-      for (const badType of ['vendor', 'partner', '', 'SUPPLIER', ' supplier ']) {
+      // 1) Retired and unknown types are rejected with 23514 without burning a
+      //    sequence value, and NULL `type` fails NOT NULL with 23502.
+      const locNextBeforeBadType = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
+      for (const badType of [
+        'supplier',
+        'internal',
+        'sister_company',
+        'vendor',
+        'partner',
+        '',
+        'LOCAL_SUPPLIER',
+        ' local_supplier ',
+      ]) {
         await expectCode('23514', () =>
           db.query('insert into public.parties (type, name) values ($1, $2)', [
             badType,
@@ -2286,15 +2342,15 @@ try {
         db.query('insert into public.parties (type, name) values (null, $1)', ['جهة بلا نوع']),
       );
       assert.equal(
-        await nextPartyCode('party_supplier_code_seq', 'SUP'),
-        supNextBeforeBadType,
+        await nextPartyCode('party_local_supplier_code_seq', 'LOC'),
+        locNextBeforeBadType,
         'rejected party types must not advance any sequence',
       );
 
-      // 2) Allowed `type` values each mint from their own independent sequence,
-      //    and client-supplied `code` is overwritten server-side.
-      const expectedSup1 = await nextPartyCode('party_supplier_code_seq', 'SUP');
-      const sup1 = (
+      // 2) Each live type mints from its own sequence, and a client-supplied
+      //    code is overwritten server-side.
+      const expectedLoc1 = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
+      const loc1 = (
         await asRole('authenticated', A, (c) =>
           c.query(
             `insert into public.parties (
@@ -2304,7 +2360,7 @@ try {
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              returning *`,
             [
-              'supplier',
+              'local_supplier',
               'شركة النيل للتوريدات',
               '300-111-222',
               'CR-10293',
@@ -2318,32 +2374,29 @@ try {
           ),
         )
       ).rows[0];
-      createdIds.push(sup1.id);
-      assert.equal(sup1.code, expectedSup1);
-      assert.match(sup1.code, /^SUP-\d{3,}$/);
-      assert.equal(sup1.is_active, true);
-      assert.equal(Number(sup1.credit_limit), 250000.5);
-      assert.equal(sup1.payment_terms, 30);
+      createdIds.push(loc1.id);
+      assert.equal(loc1.code, expectedLoc1);
+      assert.match(loc1.code, /^LOC-\d{3,}$/);
+      assert.equal(loc1.is_active, true);
+      assert.equal(Number(loc1.credit_limit), 250000.5);
+      assert.equal(loc1.payment_terms, 30);
 
-      // Second supplier advances SUP independently; client-supplied bogus code is ignored.
-      const expectedSup2 = await nextPartyCode('party_supplier_code_seq', 'SUP');
-      const sup2 = (
+      const expectedLoc2 = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
+      const loc2 = (
         await asRole('authenticated', A, (c) =>
           c.query(
             'insert into public.parties (type, name, code) values ($1, $2, $3) returning id, code',
-            ['supplier', 'مورد ثانٍ للاختبار', 'CUS-999'],
+            ['local_supplier', 'مورد محلي ثانٍ للاختبار', 'CUS-999'],
           ),
         )
       ).rows[0];
-      createdIds.push(sup2.id);
-      assert.equal(sup2.code, expectedSup2);
-      assert.notEqual(sup2.code, 'CUS-999');
+      createdIds.push(loc2.id);
+      assert.equal(loc2.code, expectedLoc2);
+      assert.notEqual(loc2.code, 'CUS-999');
 
-      // Other three types each start / advance their own sequence independently.
       for (const [partyType, seqName, prefix, label] of [
+        ['foreign_supplier', 'party_foreign_supplier_code_seq', 'FRN', 'Nile Trading GmbH'],
         ['customer', 'party_customer_code_seq', 'CUS', 'عميل جملة للاختبار'],
-        ['sister_company', 'party_sister_company_code_seq', 'SIS', 'الشركة الشقيقة للنقل'],
-        ['internal', 'party_internal_code_seq', 'INT', 'إدارة الصيانة الداخلية'],
       ]) {
         const expected = await nextPartyCode(seqName, prefix);
         const row = (
@@ -2360,87 +2413,87 @@ try {
         assert.match(row.code, new RegExp(`^${prefix}-\\d{3,}$`));
       }
 
-      // Padding width guard: 999 -> INT-999, 1000 -> INT-1000 (never truncated to INT-100).
-      const savedIntSeq = (
-        await db.query('select last_value, is_called from public.party_internal_code_seq')
+      // Padding width guard: 999 -> FRN-999, 1000 -> FRN-1000 (never FRN-100).
+      const savedFrnSeq = (
+        await db.query('select last_value, is_called from public.party_foreign_supplier_code_seq')
       ).rows[0];
       try {
-        await db.query("select setval('public.party_internal_code_seq', 998, true)");
+        await db.query('select setval($1, 998, true)', ['public.party_foreign_supplier_code_seq']);
         const row999 = (
           await db.query(
-            "insert into public.parties (type, name) values ('internal', 'قسم 999') returning id, code",
+            "insert into public.parties (type, name) values ('foreign_supplier', 'أجنبي 999') returning id, code",
           )
         ).rows[0];
         const row1000 = (
           await db.query(
-            "insert into public.parties (type, name) values ('internal', 'قسم 1000') returning id, code",
+            "insert into public.parties (type, name) values ('foreign_supplier', 'أجنبي 1000') returning id, code",
           )
         ).rows[0];
-        assert.equal(row999.code, 'INT-999');
-        assert.equal(row1000.code, 'INT-1000');
+        assert.equal(row999.code, 'FRN-999');
+        assert.equal(row1000.code, 'FRN-1000');
         await db.query('delete from public.parties where id = any($1::uuid[])', [
           [row999.id, row1000.id],
         ]);
       } finally {
         await db.query('select setval($1, $2, $3)', [
-          'public.party_internal_code_seq',
-          savedIntSeq.last_value,
-          savedIntSeq.is_called,
+          'public.party_foreign_supplier_code_seq',
+          savedFrnSeq.last_value,
+          savedFrnSeq.is_called,
         ]);
       }
 
       // 3) Immutability on UPDATE: changing `type` or `code` is refused with 22023
       //    both for direct SQL and for an authorized API caller.
       await expectCode('22023', () =>
-        db.query("update public.parties set type = 'customer' where id = $1", [sup1.id]),
+        db.query("update public.parties set type = 'customer' where id = $1", [loc1.id]),
       );
       await expectCode('22023', () =>
-        db.query('update public.parties set type = null where id = $1', [sup1.id]),
+        db.query('update public.parties set type = null where id = $1', [loc1.id]),
       );
       await expectCode('22023', () =>
-        db.query("update public.parties set code = 'SUP-999' where id = $1", [sup1.id]),
+        db.query("update public.parties set code = 'LOC-999' where id = $1", [loc1.id]),
       );
       await expectCode('22023', () =>
-        db.query('update public.parties set code = null where id = $1', [sup1.id]),
+        db.query('update public.parties set code = null where id = $1', [loc1.id]),
       );
       await expectCode('22023', () =>
         asRole('authenticated', A, (c) =>
-          c.query("update public.parties set type = 'internal' where id = $1", [sup1.id]),
+          c.query("update public.parties set type = 'foreign_supplier' where id = $1", [loc1.id]),
         ),
       );
       await expectCode('22023', () =>
         asRole('authenticated', A, (c) =>
-          c.query("update public.parties set code = 'CUS-001' where id = $1", [sup1.id]),
+          c.query("update public.parties set code = 'CUS-001' where id = $1", [loc1.id]),
         ),
       );
 
       // Mutable fields update cleanly and advance `updated_at` via set_updated_at().
       await db.query(
         "update public.parties set updated_at = now() - interval '5 minutes' where id = $1",
-        [sup1.id],
+        [loc1.id],
       );
       const beforeStamp = (
-        await db.query('select updated_at from public.parties where id = $1', [sup1.id])
+        await db.query('select updated_at from public.parties where id = $1', [loc1.id])
       ).rows[0].updated_at;
-      const updatedSup = (
+      const updatedLoc = (
         await asRole('authenticated', A, (c) =>
           c.query(
             'update public.parties set name = $1, is_active = false where id = $2 returning name, is_active, updated_at, type, code',
-            ['شركة النيل للتوريدات المحدّثة', sup1.id],
+            ['شركة النيل للتوريدات المحدّثة', loc1.id],
           ),
         )
       ).rows[0];
-      assert.equal(updatedSup.name, 'شركة النيل للتوريدات المحدّثة');
-      assert.equal(updatedSup.is_active, false);
-      assert.equal(updatedSup.type, 'supplier');
-      assert.equal(updatedSup.code, sup1.code);
-      assert.ok(updatedSup.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
+      assert.equal(updatedLoc.name, 'شركة النيل للتوريدات المحدّثة');
+      assert.equal(updatedLoc.is_active, false);
+      assert.equal(updatedLoc.type, 'local_supplier');
+      assert.equal(updatedLoc.code, loc1.code);
+      assert.ok(updatedLoc.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
 
       // 4) payment_terms: NULL and 0/15/30/60/90 succeed; everything else fails with 23514.
       for (const validTerms of [null, 0, 15, 30, 60, 90]) {
         const res = await db.query(
           'update public.parties set payment_terms = $1 where id = $2 returning payment_terms',
-          [validTerms, sup1.id],
+          [validTerms, loc1.id],
         );
         assert.equal(res.rows[0].payment_terms, validTerms);
       }
@@ -2448,7 +2501,7 @@ try {
         await expectCode('23514', () =>
           db.query('update public.parties set payment_terms = $1 where id = $2', [
             badTerms,
-            sup1.id,
+            loc1.id,
           ]),
         );
         await expectCode('23514', () =>
@@ -2463,14 +2516,14 @@ try {
       for (const validLimit of [null, 0, '0.00', '999999999999.99']) {
         await db.query('update public.parties set credit_limit = $1 where id = $2', [
           validLimit,
-          sup1.id,
+          loc1.id,
         ]);
       }
       for (const badLimit of [-0.01, -1, -50000]) {
         await expectCode('23514', () =>
           db.query('update public.parties set credit_limit = $1 where id = $2', [
             badLimit,
-            sup1.id,
+            loc1.id,
           ]),
         );
         await expectCode('23514', () =>
@@ -2481,40 +2534,29 @@ try {
         );
       }
 
-      // 5b) parties_internal_no_credit_terms: internal parties carry neither a
-      // credit limit nor payment terms (insert and update both fail with
-      // 23514), while sister companies deliberately stay open at DB level —
-      // the UI hides the fields for them, but settlement terms remain storable.
-      const internalCreditProbe = (
-        await db.query(
-          "insert into public.parties (type, name) values ('internal', 'جهة داخلية لاختبار الائتمان') returning id",
-        )
-      ).rows[0];
-      createdIds.push(internalCreditProbe.id);
-      await expectCode('23514', () =>
-        db.query('update public.parties set credit_limit = 100 where id = $1', [
-          internalCreditProbe.id,
-        ]),
-      );
-      await expectCode('23514', () =>
-        db.query(
-          "insert into public.parties (type, name, payment_terms) values ('internal', 'جهة داخلية بشروط دفع', 30)",
-        ),
-      );
-      const sisterCreditProbe = (
-        await db.query(
-          "insert into public.parties (type, name, credit_limit, payment_terms) values ('sister_company', 'شقيقة بشروط تسوية', 100, 15) returning id, credit_limit, payment_terms",
-        )
-      ).rows[0];
-      createdIds.push(sisterCreditProbe.id);
-      assert.equal(Number(sisterCreditProbe.credit_limit), 100);
-      assert.equal(sisterCreditProbe.payment_terms, 15);
+      // 5b) Credit terms are allowed on every remaining type — both supplier
+      // kinds and customers — because all three are commercial counterparties.
+      for (const [creditType, creditLabel] of [
+        ['local_supplier', 'مورد محلي بائتمان'],
+        ['foreign_supplier', 'أجنبي بائتمان'],
+        ['customer', 'عميل بائتمان'],
+      ]) {
+        const probe = (
+          await db.query(
+            'insert into public.parties (type, name, credit_limit, payment_terms) values ($1, $2, $3, $4) returning id, credit_limit, payment_terms',
+            [creditType, creditLabel, 100, 15],
+          )
+        ).rows[0];
+        createdIds.push(probe.id);
+        assert.equal(Number(probe.credit_limit), 100);
+        assert.equal(probe.payment_terms, 15);
+      }
 
       // 6) email: NULL and well-formed addresses succeed; malformed addresses fail with 23514.
       for (const validEmail of [null, 'info@company.com', 'Billing.Dept+eg@sub.domain-eg.co.uk']) {
         const res = await db.query(
           'update public.parties set email = $1 where id = $2 returning email',
-          [validEmail, sup1.id],
+          [validEmail, loc1.id],
         );
         assert.equal(res.rows[0].email, validEmail);
       }
@@ -2531,7 +2573,7 @@ try {
         'sales@company.com\n',
       ]) {
         await expectCode('23514', () =>
-          db.query('update public.parties set email = $1 where id = $2', [badEmail, sup1.id]),
+          db.query('update public.parties set email = $1 where id = $2', [badEmail, loc1.id]),
         );
         await expectCode('23514', () =>
           db.query(
@@ -2544,7 +2586,7 @@ try {
       // 7) Blank `name` is rejected with 23514.
       for (const blankName of ['', '   ', '\t\n']) {
         await expectCode('23514', () =>
-          db.query('update public.parties set name = $1 where id = $2', [blankName, sup1.id]),
+          db.query('update public.parties set name = $1 where id = $2', [blankName, loc1.id]),
         );
       }
 
@@ -2558,25 +2600,22 @@ try {
       assert.equal(viewerRows.rowCount, 0, 'viewer without project.settings:manage sees 0 rows');
       await expectCode('42501', () =>
         asRole('authenticated', V, (c) =>
-          c.query("insert into public.parties (type, name) values ('supplier', 'ممنوع')"),
+          c.query("insert into public.parties (type, name) values ('local_supplier', 'ممنوع')"),
         ),
       );
       const viewerUpdate = await asRole('authenticated', V, (c) =>
-        c.query("update public.parties set name = 'ممنوع' where id = $1", [sup1.id]),
+        c.query("update public.parties set name = 'ممنوع' where id = $1", [loc1.id]),
       );
       assert.equal(viewerUpdate.rowCount, 0);
       const viewerDelete = await asRole('authenticated', V, (c) =>
-        c.query('delete from public.parties where id = $1', [sup1.id]),
+        c.query('delete from public.parties where id = $1', [loc1.id]),
       );
       assert.equal(viewerDelete.rowCount, 0);
 
-      // 9) Migrations are idempotent on replay while live rows exist.
-      await db.query(
-        await readFile(`${ROOT}supabase/migrations/20261106000000_parties_schema.sql`, 'utf8'),
-      );
+      // 9) The newest migration replays cleanly while live rows exist.
       await db.query(
         await readFile(
-          `${ROOT}supabase/migrations/20261107000000_parties_internal_no_credit_terms.sql`,
+          `${ROOT}supabase/migrations/20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
           'utf8',
         ),
       );
@@ -2586,6 +2625,262 @@ try {
       }
     }
   });
+
+  await test('sister companies: two-level tree, derived codes, write-once identity, and RLS gate', async () => {
+    const columns = await db.query(
+      "select column_name from information_schema.columns where table_schema='public' and table_name='sister_companies' order by ordinal_position",
+    );
+    assert.deepEqual(
+      columns.rows.map((row) => row.column_name),
+      ['id', 'parent_id', 'level', 'name', 'code', 'is_active', 'created_at', 'updated_at'],
+    );
+
+    // No currency/exchange-rate columns yet: they belong to the letters phase.
+    for (const forbidden of ['currency', 'currency_code', 'exchange_rate']) {
+      assert.equal(
+        columns.rows.some((row) => row.column_name === forbidden),
+        false,
+        `sister_companies must not carry ${forbidden} in this phase`,
+      );
+    }
+
+    const checks = await db.query(
+      "select conname, pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.sister_companies'::regclass and contype='c' order by conname",
+    );
+    const checkNames = checks.rows.map((row) => row.conname);
+    for (const expected of [
+      'sister_companies_name_not_blank',
+      'sister_companies_level_check',
+      'sister_companies_code_matches_level',
+    ]) {
+      assert.ok(checkNames.includes(expected), `${expected} is missing`);
+    }
+    assert.ok(checkNames.includes('sister_companies_level_check'));
+    assert.ok(
+      checks.rows
+        .find((row) => row.conname === 'sister_companies_level_check')
+        .def.includes('<= 2'),
+      'level must be capped at 2',
+    );
+
+    // Forced RLS + the four permissive project.settings:manage policies.
+    const rlsFlags = await db.query(
+      "select relrowsecurity, relforcerowsecurity from pg_class where oid='public.sister_companies'::regclass",
+    );
+    assert.deepEqual(rlsFlags.rows[0], { relrowsecurity: true, relforcerowsecurity: true });
+
+    const policies = await db.query(
+      "select polname, polpermissive from pg_policy where polrelid='public.sister_companies'::regclass and polname like 'sister_companies_project_settings_%' order by polname",
+    );
+    assert.deepEqual(policies.rows, [
+      { polname: 'sister_companies_project_settings_delete', polpermissive: true },
+      { polname: 'sister_companies_project_settings_insert', polpermissive: true },
+      { polname: 'sister_companies_project_settings_select', polpermissive: true },
+      { polname: 'sister_companies_project_settings_update', polpermissive: true },
+    ]);
+
+    for (const priv of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+      assert.equal(
+        (
+          await db.query('select has_table_privilege($1, $2, $3) as ok', [
+            'authenticated',
+            'public.sister_companies',
+            priv,
+          ])
+        ).rows[0].ok,
+        true,
+        `authenticated must have ${priv} on public.sister_companies`,
+      );
+      assert.equal(
+        (
+          await db.query('select has_table_privilege($1, $2, $3) as ok', [
+            'anon',
+            'public.sister_companies',
+            priv,
+          ])
+        ).rows[0].ok,
+        false,
+        `anon must not have ${priv} on public.sister_companies`,
+      );
+    }
+
+    for (const role of ['anon', 'authenticated']) {
+      assert.equal(
+        (
+          await db.query('select has_sequence_privilege($1, $2, $3) as ok', [
+            role,
+            'public.sister_company_root_code_seq',
+            'USAGE',
+          ])
+        ).rows[0].ok,
+        false,
+        `${role} must not have USAGE on the sister-company sequence`,
+      );
+    }
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      assert.equal(
+        (
+          await db.query(
+            "select has_function_privilege($1, 'public.sister_companies_before_write()', 'EXECUTE') as ok",
+            [role],
+          )
+        ).rows[0].ok,
+        false,
+        `${role} must not execute sister_companies_before_write()`,
+      );
+    }
+
+    const nextRootCode = async () => {
+      const seq = await db.query(
+        'select last_value, is_called from public.sister_company_root_code_seq',
+      );
+      const last = Number(seq.rows[0].last_value);
+      const upcoming = seq.rows[0].is_called ? last + 1 : last;
+      return `SIS-${upcoming < 1000 ? String(upcoming).padStart(3, '0') : String(upcoming)}`;
+    };
+
+    const createdIds = [];
+    try {
+      // 1) A root row is level 1 and mints SIS-###; the client cannot choose
+      //    either, and a supplied code is overwritten.
+      const expectedRoot = await nextRootCode();
+      const parent = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            "insert into public.sister_companies (name, level, code) values ('شقيقة جذر للاختبار', 9, 'SIS-999') returning id, code, level, parent_id",
+          ),
+        )
+      ).rows[0];
+      createdIds.push(parent.id);
+      assert.equal(parent.code, expectedRoot);
+      assert.match(parent.code, /^SIS-\d{3,}$/);
+      assert.equal(parent.level, 1);
+      assert.equal(parent.parent_id, null);
+
+      // 2) Branches are level 2 and append a two-digit ordinal to the parent
+      //    code: SIS-001-01, then -02, and a deleted branch's number is not
+      //    reused.
+      const branch1 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'insert into public.sister_companies (parent_id, name) values ($1, $2) returning id, code, level',
+            [parent.id, 'فرع أول للاختبار'],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(branch1.id);
+      assert.equal(branch1.code, `${parent.code}-01`);
+      assert.equal(branch1.level, 2);
+
+      const branch2 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'insert into public.sister_companies (parent_id, name) values ($1, $2) returning id, code, level',
+            [parent.id, 'فرع ثانٍ للاختبار'],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(branch2.id);
+      assert.equal(branch2.code, `${parent.code}-02`);
+
+      // 3) A third level is refused with 22023 (and the level CHECK agrees).
+      await expectCode('22023', () =>
+        db.query('insert into public.sister_companies (parent_id, name) values ($1, $2)', [
+          branch1.id,
+          'مستوى ثالث',
+        ]),
+      );
+
+      // 4) The tree is write-once: parent_id, code and level cannot move.
+      await expectCode('22023', () =>
+        db.query('update public.sister_companies set parent_id = null where id = $1', [branch1.id]),
+      );
+      await expectCode('22023', () =>
+        db.query("update public.sister_companies set code = 'SIS-999-99' where id = $1", [
+          branch1.id,
+        ]),
+      );
+      await expectCode('22023', () =>
+        db.query('update public.sister_companies set level = 1 where id = $1', [branch1.id]),
+      );
+      await expectCode('23514', () =>
+        db.query("insert into public.sister_companies (name) values ('   ')"),
+      );
+
+      // 5) A rename works and advances updated_at.
+      await db.query(
+        "update public.sister_companies set updated_at = now() - interval '5 minutes' where id = $1",
+        [parent.id],
+      );
+      const beforeStamp = (
+        await db.query('select updated_at from public.sister_companies where id = $1', [parent.id])
+      ).rows[0].updated_at;
+      const renamed = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'update public.sister_companies set name = $1 where id = $2 returning name, code, level, updated_at',
+            ['شقيقة جذر بعد التعديل', parent.id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(renamed.name, 'شقيقة جذر بعد التعديل');
+      assert.equal(renamed.code, parent.code);
+      assert.equal(renamed.level, 1);
+      assert.ok(renamed.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
+
+      // 6) ON DELETE RESTRICT: a parent with branches cannot be deleted.
+      await expectCode('23503', () =>
+        db.query('delete from public.sister_companies where id = $1', [parent.id]),
+      );
+      await db.query('delete from public.sister_companies where id = $1', [branch1.id]);
+      await db.query('delete from public.sister_companies where id = $1', [branch2.id]);
+      await db.query('delete from public.sister_companies where id = $1', [parent.id]);
+
+      // 7) Runtime RLS isolation: anon and non-privileged users are blocked.
+      await expectDenied(() =>
+        asRole('anon', null, (c) => c.query('select id from public.sister_companies')),
+      );
+      const viewerRows = await asRole('authenticated', V, (c) =>
+        c.query('select id from public.sister_companies'),
+      );
+      assert.equal(viewerRows.rowCount, 0, 'viewer without project.settings:manage sees 0 rows');
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query("insert into public.sister_companies (name) values ('ممنوع')"),
+        ),
+      );
+      const viewerDelete = await asRole('authenticated', V, (c) =>
+        c.query('delete from public.sister_companies where id = $1', [parent.id]),
+      );
+      assert.equal(viewerDelete.rowCount, 0);
+
+      // 8) The newest migration replays cleanly while live rows exist (a fresh
+      //    parent is inserted first so there is something to replay over).
+      const replayParent = (
+        await db.query(
+          "insert into public.sister_companies (name) values ('شقيقة إعادة التشغيل') returning id",
+        )
+      ).rows[0];
+      createdIds.push(replayParent.id);
+      await db.query(
+        await readFile(
+          `${ROOT}supabase/migrations/20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
+          'utf8',
+        ),
+      );
+    } finally {
+      // Branches first: the parent FK is ON DELETE RESTRICT.
+      await db.query('delete from public.sister_companies where parent_id = any($1::uuid[])', [
+        createdIds,
+      ]);
+      if (createdIds.length > 0) {
+        await db.query('delete from public.sister_companies where id = any($1::uuid[])', [
+          createdIds,
+        ]);
+      }
+    }
+  });
+
   await test('RLS on every public table and no anonymous SECURITY DEFINER execution', async () => {
     assert.equal(
       (

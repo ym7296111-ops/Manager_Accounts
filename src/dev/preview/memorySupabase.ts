@@ -18,9 +18,12 @@
  * * deleting a node that still has children raises 23503 (ON DELETE RESTRICT);
  * * a payload carrying `code`, `level` or `is_leaf` is rejected outright, so a
  *   regression in the client shows up in the preview instead of hiding;
- * * party codes are minted per type (`SUP-001` / `CUS-001` / `SIS-001` /
- *   `INT-001`), a payload carrying `code` — or `type` on update — is rejected,
- *   and credit terms on an internal party raise 23514.
+ * * party codes are minted per type (`LOC-001` / `FRN-001` / `CUS-001`), a
+ *   payload carrying `code` — or `type` on update — is rejected, and the
+ *   retired `internal` / `sister_company` types are refused with 23514;
+ * * sister companies form a two-level tree: `SIS-001` for a parent company and
+ *   `SIS-001-01` for its first branch, `parent_id`/`code`/`level` are refused
+ *   on update, and deleting a company that still has branches raises 23503.
  *
  * What it does NOT reproduce: authentication, RLS, concurrency and the audit
  * trail. Those are exercised by the unit tests, the DB audit and Playwright
@@ -182,18 +185,17 @@ interface PartyPreviewRow {
 }
 
 const PARTY_PREFIX: Record<string, string> = {
-  supplier: 'SUP',
+  local_supplier: 'LOC',
+  foreign_supplier: 'FRN',
   customer: 'CUS',
-  sister_company: 'SIS',
-  internal: 'INT',
 };
 
 /** Mirrors the parties block of `supabase/seed.sql` row for row (one per type). */
 const parties: PartyPreviewRow[] = [
   {
-    id: 'p-sup',
-    type: 'supplier',
-    code: 'SUP-001',
+    id: 'p-loc',
+    type: 'local_supplier',
+    code: 'LOC-001',
     name: 'شركة النيل للتوريدات الصناعية',
     tax_number: '123456789',
     commercial_register: '101010',
@@ -225,35 +227,18 @@ const parties: PartyPreviewRow[] = [
     updated_at: nowIso(),
   },
   {
-    id: 'p-sis',
-    type: 'sister_company',
-    code: 'SIS-001',
-    name: 'الشركة المتحدة للخدمات اللوجستية',
-    tax_number: '555444333',
-    commercial_register: '303030',
-    address: 'طريق مصر الإسماعيلية الصحراوي',
-    contact_person: 'خالد رمزي',
-    phone: '+20226300000',
-    email: 'ops@united-logistics.example.com',
-    credit_limit: null,
-    payment_terms: null,
-    is_active: true,
-    created_at: nowIso(),
-    updated_at: nowIso(),
-  },
-  {
-    id: 'p-int',
-    type: 'internal',
-    code: 'INT-001',
-    name: 'إدارة الصيانة والتشغيل',
-    tax_number: null,
-    commercial_register: null,
-    address: 'المبنى الإداري الرئيسي',
-    contact_person: 'عمرو فتحي',
-    phone: '+20224000000',
-    email: null,
-    credit_limit: null,
-    payment_terms: null,
+    id: 'p-frn',
+    type: 'foreign_supplier',
+    code: 'FRN-001',
+    name: 'Nile Trading GmbH',
+    tax_number: 'DE-556677',
+    commercial_register: 'HRB-99881',
+    address: 'Hafenstraße 12, Hamburg',
+    contact_person: 'Lena Fischer',
+    phone: '+494012345678',
+    email: 'orders@nile-trading.example.com',
+    credit_limit: 500000,
+    payment_terms: 15,
     is_active: true,
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -262,10 +247,9 @@ const parties: PartyPreviewRow[] = [
 
 /** Every per-type sequence has already issued its `001` to the seed above. */
 const partySequences: Record<string, number> = {
-  supplier: 1,
+  local_supplier: 1,
+  foreign_supplier: 1,
   customer: 1,
-  sister_company: 1,
-  internal: 1,
 };
 
 /** Mirrors `parties_before_write`: prefix by type, padded to three digits. */
@@ -375,8 +359,8 @@ function checkPartyConstraints(row: {
   if (row.payment_terms !== null && ![0, 15, 30, 60, 90].includes(row.payment_terms)) {
     throw new DbError('23514', 'parties_payment_terms_check');
   }
-  if (row.type === 'internal' && (row.credit_limit !== null || row.payment_terms !== null)) {
-    throw new DbError('23514', 'parties_internal_no_credit_terms');
+  if (!(row.type in PARTY_PREFIX)) {
+    throw new DbError('23514', 'parties_type_check');
   }
 }
 
@@ -472,6 +456,179 @@ function deleteParty(filters: readonly (readonly [string, unknown])[]): PartyPre
   }
   parties.splice(parties.indexOf(row), 1);
   return [{ ...row }];
+}
+
+interface SisterCompanyPreviewRow {
+  id: string;
+  parent_id: string | null;
+  level: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Mirrors the sister-companies block of `supabase/seed.sql`. */
+const sisterCompanies: SisterCompanyPreviewRow[] = [
+  {
+    id: 'sc-parent',
+    parent_id: null,
+    level: 1,
+    code: 'SIS-001',
+    name: 'الشركة المتحدة للخدمات اللوجستية',
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'sc-branch-1',
+    parent_id: 'sc-parent',
+    level: 2,
+    code: 'SIS-001-01',
+    name: 'المتحدة للنقل الثقيل',
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'sc-branch-2',
+    parent_id: 'sc-parent',
+    level: 2,
+    code: 'SIS-001-02',
+    name: 'المتحدة للتخليص الجمركي',
+    is_active: false,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+];
+
+/** The seed already issued SIS-001 to the first parent company. */
+let sisterRootSequence = 1;
+
+function pad3(value: number): string {
+  return value < 1000 ? String(value).padStart(3, '0') : String(value);
+}
+
+function pad2(value: number): string {
+  return value < 100 ? String(value).padStart(2, '0') : String(value);
+}
+
+/** Mirrors `sister_companies_before_write`: derived level and code, write-once tree. */
+function insertSisterCompany(payload: Record<string, unknown>): SisterCompanyPreviewRow {
+  if ('code' in payload || 'level' in payload) {
+    throw new DbError('42501', 'preview: the client must not write "code" or "level"');
+  }
+  const name = writeName(payload.name);
+  const parentId = typeof payload.parent_id === 'string' ? payload.parent_id : null;
+
+  let level: number;
+  let code: string;
+
+  if (parentId === null) {
+    level = 1;
+    sisterRootSequence += 1;
+    code = `SIS-${pad3(sisterRootSequence)}`;
+  } else {
+    const parent = sisterCompanies.find((row) => row.id === parentId);
+    if (parent === undefined) {
+      throw new DbError('23503', 'sister_companies: parent does not exist');
+    }
+    if (parent.level !== 1) {
+      throw new DbError('22023', 'sister_companies: a branch cannot have branches');
+    }
+    level = 2;
+    const highest = sisterCompanies
+      .filter((row) => row.parent_id === parentId)
+      .reduce((max, row) => Math.max(max, Number(row.code.slice(parent.code.length + 1)) || 0), 0);
+    code = `${parent.code}-${pad2(highest + 1)}`;
+  }
+
+  const row: SisterCompanyPreviewRow = {
+    id: id('sister'),
+    parent_id: parentId,
+    level,
+    code,
+    name,
+    is_active: payload.is_active === undefined ? true : payload.is_active === true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  };
+  sisterCompanies.push(row);
+  return { ...row };
+}
+
+function updateSisterCompany(
+  payload: Record<string, unknown>,
+  filters: readonly (readonly [string, unknown])[],
+): SisterCompanyPreviewRow {
+  /* parent_id, code and level are write-once; the database refuses a change
+     with 22023, the preview refuses their presence so a regression shows up. */
+  for (const column of ['code', 'level', 'parent_id'] as const) {
+    if (column in payload) {
+      throw new DbError('42501', `preview: ${column} is write-once (insert only)`);
+    }
+  }
+  const row = matchOne(sisterCompanies, filters);
+  if (row === null) {
+    throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
+  }
+  if ('name' in payload) {
+    row.name = writeName(payload.name);
+  }
+  if ('is_active' in payload) {
+    row.is_active = payload.is_active === true;
+  }
+  row.updated_at = nowIso();
+  return { ...row };
+}
+
+function deleteSisterCompany(
+  filters: readonly (readonly [string, unknown])[],
+): SisterCompanyPreviewRow[] {
+  const row = matchOne(sisterCompanies, filters);
+  if (row === null) {
+    return [];
+  }
+  if (sisterCompanies.some((child) => child.parent_id === row.id)) {
+    throw new DbError(
+      '23503',
+      'update or delete on table "sister_companies" violates foreign key constraint',
+    );
+  }
+  sisterCompanies.splice(sisterCompanies.indexOf(row), 1);
+  return [{ ...row }];
+}
+
+function runSisterCompany(
+  operation: 'insert' | 'update' | 'delete' | 'select',
+  payload: Record<string, unknown> | undefined,
+  filters: readonly (readonly [string, unknown])[],
+  single: boolean,
+): Outcome {
+  try {
+    if (operation === 'insert') {
+      const row = insertSisterCompany(payload ?? {});
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'update') {
+      const row = updateSisterCompany(payload ?? {}, filters);
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'delete') {
+      return { data: deleteSisterCompany(filters), error: null };
+    }
+    const rows = sisterCompanies
+      .slice()
+      .sort((a, b) => a.code.localeCompare(b.code, 'en', { numeric: true }))
+      .map((row) => ({ ...row }));
+    return { data: rows, error: null };
+  } catch (error) {
+    if (error instanceof DbError) {
+      return { data: null, error };
+    }
+    throw error;
+  }
 }
 
 function runParty(
@@ -597,6 +754,9 @@ function builder(
     if (table === 'parties') {
       return runParty(operation, payload, filters, single);
     }
+    if (table === 'sister_companies') {
+      return runSisterCompany(operation, payload, filters, single);
+    }
     if (operation === 'select' && table === 'stations') {
       return { data: projectStations(), error: null };
     }
@@ -653,7 +813,9 @@ declare global {
   interface Window {
     __previewDb?: {
       addChild: (parentName: string, name: string) => string;
+      addBranch: (parentName: string, name: string) => string;
       list: () => readonly PreviewRow[];
+      listSisterCompanies: () => readonly SisterCompanyPreviewRow[];
     };
   }
 }
@@ -667,6 +829,14 @@ if (typeof window !== 'undefined') {
       }
       return insertClassification({ name, parent_id: parent.id }).id;
     },
+    addBranch: (parentName, name) => {
+      const parent = sisterCompanies.find((row) => row.name === parentName);
+      if (parent === undefined) {
+        throw new Error(`preview: no sister company named "${parentName}"`);
+      }
+      return insertSisterCompany({ name, parent_id: parent.id }).id;
+    },
     list: () => classifications.map((row) => ({ ...row })),
+    listSisterCompanies: () => sisterCompanies.map((row) => ({ ...row })),
   };
 }

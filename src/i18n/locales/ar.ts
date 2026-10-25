@@ -483,24 +483,36 @@ export const ar = {
     'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
   'settings.project.classifications.error.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
   'settings.project.classifications.error.unknown': 'تعذّر تحميل التصنيفات.',
-  'settings.project.parties.add': 'إضافة جهة',
-  'settings.project.parties.type.supplier': 'مورّد',
+  'settings.project.parties.heading': 'جهات الوارد والمنصرف',
+  'settings.project.parties.description':
+    'الجهات مصنّفة بحسب اتجاه التعامل: جهات وارد (موردون محليون وأجانب)، وجهات صرف (عملاء)، وشركات شقيقة في شجرة شركة أم ← فروع.',
+  'settings.project.parties.tabs.inbound': 'جهات وارد',
+  'settings.project.parties.tabs.outbound': 'جهات صرف',
+  'settings.project.parties.tabs.sister': 'شركات شقيقة',
+  'settings.project.parties.inbound.description':
+    'الموردون الذين نشتري منهم: محليون وأجانب، ولكل نوع تسلسل أكواد خاص (LOC / FRN).',
+  'settings.project.parties.outbound.description':
+    'العملاء الذين نبيع لهم، دون تقسيم محلي/أجنبي. أكوادهم تبدأ بـ CUS.',
+  'settings.project.parties.type.localSupplier': 'مورّد محلي',
+  'settings.project.parties.type.foreignSupplier': 'مورّد أجنبي',
   'settings.project.parties.type.customer': 'عميل',
-  'settings.project.parties.type.sisterCompany': 'شركة شقيقة',
-  'settings.project.parties.type.internal': 'جهة داخلية',
-  'settings.project.parties.filter.all': 'الكل',
-  'settings.project.parties.filter.supplier': 'موردون',
-  'settings.project.parties.filter.customer': 'عملاء',
-  'settings.project.parties.filter.sisterCompany': 'شركات شقيقة',
-  'settings.project.parties.filter.internal': 'جهات داخلية',
+  'settings.project.parties.table.name': 'الاسم',
+  'settings.project.parties.table.code': 'الكود',
+  'settings.project.parties.table.type': 'النوع',
+  'settings.project.parties.table.status': 'الحالة',
+  'settings.project.parties.table.actions': 'إجراءات',
+  'settings.project.parties.table.inboundCaption': 'جدول جهات الوارد',
+  'settings.project.parties.table.outboundCaption': 'جدول جهات الصرف',
   'settings.project.parties.status.active': 'نشط',
   'settings.project.parties.status.inactive': 'معطّل',
   'settings.project.parties.loading': 'جارٍ تحميل الجهات…',
   'settings.project.parties.retry': 'إعادة المحاولة',
-  'settings.project.parties.empty.title': 'لا توجد جهات بعد',
-  'settings.project.parties.empty.description':
-    'أضف أول جهة لتظهر هنا. الكود يُولَّد تلقائياً حسب نوع الجهة.',
-  'settings.project.parties.empty.filtered': 'لا توجد جهات مطابقة لهذه التصفية.',
+  'settings.project.parties.empty.inbound.title': 'لا توجد جهات وارد بعد',
+  'settings.project.parties.empty.inbound.description':
+    'أضف أول مورّد محلي أو أجنبي. الكود يُولَّد تلقائياً حسب نوع الجهة (LOC / FRN).',
+  'settings.project.parties.empty.outbound.title': 'لا توجد جهات صرف بعد',
+  'settings.project.parties.empty.outbound.description':
+    'أضف أول عميل. الكود يُولَّد تلقائياً (CUS-001).',
   'settings.project.parties.error.forbidden':
     'لا تملك صلاحية قراءة الجهات (project.settings:manage).',
   'settings.project.parties.error.unavailable': 'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
@@ -510,11 +522,15 @@ export const ar = {
   'settings.project.parties.action.deactivate': 'تعطيل',
   'settings.project.parties.action.activate': 'تفعيل',
   'settings.project.parties.action.delete': 'حذف',
+  'settings.project.parties.add': 'إضافة جهة',
   'settings.project.parties.dialog.add': 'إضافة جهة',
   'settings.project.parties.dialog.edit': 'تعديل الجهة',
   'settings.project.parties.dialog.type': 'نوع الجهة',
   'settings.project.parties.dialog.typePlaceholder': 'اختر نوع الجهة…',
-  'settings.project.parties.dialog.typeHint': 'يُحدَّد النوع عند الإنشاء ولا يمكن تغييره لاحقاً.',
+  'settings.project.parties.dialog.typeHint':
+    'النوع يُختار عند الإنشاء ولا يمكن تغييره لاحقاً، وهو الذي يحدد تسلسل الكود.',
+  'settings.project.parties.dialog.outboundTypeHint':
+    'هذا التبويب يُنشئ عملاء فقط، ويأخذ الكود من تسلسل CUS.',
   'settings.project.parties.dialog.immutable':
     'النوع والكود ثابتان ولا يقبلان التعديل بعد الإنشاء.',
   'settings.project.parties.dialog.code': 'الكود (يُولَّد تلقائياً)',
@@ -522,7 +538,7 @@ export const ar = {
   'settings.project.parties.dialog.taxNumber': 'الرقم الضريبي',
   'settings.project.parties.dialog.commercialRegister': 'السجل التجاري',
   'settings.project.parties.dialog.address': 'العنوان',
-  'settings.project.parties.dialog.contactPerson': 'الشخص المسؤول',
+  'settings.project.parties.dialog.contactPerson': 'مسؤول التواصل',
   'settings.project.parties.dialog.phone': 'الهاتف',
   'settings.project.parties.dialog.email': 'البريد الإلكتروني',
   'settings.project.parties.dialog.creditLimit': 'الحد الائتماني',
@@ -534,7 +550,7 @@ export const ar = {
   'settings.project.parties.dialog.close': 'إغلاق',
   'settings.project.parties.dialog.saving': 'جارٍ الحفظ…',
   'settings.project.parties.paymentTerms.none': 'غير محدد',
-  'settings.project.parties.paymentTerms.immediate': 'فوري عند الاستلام',
+  'settings.project.parties.paymentTerms.immediate': 'فوري — عند الاستلام',
   'settings.project.parties.paymentTerms.days': '{days} يوماً',
   'settings.project.parties.validation.typeRequired': 'اختر نوع الجهة.',
   'settings.project.parties.validation.required': 'الاسم مطلوب.',
@@ -543,7 +559,7 @@ export const ar = {
     'أدخل بريداً إلكترونياً صحيحاً أو اتركه فارغاً.',
   'settings.project.parties.validation.invalidCreditLimit':
     'أدخل مبلغاً صحيحاً (صفر أو أكثر) أو اتركه فارغاً.',
-  'settings.project.parties.validation.invalidPaymentTerms': 'اختر شروط دفع صالحة.',
+  'settings.project.parties.validation.invalidPaymentTerms': 'اختر شروط دفع صحيحة.',
   'settings.project.parties.delete.title': 'حذف الجهة',
   'settings.project.parties.delete.body':
     'سيُحذف «{name}» ({code}) نهائياً. لا يمكن التراجع عن هذه العملية.',
@@ -558,13 +574,79 @@ export const ar = {
   'settings.project.parties.writeError.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
   'settings.project.parties.writeError.validation':
     'بعض الحقول غير صالحة. راجع النموذج وحاول مرة أخرى.',
-  'settings.project.parties.writeError.immutable':
-    'نوع الجهة وكودها لا يقبلان التعديل بعد الإنشاء.',
+  'settings.project.parties.writeError.immutable': 'لا يمكن تغيير نوع الجهة أو كودها بعد الإنشاء.',
   'settings.project.parties.writeError.hasReferences':
     'لا يمكن حذف هذه الجهة لوجود مستندات مرتبطة بها. عطّلها بدلاً من ذلك.',
   'settings.project.parties.writeError.notFound':
-    'لم تعد هذه الجهة موجودة. حدّث القائمة وحاول مرة أخرى.',
+    'هذه الجهة لم تعد موجودة. حدّث القائمة وحاول مرة أخرى.',
   'settings.project.parties.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
+  'settings.project.sisterCompanies.heading': 'شجرة الشركات الشقيقة',
+  'settings.project.sisterCompanies.description':
+    'شركة أم في الأعلى وتحتها فروعها. الكود يُولَّد تلقائياً: SIS-001 للشركة الأم و SIS-001-01 للفرع، ولا يمكن تغيير الشركة الأم أو الكود بعد الإنشاء.',
+  'settings.project.sisterCompanies.addParent': 'إضافة شركة أم',
+  'settings.project.sisterCompanies.addBranch': 'إضافة فرع',
+  'settings.project.sisterCompanies.addBranchUnder': 'إضافة فرع تحت «{parent}»',
+  'settings.project.sisterCompanies.branchesHeading': 'الفروع',
+  'settings.project.sisterCompanies.branchCount': 'الفروع: {count}',
+  'settings.project.sisterCompanies.noBranches':
+    'لا توجد فروع لهذه الشركة بعد. يمكنك إضافة فرع الآن.',
+  'settings.project.sisterCompanies.status.active': 'نشط',
+  'settings.project.sisterCompanies.status.inactive': 'معطّل',
+  'settings.project.sisterCompanies.loading': 'جارٍ تحميل الشركات الشقيقة…',
+  'settings.project.sisterCompanies.retry': 'إعادة المحاولة',
+  'settings.project.sisterCompanies.empty.title': 'لا توجد شركات شقيقة بعد',
+  'settings.project.sisterCompanies.empty.description':
+    'أضف الشركة الأم أولاً ثم فروعها. الكود والمستوى يُولَّدان تلقائياً على الخادم.',
+  'settings.project.sisterCompanies.action.edit': 'تعديل',
+  'settings.project.sisterCompanies.action.deactivate': 'تعطيل',
+  'settings.project.sisterCompanies.action.activate': 'تفعيل',
+  'settings.project.sisterCompanies.action.delete': 'حذف',
+  'settings.project.sisterCompanies.dialog.addParent': 'إضافة شركة أم',
+  'settings.project.sisterCompanies.dialog.addBranch': 'إضافة فرع',
+  'settings.project.sisterCompanies.dialog.edit': 'تعديل الاسم',
+  'settings.project.sisterCompanies.dialog.name': 'اسم الشركة',
+  'settings.project.sisterCompanies.dialog.codePreview': 'الكود',
+  'settings.project.sisterCompanies.dialog.code': 'الكود (يُولَّد تلقائياً)',
+  'settings.project.sisterCompanies.dialog.immutable':
+    'الشركة الأم والمستوى والكود ثابتة ولا تقبل التعديل بعد الإنشاء — الاسم فقط هو ما يمكن تغييره.',
+  'settings.project.sisterCompanies.dialog.rootHint':
+    'ستُنشأ شركة أم جديدة في المستوى الأول. الكود والمستوى يولّدهما الخادم.',
+  'settings.project.sisterCompanies.dialog.underParent':
+    'سيُنشأ فرع جديد داخل «{parent}». الكود والتسلسل يولّدهما الخادم.',
+  'settings.project.sisterCompanies.dialog.save': 'حفظ',
+  'settings.project.sisterCompanies.dialog.cancel': 'إلغاء',
+  'settings.project.sisterCompanies.dialog.close': 'إغلاق',
+  'settings.project.sisterCompanies.dialog.saving': 'جارٍ الحفظ…',
+  'settings.project.sisterCompanies.validation.required': 'الاسم مطلوب.',
+  'settings.project.sisterCompanies.validation.tooShort': 'الاسم يجب ألا يقل عن حرفين.',
+  'settings.project.sisterCompanies.delete.title': 'حذف شركة شقيقة',
+  'settings.project.sisterCompanies.delete.body':
+    'سيُحذف «{name}» ({code}) نهائياً. لا يمكن التراجع عن هذه العملية.',
+  'settings.project.sisterCompanies.delete.confirm': 'تأكيد الحذف',
+  'settings.project.sisterCompanies.success.saved': 'تم الحفظ.',
+  'settings.project.sisterCompanies.success.deleted': 'تم الحذف.',
+  'settings.project.sisterCompanies.dismiss': 'إغلاق التنبيه',
+  'settings.project.sisterCompanies.error.forbidden':
+    'لا تملك صلاحية قراءة الشركات الشقيقة (project.settings:manage).',
+  'settings.project.sisterCompanies.error.unavailable':
+    'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
+  'settings.project.sisterCompanies.error.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.sisterCompanies.error.unknown': 'تعذّر تحميل الشركات الشقيقة.',
+  'settings.project.sisterCompanies.writeError.forbidden':
+    'لا تملك صلاحية تنفيذ هذه العملية (project.settings:manage).',
+  'settings.project.sisterCompanies.writeError.unavailable':
+    'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
+  'settings.project.sisterCompanies.writeError.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.sisterCompanies.writeError.validation': 'الاسم غير صالح.',
+  'settings.project.sisterCompanies.writeError.immutable':
+    'لا يمكن تغيير الشركة الأم أو الكود أو المستوى بعد الإنشاء.',
+  'settings.project.sisterCompanies.writeError.hasBranches':
+    'لا يمكن حذف هذه الشركة لأن لها فروعاً. احذف فروعها أولاً.',
+  'settings.project.sisterCompanies.writeError.missingParent':
+    'الشركة الأم لم تعد موجودة. حدّث الشجرة وحاول مرة أخرى.',
+  'settings.project.sisterCompanies.writeError.notFound':
+    'هذه الشركة لم تعد موجودة. حدّث الشجرة وحاول مرة أخرى.',
+  'settings.project.sisterCompanies.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
   'settings.project.tabs.generalPlaceholder': 'محتوى الإعدادات العامة قيد الإنشاء',
   'settings.appearance.desc':
     'اللغة والمظهر الافتراضيان والمنطقة الزمنية وأيام العطلة لهذا المشروع.',

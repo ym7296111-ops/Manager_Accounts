@@ -7,7 +7,6 @@ import {
   isPartyType,
   isValidPartyEmail,
   roundCreditLimit,
-  supportsCreditTerms,
 } from '@/lib/partyValidation';
 import { getSupabase } from '@/lib/supabase';
 
@@ -22,7 +21,7 @@ import { getSupabase } from '@/lib/supabase';
  *   delete   `{ id }`                      → free today; refuses once referenced
  *
  * `code` is never sent, on any verb: the `parties_before_write` trigger mints
- * it from the per-type sequence (`SUP-001` / `CUS-001` / `SIS-001` / `INT-001`)
+ * it from the per-type sequence (`LOC-001` / `FRN-001` / `CUS-001`)
  * and overwrites anything a client tries to supply. `type` is sent exactly
  * once — on INSERT, where it selects the sequence — and never on UPDATE: the
  * trigger refuses a changed `type` or `code` with SQLSTATE 22023, and
@@ -32,13 +31,11 @@ import { getSupabase } from '@/lib/supabase';
  * comments, so a future edit that spreads caller input into a payload breaks
  * loudly before the request leaves the client.
  *
- * Credit terms (`credit_limit`, `payment_terms`) belong to suppliers and
- * customers only. For a sister company or an internal party the payload omits
- * both keys entirely — on insert that stores NULL, and on update it leaves
- * whatever is already there untouched (a value written out-of-band must not
- * be wiped by an unrelated rename just because the form cannot show it). The
- * database backs the one absolute case: `parties_internal_no_credit_terms`
- * refuses credit terms on internal parties outright.
+ * Credit terms (`credit_limit`, `payment_terms`) are carried by every party
+ * type the table can hold — both supplier kinds and customers — so both keys
+ * are always part of the payload, mirroring
+ * `parties_credit_terms_external_only`. Sister companies live in their own
+ * table (`useSisterCompaniesMutations`) and have no credit columns at all.
  *
  * Authorization is the database's. The screen sits behind `RequireCapability`,
  * but that gate reads a capability snapshot and can disagree with a live grant
@@ -107,7 +104,6 @@ export interface EditablePartyFields {
   readonly contactPerson?: string | null;
   readonly phone?: string | null;
   readonly email?: string | null;
-  /** Honoured only for suppliers/customers; stripped for the other two types. */
   readonly creditLimit?: number | null;
   readonly paymentTerms?: PartyPaymentTerms | null;
 }
@@ -117,13 +113,13 @@ export interface CreatePartyInput extends EditablePartyFields {
   readonly type: PartyType;
 }
 
+/**
+ * An update carries the editable columns and the row id. `type` is not part of
+ * the contract at all: the trigger refuses a changed type with 22023, so the
+ * client has no reason to hold an opinion about it.
+ */
 export interface UpdatePartyInput extends EditablePartyFields {
   readonly id: string;
-  /**
-   * Rule context only (whether credit terms apply). Never part of the payload:
-   * `buildUpdatePayload` receives it beside the fields, not among them.
-   */
-  readonly type: PartyType;
 }
 
 function validateNameOrThrow(raw: string): string {
@@ -173,7 +169,7 @@ function validatedCreditColumns(fields: EditablePartyFields): CreditColumns {
 }
 
 /** The editable allowlist, shared by create and update. */
-function editableColumns(type: PartyType, fields: EditablePartyFields): Record<string, unknown> {
+function editableColumns(fields: EditablePartyFields): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     name: validateNameOrThrow(fields.name),
     tax_number: normalizeOptionalText(fields.taxNumber),
@@ -184,14 +180,12 @@ function editableColumns(type: PartyType, fields: EditablePartyFields): Record<s
     email: normalizeEmail(fields.email),
   };
 
-  /* For sister companies and internal parties both keys stay ABSENT (not
-     null): an insert then stores NULL, and an update cannot wipe a value the
-     form was never able to show. */
-  if (supportsCreditTerms(type)) {
-    const credit = validatedCreditColumns(fields);
-    payload.credit_limit = credit.credit_limit;
-    payload.payment_terms = credit.payment_terms;
-  }
+  /* Every remaining type is a commercial counterparty, so both credit keys are
+     always written — including explicit NULLs, which is what lets the user
+     clear a limit they no longer extend. */
+  const credit = validatedCreditColumns(fields);
+  payload.credit_limit = credit.credit_limit;
+  payload.payment_terms = credit.payment_terms;
 
   return payload;
 }
@@ -206,25 +200,19 @@ export function buildCreatePayload(input: CreatePartyInput): Record<string, unkn
   }
   const payload: Record<string, unknown> = {
     type: input.type,
-    ...editableColumns(input.type, input),
+    ...editableColumns(input),
   };
   assertKeysAbsent(payload, SERVER_MINTED_COLUMNS);
   return payload;
 }
 
 /**
- * UPDATE payload. `type` arrives beside the fields, as rule context, so the
- * payload structurally cannot contain it (nor `code`): changing either is
- * refused by the trigger with 22023, and the UI offers no way to ask.
+ * UPDATE payload. It is built from the editable allowlist alone, so it
+ * structurally cannot contain `type` or `code`: changing either is refused by
+ * the trigger with 22023, and the UI offers no way to ask.
  */
-export function buildUpdatePayload(
-  type: PartyType,
-  fields: EditablePartyFields,
-): Record<string, unknown> {
-  if (!isPartyType(type)) {
-    throw new PartyWriteError('validation');
-  }
-  const payload = editableColumns(type, fields);
+export function buildUpdatePayload(fields: EditablePartyFields): Record<string, unknown> {
+  const payload = editableColumns(fields);
   assertKeysAbsent(payload, IMMUTABLE_UPDATE_COLUMNS);
   return payload;
 }
@@ -273,7 +261,7 @@ export function classifyPartyWriteError(
   }
 
   // 23514: the CHECK family — blank name, email shape, negative credit limit,
-  // payment terms outside the set, credit terms on an internal party.
+  // payment terms outside the set, a type outside the new vocabulary.
   if (code === '23514') {
     return 'validation';
   }
@@ -380,9 +368,8 @@ export function useUpdateParty(): UseMutationResult<
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: async (input) => {
-      /* `input.type` is rule context for the builder; the payload it returns
-         is asserted free of both `type` and `code`. */
-      const payload = buildUpdatePayload(input.type, input);
+      /* The payload is asserted free of both `type` and `code`. */
+      const payload = buildUpdatePayload(input);
       const supabase = requireClient();
       const { data, error } = await supabase
         .from('parties')

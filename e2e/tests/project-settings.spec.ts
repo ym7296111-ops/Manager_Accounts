@@ -32,14 +32,16 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
     ),
   ).toBeVisible();
 
-  // Four tabs in the specified order, directly under the header.
-  const tablist = main.getByRole('tablist');
+  // Four tabs in the specified order, directly under the header. The parties
+  // panel mounts a nested tablist of its own, so the top-level tabs are
+  // selected by their stable ids rather than by role.
+  const tablist = main.getByRole('tablist').first();
   await expect(tablist).toBeVisible();
-  const tabs = tablist.getByRole('tab');
+  const tabs = main.locator('[id^="project-settings-tab-"]');
   await expect(tabs).toHaveCount(4);
   await expect(tabs.nth(0)).toHaveText('Stations & Warehouses');
   await expect(tabs.nth(1)).toHaveText('Classifications');
-  await expect(tabs.nth(2)).toHaveText('Parties');
+  await expect(tabs.nth(2)).toHaveText('Inbound & Outbound');
   await expect(tabs.nth(3)).toHaveText('General');
 
   // First tab is active and renders the accordion over `supabase/seed.sql`.
@@ -111,15 +113,31 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // mounted only on demand (dialogs portal to <body>, outside <main>).
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // The parties tab renders the seeded directory: one party per type, each
-  // with the code its own sequence minted. Writes again go through dialogs
-  // that portal to <body>, so `main` itself holds no form controls.
+  // The parties tab renders three sub-tabs. Inbound is open first and holds
+  // the two seeded supplier kinds, each with the code its own sequence minted;
+  // the customer belongs to the outbound tab.
   await tabs.nth(2).click();
+  const partiesTabs = main.getByRole('tablist', { name: 'Inbound & outbound parties' });
+  await expect(partiesTabs.getByRole('tab')).toHaveCount(3);
+  await expect(partiesTabs.getByRole('tab', { name: 'Inbound parties' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
   await expect(main.getByText('شركة النيل للتوريدات الصناعية')).toBeVisible();
-  await expect(main.getByText('SUP-001')).toBeVisible();
+  await expect(main.getByText('LOC-001')).toBeVisible();
+  await expect(main.getByText('FRN-001')).toBeVisible();
+  await expect(main.getByText('CUS-001')).toHaveCount(0);
+
+  await partiesTabs.getByRole('tab', { name: 'Outbound parties' }).click();
   await expect(main.getByText('CUS-001')).toBeVisible();
+  await expect(main.getByText('LOC-001')).toHaveCount(0);
+
+  await partiesTabs.getByRole('tab', { name: 'Sister companies' }).click();
   await expect(main.getByText('SIS-001')).toBeVisible();
-  await expect(main.getByText('INT-001')).toBeVisible();
+  await expect(main.getByRole('heading', { name: 'Sister companies tree' })).toBeVisible();
+
+  // Writes again go through dialogs that portal to <body>, so `main` itself
+  // holds no form controls.
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
   // The remaining tab is still a placeholder and issues no queries.

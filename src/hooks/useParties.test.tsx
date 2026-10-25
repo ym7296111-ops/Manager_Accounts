@@ -77,8 +77,8 @@ beforeEach(() => {
 
 const row = (patch: Record<string, unknown> = {}) => ({
   id: 'p1',
-  type: 'supplier',
-  code: 'SUP-001',
+  type: 'local_supplier',
+  code: 'LOC-001',
   name: 'شركة النيل',
   tax_number: null,
   commercial_register: null,
@@ -99,22 +99,15 @@ describe('parseParties', () => {
     expect(parseParties({})).toEqual([]);
   });
 
-  it('orders by type (supplier, customer, sister, internal), then numeric code', () => {
+  it('orders by type (local supplier, foreign supplier, customer), then numeric code', () => {
     const parsed = parseParties([
-      row({ id: 'i1', type: 'internal', code: 'INT-001', name: 'داخلية' }),
-      row({ id: 's10', type: 'supplier', code: 'SUP-010', name: 'عاشر' }),
       row({ id: 'c1', type: 'customer', code: 'CUS-001', name: 'عميل' }),
-      row({ id: 's2', type: 'supplier', code: 'SUP-002', name: 'ثانٍ' }),
-      row({ id: 'x1', type: 'sister_company', code: 'SIS-001', name: 'شقيقة' }),
+      row({ id: 'l10', type: 'local_supplier', code: 'LOC-010', name: 'عاشر' }),
+      row({ id: 'f1', type: 'foreign_supplier', code: 'FRN-001', name: 'أجنبي' }),
+      row({ id: 'l2', type: 'local_supplier', code: 'LOC-002', name: 'ثانٍ' }),
     ]);
 
-    expect(parsed.map((party) => party.code)).toEqual([
-      'SUP-002',
-      'SUP-010',
-      'CUS-001',
-      'SIS-001',
-      'INT-001',
-    ]);
+    expect(parsed.map((party) => party.code)).toEqual(['LOC-002', 'LOC-010', 'FRN-001', 'CUS-001']);
   });
 
   it('maps the wire columns onto the render model', () => {
@@ -134,8 +127,8 @@ describe('parseParties', () => {
 
     expect(party).toEqual({
       id: 'p1',
-      type: 'supplier',
-      code: 'SUP-001',
+      type: 'local_supplier',
+      code: 'LOC-001',
       name: 'شركة النيل',
       taxNumber: '123456789',
       commercialRegister: '101010',
@@ -168,15 +161,18 @@ describe('parseParties', () => {
   it('drops malformed rows instead of blanking the directory', () => {
     const parsed = parseParties([
       row(),
-      row({ id: 'p2', code: 'SUP-002', name: '' }),
-      row({ id: 'p3', code: 'SUP-003', type: 'vendor', name: 'نوع مجهول' }),
-      row({ id: 'p1', code: 'SUP-099', name: 'مكررة' }),
+      row({ id: 'p2', code: 'LOC-002', name: '' }),
+      row({ id: 'p3', code: 'LOC-003', type: 'vendor', name: 'نوع مجهول' }),
+      /* Retired types have no badge and no place in the table. */
+      row({ id: 'p4', code: 'SIS-001', type: 'sister_company', name: 'شقيقة' }),
+      row({ id: 'p5', code: 'INT-001', type: 'internal', name: 'داخلية' }),
+      row({ id: 'p1', code: 'LOC-099', name: 'مكررة' }),
       'not a row',
       null,
     ]);
 
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.code).toBe('SUP-001');
+    expect(parsed[0]?.code).toBe('LOC-001');
   });
 });
 
