@@ -42,13 +42,19 @@ import {
 } from './ClassificationDialogs';
 
 /**
- * Classifications — the tree, read and write (Phase 3).
+ * Classifications — the tree, read and write.
  *
- * Three levels, assembled client-side from one flat read:
+ * Arbitrary depth, assembled client-side from one flat read:
  *
- *   level 1  تصنيف أساسي        → an accordion row, collapsed by default
- *   level 2  تصنيف فرعي         → an accordion row inside the parent panel
- *   level 3  تصنيف فرعي (ورقي)  → a flat row; the only deletable level
+ *   level 1  تصنيف أساسي  → a folder; the roots of the screen
+ *   level 2+ تصنيف فرعي   → a branch, nested under its parent, indent +16px
+ *   any leaf              → a tag; the only deletable node, and the one a
+ *                           future letter can select
+ *
+ * The depth is the database's to decide (there is no ceiling — see
+ * 20261105000000_classifications_unbounded_depth.sql), so nothing here assumes
+ * three levels: one recursive row component renders every node, and one open-set
+ * tracks disclosure state for the whole tree.
  *
  * What the UI sends, and what it never sends:
  *
@@ -224,70 +230,115 @@ function RowActions({
   );
 }
 
-/** `level 3` row. The schema caps the tree at three levels, so it has no children. */
-function ItemRow({
-  node,
-  actions,
-}: {
-  readonly node: ClassificationNode;
-  readonly actions: ReactNode;
-}) {
-  return (
-    <li className="bg-card border-border flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2">
-      <Tag className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
-      <span className="text-foreground min-w-0 flex-1 truncate text-sm">{node.name}</span>
-      <span className="text-muted-foreground/70 shrink-0 font-mono text-xs">{node.code}</span>
-      <ClassificationStatus isActive={node.isActive} />
-      {actions}
-    </li>
-  );
+/**
+ * One row of the tree, plus its children when it is open.
+ *
+ * The design is depth-agnostic: there is no "category row / group row / item
+ * row" trio any more, because the tree can be any number of levels deep. Every
+ * node renders the same row and can be opened — including a leaf, which opens
+ * onto an empty panel carrying the "add sub-classification" button, so
+ * extending a branch never runs out of affordances however deep it goes.
+ *
+ * Three cues carry the depth, and they are complementary rather than
+ * redundant, because indentation alone stops being legible past four or five
+ * levels:
+ *
+ *   * indentation — every panel adds `INDENT_PX` of logical padding, so the
+ *     tree reads as a staircase in both LTR and RTL (`paddingInlineStart`, not
+ *     `padding-left`, which would indent the wrong edge in Arabic);
+ *   * icon — a folder for the root of a branch, a layers icon for the levels
+ *     below it, and a tag for a leaf (the nodes a letter can actually select);
+ *   * the full path, as a tooltip on the row and as text in the edit dialog.
+ */
+const INDENT_PX = 16;
+
+/** Folder for a branch, tag for a leaf — the leaf is what a letter can select. */
+function levelIcon(node: ClassificationNode, isOpen: boolean): ReactNode {
+  if (node.isLeaf && node.children.length === 0) {
+    return <Tag className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />;
+  }
+  if (node.level <= 1) {
+    const Icon = isOpen ? FolderOpen : Folder;
+    return <Icon className="text-primary size-4 shrink-0" aria-hidden="true" />;
+  }
+  return <Layers className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />;
 }
 
-function GroupRow({
-  node,
-  isOpen,
-  onToggle,
-  actions,
-  addItem,
-  renderItemActions,
-}: {
+interface TreeNodeProps {
   readonly node: ClassificationNode;
-  readonly isOpen: boolean;
-  readonly onToggle: () => void;
-  readonly actions: ReactNode;
-  readonly addItem: ReactNode;
-  readonly renderItemActions: (item: ClassificationNode) => ReactNode;
-}) {
+  /** Ancestor names, ending with this node: the breadcrumb for this row. */
+  readonly path: readonly string[];
+  readonly open: ReadonlySet<string>;
+  readonly busy: boolean;
+  readonly onToggle: (id: string) => void;
+  readonly onAddChild: (node: ClassificationNode) => void;
+  readonly onEdit: (node: ClassificationNode) => void;
+  readonly onToggleActive: (node: ClassificationNode) => void;
+  readonly onDelete: (node: ClassificationNode) => void;
+}
+
+function TreeNode({
+  node,
+  path,
+  open,
+  busy,
+  onToggle,
+  onAddChild,
+  onEdit,
+  onToggleActive,
+  onDelete,
+}: TreeNodeProps) {
   const { t } = useI18n();
-  const buttonId = `classification-group-${node.id}`;
-  const panelId = `classification-group-panel-${node.id}`;
+  const buttonId = `classification-${node.id}`;
+  const panelId = `classification-panel-${node.id}`;
+  const isOpen = open.has(node.id);
+  const hasChildren = node.children.length > 0;
+  const canDelete = node.isLeaf && !hasChildren;
 
   return (
-    <li className="bg-background border-border rounded-lg border">
-      <div className="hover:bg-muted/30 flex flex-wrap items-center gap-2 px-3 py-2">
+    <li>
+      <div className="hover:bg-muted/30 border-border bg-card flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2">
         <button
           type="button"
           id={buttonId}
           aria-expanded={isOpen}
           aria-controls={panelId}
-          onClick={onToggle}
+          onClick={() => onToggle(node.id)}
+          /* The path is a tooltip rather than a column: a fifth-level row is
+             already under width pressure at 16px of indent per level. */
+          title={path.join(' / ')}
           className={TOGGLE_CLASS}
         >
           <ChevronDown
             className={`${CHEVRON_CLASS} ${isOpen ? 'rotate-180' : ''}`}
             aria-hidden="true"
           />
-          <Layers className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          {levelIcon(node, isOpen)}
           <span className="flex min-w-0 flex-1 items-baseline gap-2">
-            <span className="text-foreground truncate text-sm font-medium">{node.name}</span>
+            <span
+              className={
+                node.level <= 1
+                  ? 'text-foreground truncate text-sm font-semibold'
+                  : 'text-foreground truncate text-sm font-medium'
+              }
+            >
+              {node.name}
+            </span>
             <span className="text-muted-foreground/70 shrink-0 font-mono text-xs">{node.code}</span>
           </span>
           <span className="text-muted-foreground hidden shrink-0 text-xs sm:inline">
-            {t('settings.project.classifications.itemCount', { count: node.children.length })}
+            {t('settings.project.classifications.childCount', { count: node.children.length })}
           </span>
           <ClassificationStatus isActive={node.isActive} />
         </button>
-        {actions}
+        <RowActions
+          node={node}
+          canDelete={canDelete}
+          busy={busy}
+          onEdit={() => onEdit(node)}
+          onToggleActive={() => onToggleActive(node)}
+          onDelete={() => onDelete(node)}
+        />
       </div>
 
       {isOpen ? (
@@ -295,120 +346,51 @@ function GroupRow({
           id={panelId}
           role="region"
           aria-labelledby={buttonId}
-          className="border-border space-y-2 border-t px-3 py-3"
+          style={{ paddingInlineStart: INDENT_PX }}
+          className="border-primary/25 mt-1.5 space-y-1.5 border-s-2"
         >
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
-              {t('settings.project.classifications.itemsHeading')}
-            </h4>
-            {addItem}
+          <div className="flex items-center justify-between gap-3 py-1">
+            {/* The heading earns its place on the first two levels; deeper than
+                that it would repeat on every row and crowd the indent, so the
+                add button stands alone. */}
+            {node.level <= 2 ? (
+              <h3 className="text-muted-foreground text-[11px] font-semibold tracking-wide uppercase">
+                {t('settings.project.classifications.childrenHeading')}
+              </h3>
+            ) : (
+              <span />
+            )}
+            <AddButton
+              label={t('settings.project.classifications.addChild')}
+              ariaLabel={t('settings.project.classifications.addUnderParent', {
+                parent: node.name,
+              })}
+              onClick={() => onAddChild(node)}
+              disabled={busy}
+            />
           </div>
 
-          {node.children.length === 0 ? (
-            <p className="text-muted-foreground py-1 text-sm">
-              {t('settings.project.classifications.noItems')}
-            </p>
-          ) : (
+          {hasChildren ? (
             <ul className="space-y-1.5">
-              {node.children.map((item) => (
-                <ItemRow key={item.id} node={item} actions={renderItemActions(item)} />
-              ))}
-            </ul>
-          )}
-        </div>
-      ) : null}
-    </li>
-  );
-}
-
-function CategoryRow({
-  node,
-  isOpen,
-  openGroups,
-  onToggle,
-  onToggleGroup,
-  actions,
-  addGroup,
-  renderGroupActions,
-  renderAddItem,
-  renderItemActions,
-}: {
-  readonly node: ClassificationNode;
-  readonly isOpen: boolean;
-  readonly openGroups: ReadonlySet<string>;
-  readonly onToggle: () => void;
-  readonly onToggleGroup: (id: string) => void;
-  readonly actions: ReactNode;
-  readonly addGroup: ReactNode;
-  readonly renderGroupActions: (group: ClassificationNode) => ReactNode;
-  readonly renderAddItem: (group: ClassificationNode) => ReactNode;
-  readonly renderItemActions: (item: ClassificationNode) => ReactNode;
-}) {
-  const { t } = useI18n();
-  const buttonId = `classification-category-${node.id}`;
-  const panelId = `classification-category-panel-${node.id}`;
-  const FolderIcon = isOpen ? FolderOpen : Folder;
-
-  return (
-    <li className="border-border bg-card overflow-hidden rounded-xl border">
-      <div className="hover:bg-muted/30 flex flex-wrap items-center gap-2 px-4 py-3">
-        <button
-          type="button"
-          id={buttonId}
-          aria-expanded={isOpen}
-          aria-controls={panelId}
-          onClick={onToggle}
-          className={TOGGLE_CLASS}
-        >
-          <ChevronDown
-            className={`${CHEVRON_CLASS} ${isOpen ? 'rotate-180' : ''}`}
-            aria-hidden="true"
-          />
-          <FolderIcon className="text-primary size-4 shrink-0" aria-hidden="true" />
-          <span className="flex min-w-0 flex-1 items-baseline gap-2">
-            <span className="text-foreground truncate text-sm font-semibold">{node.name}</span>
-            <span className="text-muted-foreground/70 shrink-0 font-mono text-xs">{node.code}</span>
-          </span>
-          <span className="text-muted-foreground hidden shrink-0 text-xs sm:inline">
-            {t('settings.project.classifications.groupCount', { count: node.children.length })}
-          </span>
-          <ClassificationStatus isActive={node.isActive} />
-        </button>
-        {actions}
-      </div>
-
-      {isOpen ? (
-        <div
-          id={panelId}
-          role="region"
-          aria-labelledby={buttonId}
-          className="border-border space-y-3 border-t px-4 py-3"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
-              {t('settings.project.classifications.groupsHeading')}
-            </h3>
-            {addGroup}
-          </div>
-
-          {node.children.length === 0 ? (
-            <p className="text-muted-foreground py-1 text-sm">
-              {t('settings.project.classifications.noGroups')}
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {node.children.map((group) => (
-                <GroupRow
-                  key={group.id}
-                  node={group}
-                  isOpen={openGroups.has(group.id)}
-                  onToggle={() => onToggleGroup(group.id)}
-                  actions={renderGroupActions(group)}
-                  addItem={renderAddItem(group)}
-                  renderItemActions={renderItemActions}
+              {node.children.map((child) => (
+                <TreeNode
+                  key={child.id}
+                  node={child}
+                  path={[...path, child.name]}
+                  open={open}
+                  busy={busy}
+                  onToggle={onToggle}
+                  onAddChild={onAddChild}
+                  onEdit={onEdit}
+                  onToggleActive={onToggleActive}
+                  onDelete={onDelete}
                 />
               ))}
             </ul>
+          ) : (
+            <p className="text-muted-foreground py-1 text-sm">
+              {t('settings.project.classifications.noChildren')}
+            </p>
           )}
         </div>
       ) : null}
@@ -449,8 +431,9 @@ export default function Classifications() {
   const toggleNode = useSetClassificationActive();
   const deleteNode = useDeleteClassification();
 
-  const [openCategories, setOpenCategories] = useState<ReadonlySet<string>>(() => new Set());
-  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
+  /* One set for the whole tree: depth is unbounded, so a per-level pair of
+     sets cannot describe it. */
+  const [openNodes, setOpenNodes] = useState<ReadonlySet<string>>(() => new Set());
   const [form, setForm] = useState<ClassificationFormTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [banner, setBanner] = useState<Banner | null>(null);
@@ -458,12 +441,8 @@ export default function Classifications() {
   const busy =
     createNode.isPending || renameNode.isPending || toggleNode.isPending || deleteNode.isPending;
 
-  const toggleCategory = useCallback((id: string) => {
-    setOpenCategories((current) => toggleIn(current, id));
-  }, []);
-
-  const toggleGroup = useCallback((id: string) => {
-    setOpenGroups((current) => toggleIn(current, id));
+  const toggleNodeOpen = useCallback((id: string) => {
+    setOpenNodes((current) => toggleIn(current, id));
   }, []);
 
   /**
@@ -483,9 +462,14 @@ export default function Classifications() {
     setBanner({ tone: 'success', key });
   }, []);
 
-  function openAdd(kind: ClassificationNodeKind, parentId?: string, parentName?: string) {
+  function openAdd(
+    kind: ClassificationNodeKind,
+    parentId?: string,
+    parentName?: string,
+    parentPath?: readonly string[],
+  ) {
     setBanner(null);
-    setForm({ kind, mode: 'create', parentId, parentName });
+    setForm({ kind, mode: 'create', parentId, parentName, parentPath });
   }
 
   function openEdit(node: ClassificationNode) {
@@ -498,6 +482,7 @@ export default function Classifications() {
       nodeId: node.id,
       code: node.code,
       initialName: node.name,
+      nodePath: pathOf(node.id),
     });
   }
 
@@ -509,7 +494,6 @@ export default function Classifications() {
 
     if (form.mode === 'create') {
       const parentId = form.parentId;
-      const kind = form.kind;
       /* A category has no parent; a group's parent is its category and an
          item's parent is its group. That is the whole contract — the level is
          the server's to derive. */
@@ -518,11 +502,9 @@ export default function Classifications() {
           /* Reveal what was just created: a new group opens its category, a new
              item opens its group. Saves two clicks and makes the result obvious. */
           if (parentId !== undefined) {
-            if (kind === 'group') {
-              setOpenCategories((current) => withId(current, parentId));
-            } else {
-              setOpenGroups((current) => withId(current, parentId));
-            }
+            /* Reveal what was just created: opening the parent is what makes
+               the new row visible. One set, whatever the depth. */
+            setOpenNodes((current) => withId(current, parentId));
           }
           succeedWith('settings.project.classifications.success.saved');
         },
@@ -568,29 +550,29 @@ export default function Classifications() {
   }
 
   /**
-   * Delete is offered only for a childless node. `is_leaf` is what the server
-   * derived and the empty child list is what the client rendered; requiring both
-   * means neither a stale read nor a misrouted row can expose the button. The
-   * FK constraint remains the actual protection.
+   * Names from the root down to `id`, for the breadcrumb shown in the edit
+   * dialog. Walks the read tree rather than reading a `path` column: the tree
+   * is already in memory, and a stored path would be one more thing to keep in
+   * step with `parent_id` on every write.
    */
-  function canDelete(node: ClassificationNode): boolean {
-    return node.isLeaf && node.children.length === 0;
-  }
-
-  function nodeActions(node: ClassificationNode): ReactNode {
-    return (
-      <RowActions
-        node={node}
-        canDelete={canDelete(node)}
-        busy={busy}
-        onEdit={() => openEdit(node)}
-        onToggleActive={() => toggleActive(node)}
-        onDelete={() => {
-          setBanner(null);
-          setDeleteTarget({ id: node.id, name: node.name, code: node.code });
-        }}
-      />
-    );
+  function pathOf(id: string): readonly string[] {
+    const walk = (
+      nodes: readonly ClassificationNode[],
+      trail: readonly string[],
+    ): readonly string[] | null => {
+      for (const node of nodes) {
+        const next = [...trail, node.name];
+        if (node.id === id) {
+          return next;
+        }
+        const found = walk(node.children, next);
+        if (found !== null) {
+          return found;
+        }
+      }
+      return null;
+    };
+    return walk(query.data ?? [], []) ?? [];
   }
 
   if (query.isLoading) {
@@ -679,36 +661,22 @@ export default function Classifications() {
       ) : (
         <ul aria-labelledby="classifications-heading" className="space-y-2">
           {categories.map((category) => (
-            <CategoryRow
+            <TreeNode
               key={category.id}
               node={category}
-              isOpen={openCategories.has(category.id)}
-              openGroups={openGroups}
-              onToggle={() => toggleCategory(category.id)}
-              onToggleGroup={toggleGroup}
-              actions={nodeActions(category)}
-              addGroup={
-                <AddButton
-                  label={t('settings.project.classifications.addGroup')}
-                  ariaLabel={t('settings.project.classifications.addUnderParent', {
-                    parent: category.name,
-                  })}
-                  onClick={() => openAdd('group', category.id, category.name)}
-                  disabled={busy}
-                />
+              path={[category.name]}
+              open={openNodes}
+              busy={busy}
+              onToggle={toggleNodeOpen}
+              onAddChild={(parent) =>
+                openAdd(kindOfLevel(parent.level + 1), parent.id, parent.name, pathOf(parent.id))
               }
-              renderGroupActions={nodeActions}
-              renderAddItem={(group) => (
-                <AddButton
-                  label={t('settings.project.classifications.addItem')}
-                  ariaLabel={t('settings.project.classifications.addUnderParent', {
-                    parent: group.name,
-                  })}
-                  onClick={() => openAdd('item', group.id, group.name)}
-                  disabled={busy}
-                />
-              )}
-              renderItemActions={nodeActions}
+              onEdit={openEdit}
+              onToggleActive={toggleActive}
+              onDelete={(node) => {
+                setBanner(null);
+                setDeleteTarget({ id: node.id, name: node.name, code: node.code });
+              }}
             />
           ))}
         </ul>

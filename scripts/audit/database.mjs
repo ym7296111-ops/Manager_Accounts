@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 44);
+    assert.equal(migrations.length, 45);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1847,6 +1847,7 @@ try {
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
     assert.ok(migrations.includes('20261104030000_stations_and_warehouses.sql'));
     assert.ok(migrations.includes('20261104040000_classifications_schema.sql'));
+    assert.ok(migrations.includes('20261105000000_classifications_unbounded_depth.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -1888,7 +1889,7 @@ try {
       17,
     );
   });
-  await test('classifications: derived level and is_leaf, sequence codes, subtree moves', async () => {
+  await test('classifications: derived level and is_leaf at any depth, sequence codes, subtree moves', async () => {
     const columns = await db.query(
       "select column_name from information_schema.columns where table_schema='public' and table_name='classifications' order by ordinal_position",
     );
@@ -1982,11 +1983,60 @@ try {
     assert.equal(grandChild.rows[0].level, 3);
     const grandChildId = grandChild.rows[0].id;
 
-    // A fourth level is refused with a clear error.
-    await expectCode('22023', () =>
-      db.query("insert into public.classifications (parent_id, name) values ($1, 'رابع')", [
-        grandChildId,
-      ]),
+    /* Depth is unbounded (20261105000000): the fourth level used to be refused
+       with 22023 and is now a normal row. Walk to level six so the change is
+       proven by behaviour rather than by the absence of an error. */
+    const fourth = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'المستوى الرابع') returning id, level",
+      [grandChildId],
+    );
+    assert.equal(fourth.rows[0].level, 4);
+    const fifth = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'المستوى الخامس') returning id, level",
+      [fourth.rows[0].id],
+    );
+    assert.equal(fifth.rows[0].level, 5);
+    const sixth = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'المستوى السادس') returning id, level",
+      [fifth.rows[0].id],
+    );
+    assert.equal(sixth.rows[0].level, 6);
+
+    // Every ancestor on the way down flipped to non-leaf, the deepest stays a leaf.
+    const deepLeaves = await db.query(
+      `select id, level, is_leaf
+         from public.classifications
+        where id = any($1::uuid[])
+        order by level`,
+      [[rootId, childId, grandChildId, fourth.rows[0].id, fifth.rows[0].id, sixth.rows[0].id]],
+    );
+    assert.deepEqual(
+      deepLeaves.rows.map((row) => [Number(row.level), row.is_leaf]),
+      [
+        [1, false],
+        [2, false],
+        [3, false],
+        [4, false],
+        [5, false],
+        [6, true],
+      ],
+    );
+
+    // The tree still hangs together: the deepest node's ancestry is the chain above.
+    const ancestry = await db.query(
+      `with recursive up(id, parent_id, level) as (
+         select id, parent_id, level from public.classifications where id = $1
+         union all
+         select parent.id, parent.parent_id, parent.level
+           from public.classifications as parent
+           join up on parent.id = up.parent_id
+       )
+       select level from up order by level`,
+      [sixth.rows[0].id],
+    );
+    assert.deepEqual(
+      ancestry.rows.map((row) => Number(row.level)),
+      [1, 2, 3, 4, 5, 6],
     );
 
     // Moving a node re-derives its whole subtree's levels.
@@ -2015,7 +2065,8 @@ try {
     );
     assert.equal(moveChildLevel.rows[0].level, 3);
 
-    // A move that would push any descendant past level 3 is refused.
+    /* A move no longer has a ceiling to hit: pulling a three-deep subtree under
+       a level-3 node re-derives the whole thing to levels 4, 5 and 6. */
     const deepRoot = await db.query(
       "insert into public.classifications (name) values ('جذر عميق') returning id",
     );
@@ -2024,20 +2075,69 @@ try {
       "insert into public.classifications (parent_id, name) values ($1, 'ابن عميق') returning id",
       [deepRootId],
     );
-    await db.query(
-      "insert into public.classifications (parent_id, name) values ($1, 'حفيد عميق')",
+    const deepGrandChild = await db.query(
+      "insert into public.classifications (parent_id, name) values ($1, 'حفيد عميق') returning id, level",
       [deepChild.rows[0].id],
     );
+    assert.equal(deepGrandChild.rows[0].level, 3);
+
+    await db.query('update public.classifications set parent_id = $1 where id = $2', [
+      fourth.rows[0].id,
+      deepRootId,
+    ]);
+    const movedSubtree = await db.query(
+      `select id, level from public.classifications
+        where id = any($1::uuid[]) order by level`,
+      [[deepRootId, deepChild.rows[0].id, deepGrandChild.rows[0].id]],
+    );
+    // The moved subtree now hangs off a level-4 node, so its three rows land on
+    // 5, 6 and 7 — three levels below the deepest point the old ceiling allowed.
+    assert.deepEqual(
+      movedSubtree.rows.map((row) => Number(row.level)),
+      [5, 6, 7],
+    );
+
+    /* The guard that replaced the ceiling: a node may not be moved under its
+       own descendant. Without it the recursive re-derivation would not
+       terminate and the cycle would be unreachable from any root. */
     await expectCode('22023', () =>
       db.query('update public.classifications set parent_id = $1 where id = $2', [
-        moveTarget.rows[0].id,
+        deepGrandChild.rows[0].id,
         deepRootId,
       ]),
     );
+    // …nor under itself.
+    await expectCode('22023', () =>
+      db.query('update public.classifications set parent_id = id where id = $1', [deepRootId]),
+    );
+    // A self-parented INSERT is refused too (the FK alone would allow it).
+    await expectCode('22023', () =>
+      db.query(
+        `insert into public.classifications (id, parent_id, name)
+         values ('00000000-0000-4000-8000-00000000abc1', '00000000-0000-4000-8000-00000000abc1', 'دائرة')`,
+      ),
+    );
 
-    // Removing the last child flips the parent back to a leaf.
-    await db.query('delete from public.classifications where id = $1', [grandChildId]);
-    await db.query('delete from public.classifications where id = $1', [childId]);
+    /* Removing the last child flips the parent back to a leaf. The branch is now
+       six rows deep, and RESTRICT means it has to come down from the leaf:
+       deleting `grandChild` first is refused while `fourth` still hangs off it. */
+    await expectCode('23503', () =>
+      db.query('delete from public.classifications where id = $1', [grandChildId]),
+    );
+    /* Deepest first, and both subtrees: `fourth` gained the moved `deepRoot`
+       branch above, so it stays referenced until that whole branch is gone. */
+    for (const id of [
+      sixth.rows[0].id,
+      fifth.rows[0].id,
+      deepGrandChild.rows[0].id,
+      deepChild.rows[0].id,
+      deepRootId,
+      fourth.rows[0].id,
+      grandChildId,
+      childId,
+    ]) {
+      await db.query('delete from public.classifications where id = $1', [id]);
+    }
     const parentAfterDelete = await db.query(
       'select is_leaf from public.classifications where id = $1',
       [rootId],

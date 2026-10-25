@@ -423,24 +423,21 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.stations.dismiss': 'Dismiss alert',
   'settings.project.classifications.heading': 'Classifications tree',
   'settings.project.classifications.description':
-    'Three levels: a main classification at the top, with sub-classifications on the two levels below it. Only leaf sub-classifications will be offered when letters are created later.',
+    'A main classification at the top, with sub-classifications nested below it at any depth. Only leaf classifications will be offered when letters are created later.',
   'settings.project.classifications.addCategory': 'Add main classification',
-  'settings.project.classifications.addGroup': 'Add sub-classification',
-  'settings.project.classifications.addItem': 'Add sub-classification',
+  'settings.project.classifications.addChild': 'Add sub-classification',
   /* Two "add sub-classification" buttons can be on screen at once (one inside
      an open main classification, one inside an open sub-classification), so
      each carries the node it will land under. The accessible name still starts
      with the visible label, which keeps it compliant (WCAG 2.5.3). */
   'settings.project.classifications.addUnderParent': 'Add sub-classification under “{parent}”',
-  'settings.project.classifications.groupsHeading': 'Sub-classifications',
-  'settings.project.classifications.itemsHeading': 'Sub-classifications',
+  'settings.project.classifications.childrenHeading': 'Sub-classifications',
   /* "Groups: 2" rather than "2 groups": a bare count + noun needs plural
      agreement ("1 groups" is wrong), and this matches the house pattern used
      by `users.count`. */
-  'settings.project.classifications.groupCount': 'Sub-classifications: {count}',
-  'settings.project.classifications.itemCount': 'Sub-classifications: {count}',
-  'settings.project.classifications.noGroups': 'No sub-classifications in this classification yet.',
-  'settings.project.classifications.noItems': 'No sub-classifications in this classification yet.',
+  'settings.project.classifications.childCount': 'Sub-classifications: {count}',
+  'settings.project.classifications.noChildren':
+    'No sub-classifications in this classification yet. You can keep extending it by adding one.',
   'settings.project.classifications.status.active': 'Active',
   'settings.project.classifications.status.inactive': 'Disabled',
   'settings.project.classifications.loading': 'Loading classifications…',
@@ -456,8 +453,8 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.classifications.action.activate': 'Activate',
   'settings.project.classifications.action.delete': 'Delete',
   'settings.project.classifications.dialog.addCategory': 'Add main classification',
-  'settings.project.classifications.dialog.addGroup': 'Add sub-classification',
-  'settings.project.classifications.dialog.addItem': 'Add sub-classification',
+  'settings.project.classifications.dialog.addChild': 'Add sub-classification',
+  'settings.project.classifications.dialog.path': 'Path',
   'settings.project.classifications.dialog.edit': 'Rename',
   'settings.project.classifications.dialog.name': '{kind} name',
   'settings.project.classifications.dialog.rootHint':

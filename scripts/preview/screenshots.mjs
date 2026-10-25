@@ -42,6 +42,30 @@ async function openTab() {
 await openTab();
 await page.screenshot({ path: `${OUT}/classifications-tree-actions.png` });
 
+/* 1b. The deep branch, all five levels open: مخزون ← وقود ← سولار ←
+   سولار تشغيل ← ديزل معدات ← ديزل آليات ثقيلة. This is the shape the old
+   three-level ceiling forbade, so it is the screenshot that proves the change. */
+const toggleNamed = (name) =>
+  page.locator('button[aria-expanded]').filter({ hasText: name }).first();
+
+for (const name of ['مخزون', 'وقود', 'سولار', 'سولار تشغيل', 'ديزل معدات']) {
+  await toggleNamed(name).click();
+}
+await page.getByText('ديزل آليات ثقيلة').waitFor();
+await page.screenshot({ path: `${OUT}/classifications-deep-tree.png`, fullPage: true });
+
+// 1c. The breadcrumb: hovering a deep row exposes its full path, and the rename
+//     dialog repeats it as text.
+const deepRow = toggleNamed('ديزل آليات ثقيلة');
+console.log('deep row tooltip:', await deepRow.getAttribute('title'));
+await page.getByRole('button', { name: 'تعديل ديزل معدات' }).click();
+await page.getByRole('dialog').waitFor();
+await page.screenshot({ path: `${OUT}/classifications-deep-path.png` });
+await page.getByRole('button', { name: 'إغلاق' }).click();
+await page.reload({ waitUntil: 'networkidle' });
+await page.getByRole('tab').nth(1).click();
+await page.getByRole('heading', { name: 'شجرة التصنيفات' }).waitFor();
+
 // 2. Add-category dialog: name only, code previewed as read-only.
 await page.getByRole('button', { name: 'إضافة تصنيف أساسي' }).click();
 await page.getByRole('dialog').waitFor();

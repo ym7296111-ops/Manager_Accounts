@@ -411,21 +411,18 @@ export const ar = {
   'settings.project.stations.dismiss': 'إغلاق التنبيه',
   'settings.project.classifications.heading': 'شجرة التصنيفات',
   'settings.project.classifications.description':
-    'ثلاثة مستويات: تصنيف أساسي في الأعلى، وتحته تصنيفات فرعية على مستويين. التصنيفات الفرعية الورقية فقط هي التي ستُعرض عند إنشاء الخطابات لاحقاً.',
+    'تصنيف أساسي في الأعلى، وتحته تصنيفات فرعية بأي عدد من المستويات. التصنيفات الورقية فقط هي التي ستُعرض عند إنشاء الخطابات لاحقاً.',
   'settings.project.classifications.addCategory': 'إضافة تصنيف أساسي',
-  'settings.project.classifications.addGroup': 'إضافة تصنيف فرعي',
-  'settings.project.classifications.addItem': 'إضافة تصنيف فرعي',
+  'settings.project.classifications.addChild': 'إضافة تصنيف فرعي',
   /* Two "add sub-classification" buttons can be on screen at once (one in an
      open main classification, one in an open sub-classification), so each
      carries the node it will land under. The accessible name still starts
      with the visible label, which keeps it compliant (WCAG 2.5.3). */
   'settings.project.classifications.addUnderParent': 'إضافة تصنيف فرعي داخل «{parent}»',
-  'settings.project.classifications.groupsHeading': 'التصنيفات الفرعية',
-  'settings.project.classifications.itemsHeading': 'التصنيفات الفرعية',
-  'settings.project.classifications.groupCount': 'التصنيفات الفرعية: {count}',
-  'settings.project.classifications.itemCount': 'التصنيفات الفرعية: {count}',
-  'settings.project.classifications.noGroups': 'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
-  'settings.project.classifications.noItems': 'لا توجد تصنيفات فرعية في هذا التصنيف بعد.',
+  'settings.project.classifications.childrenHeading': 'التصنيفات الفرعية',
+  'settings.project.classifications.childCount': 'التصنيفات الفرعية: {count}',
+  'settings.project.classifications.noChildren':
+    'لا توجد تصنيفات فرعية في هذا التصنيف بعد. يمكنك التوسع بإضافة تصنيف فرعي.',
   'settings.project.classifications.status.active': 'نشط',
   'settings.project.classifications.status.inactive': 'معطّل',
   'settings.project.classifications.loading': 'جارٍ تحميل التصنيفات…',
@@ -441,8 +438,8 @@ export const ar = {
   'settings.project.classifications.action.activate': 'تفعيل',
   'settings.project.classifications.action.delete': 'حذف',
   'settings.project.classifications.dialog.addCategory': 'إضافة تصنيف أساسي',
-  'settings.project.classifications.dialog.addGroup': 'إضافة تصنيف فرعي',
-  'settings.project.classifications.dialog.addItem': 'إضافة تصنيف فرعي',
+  'settings.project.classifications.dialog.addChild': 'إضافة تصنيف فرعي',
+  'settings.project.classifications.dialog.path': 'المسار',
   'settings.project.classifications.dialog.edit': 'تعديل الاسم',
   'settings.project.classifications.dialog.name': 'اسم {kind}',
   'settings.project.classifications.dialog.rootHint':

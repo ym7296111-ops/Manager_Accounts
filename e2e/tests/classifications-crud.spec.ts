@@ -275,6 +275,84 @@ test.describe('classifications CRUD', () => {
   });
 });
 
+test.describe('classifications depth', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('admin-system:locale', 'en'));
+  });
+
+  test('builds a six-level branch through the UI and keeps it editable at every level', async ({
+    page,
+  }) => {
+    /* The tree used to stop at three levels. This walks it to six the way a user
+       would — one "add sub-classification" per level, under the row just
+       created — and then exercises the two affordances that used to be
+       level-specific: the add button on a deep node, and the leaf-only delete. */
+    const names = ['Deep one', 'Deep two', 'Deep three', 'Deep four', 'Deep five', 'Deep six'];
+
+    const main = await openClassificationsTab(page);
+    await main.getByRole('button', { name: 'Add main classification' }).click();
+    let dialog = page.getByRole('dialog');
+    await dialog.getByLabel('main classification name').fill(names[0] as string);
+    await dialog.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+
+    let parent = names[0] as string;
+    for (const name of names.slice(1)) {
+      await toggleOf(page, parent).click();
+      await main.getByRole('button', { name: addSubUnder(parent), exact: true }).click();
+      dialog = page.getByRole('dialog');
+      await expect(dialog.getByRole('heading', { name: 'Add sub-classification' })).toBeVisible();
+      // The dialog states the level it will land on by showing the parent's path.
+      await expect(dialog.getByText('Path:', { exact: false })).toBeVisible();
+      await dialog.getByLabel('sub-classification name').fill(name);
+      await dialog.getByRole('button', { name: 'Save' }).click();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(toggleOf(page, name)).toBeVisible();
+      parent = name;
+    }
+
+    const client = await ownerClient();
+    const { data: rows } = await client
+      .from('classifications')
+      .select('id, name, level, parent_id, is_leaf, code')
+      .in('name', names)
+      .order('level');
+    expect(rows).toHaveLength(names.length);
+    expect(rows?.map((row) => row.level)).toEqual([1, 2, 3, 4, 5, 6]);
+    // Each level hangs off the one above it, and only the deepest is a leaf.
+    for (const [index, row] of (rows ?? []).entries()) {
+      expect(row.parent_id).toBe(index === 0 ? null : rows?.[index - 1]?.id);
+      expect(row.is_leaf).toBe(index === names.length - 1);
+      expect(row.code).toMatch(CODE_PATTERN);
+    }
+
+    // The full path is on the row, and in the rename dialog.
+    const deepest = toggleOf(page, 'Deep six');
+    await expect(deepest).toHaveAttribute('title', names.join(' / '));
+    await main.getByRole('button', { name: 'Edit Deep five', exact: true }).click();
+    dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(names.slice(0, 5).join(' / '), { exact: false })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+    // Delete is offered at the leaf, and not one level up.
+    await expect(main.getByRole('button', { name: 'Delete Deep six', exact: true })).toBeVisible();
+    await expect(main.getByRole('button', { name: 'Delete Deep five', exact: true })).toHaveCount(
+      0,
+    );
+
+    /* Clean up from the leaf upward: each parent becomes deletable only once its
+       child is gone, which is the RESTRICT guard doing its job in reverse. */
+    for (const name of [...names].reverse()) {
+      await main.getByRole('button', { name: `Delete ${name}`, exact: true }).click();
+      const confirm = page.getByRole('dialog');
+      await confirm.getByRole('button', { name: 'Confirm delete' }).click();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+    }
+    const { data: leftovers } = await client.from('classifications').select('id').in('name', names);
+    expect(leftovers).toEqual([]);
+  });
+});
+
 test.describe('classifications authorization', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 

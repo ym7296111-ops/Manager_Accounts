@@ -96,6 +96,28 @@ describe('parseClassifications', () => {
     expect(parsed[0]?.children[0]?.children[0]?.name).toBe('تصنيف فرعي أدنى');
   });
 
+  it('assembles a branch deeper than the old three-level ceiling', () => {
+    /* The schema no longer caps depth (20261105000000), so the client builder
+       must not either — it derives levels purely from the parent links. */
+    const parsed = parseClassifications([
+      { id: 'n6', parent_id: 'n5', code: 'CLS-106', name: 'ديزل آليات ثقيلة' },
+      { id: 'n3', parent_id: 'n2', code: 'CLS-103', name: 'سولار' },
+      { id: 'n1', parent_id: null, code: 'CLS-101', name: 'مخزون' },
+      { id: 'n5', parent_id: 'n4', code: 'CLS-105', name: 'ديزل معدات' },
+      { id: 'n2', parent_id: 'n1', code: 'CLS-102', name: 'وقود' },
+      { id: 'n4', parent_id: 'n3', code: 'CLS-104', name: 'سولار تشغيل' },
+    ]);
+
+    expect(outline(parsed)).toEqual([
+      'CLS-101:1',
+      '  CLS-102:2',
+      '    CLS-103:3',
+      '      CLS-104:4',
+      '        CLS-105:5',
+      '          CLS-106:6',
+    ]);
+  });
+
   it('derives level from the structure and ignores a level claimed on the wire', () => {
     const parsed = parseClassifications([
       { id: 'c1', parent_id: null, code: 'CLS-001', name: 'تصنيف أساسي', level: 3 },
