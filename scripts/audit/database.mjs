@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 46);
+    assert.equal(migrations.length, 47);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1849,6 +1849,7 @@ try {
     assert.ok(migrations.includes('20261104040000_classifications_schema.sql'));
     assert.ok(migrations.includes('20261105000000_classifications_unbounded_depth.sql'));
     assert.ok(migrations.includes('20261106000000_parties_schema.sql'));
+    assert.ok(migrations.includes('20261107000000_parties_internal_no_credit_terms.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2480,6 +2481,35 @@ try {
         );
       }
 
+      // 5b) parties_internal_no_credit_terms: internal parties carry neither a
+      // credit limit nor payment terms (insert and update both fail with
+      // 23514), while sister companies deliberately stay open at DB level —
+      // the UI hides the fields for them, but settlement terms remain storable.
+      const internalCreditProbe = (
+        await db.query(
+          "insert into public.parties (type, name) values ('internal', 'جهة داخلية لاختبار الائتمان') returning id",
+        )
+      ).rows[0];
+      createdIds.push(internalCreditProbe.id);
+      await expectCode('23514', () =>
+        db.query('update public.parties set credit_limit = 100 where id = $1', [
+          internalCreditProbe.id,
+        ]),
+      );
+      await expectCode('23514', () =>
+        db.query(
+          "insert into public.parties (type, name, payment_terms) values ('internal', 'جهة داخلية بشروط دفع', 30)",
+        ),
+      );
+      const sisterCreditProbe = (
+        await db.query(
+          "insert into public.parties (type, name, credit_limit, payment_terms) values ('sister_company', 'شقيقة بشروط تسوية', 100, 15) returning id, credit_limit, payment_terms",
+        )
+      ).rows[0];
+      createdIds.push(sisterCreditProbe.id);
+      assert.equal(Number(sisterCreditProbe.credit_limit), 100);
+      assert.equal(sisterCreditProbe.payment_terms, 15);
+
       // 6) email: NULL and well-formed addresses succeed; malformed addresses fail with 23514.
       for (const validEmail of [null, 'info@company.com', 'Billing.Dept+eg@sub.domain-eg.co.uk']) {
         const res = await db.query(
@@ -2540,9 +2570,15 @@ try {
       );
       assert.equal(viewerDelete.rowCount, 0);
 
-      // 9) Migration is idempotent on replay while live rows exist.
+      // 9) Migrations are idempotent on replay while live rows exist.
       await db.query(
         await readFile(`${ROOT}supabase/migrations/20261106000000_parties_schema.sql`, 'utf8'),
+      );
+      await db.query(
+        await readFile(
+          `${ROOT}supabase/migrations/20261107000000_parties_internal_no_credit_terms.sql`,
+          'utf8',
+        ),
       );
     } finally {
       if (createdIds.length > 0) {
