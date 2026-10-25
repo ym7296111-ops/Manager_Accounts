@@ -133,7 +133,8 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.getByText('LOC-001')).toHaveCount(0);
 
   await partiesTabs.getByRole('tab', { name: 'Sister companies' }).click();
-  await expect(main.getByText('SIS-001')).toBeVisible();
+  /* Exact: the section description also names SIS-001 as the code shape. */
+  await expect(main.getByText('SIS-001', { exact: true })).toBeVisible();
   await expect(main.getByRole('heading', { name: 'Sister companies tree' })).toBeVisible();
 
   // Writes again go through dialogs that portal to <body>, so `main` itself
