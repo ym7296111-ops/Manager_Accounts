@@ -6,8 +6,9 @@ import { defineConfig } from 'vite';
 /**
  * Review-only Vite config for `src/dev/preview`.
  *
- * Purpose: render the real Project Settings screen — including the real
- * Classifications tree — in a browser that has no Supabase project behind it.
+ * Purpose: render the real Project Settings screen — including its fiscal
+ * year, period, opening-balance and directory panels — in a browser that has no
+ * Supabase project behind it.
  * Two substitutions, nothing else:
  *
  *   1. `@/components/auth/RequireAuth` → a pass-through `RequireCapability`

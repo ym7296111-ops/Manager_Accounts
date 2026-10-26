@@ -7,17 +7,16 @@ import '@/dev/preview/preview.css';
 /**
  * Local review harness for the Project Settings screen.
  *
- * It mounts the REAL `ProjectSettings` screen (same tabs, same panel, same
- * `Classifications` tree and hook) and only replaces the two things this
- * sandbox cannot provide: a session behind the capability guard
- * (`RequireCapabilityPassthrough`) and a database (the react-query cache is
- * primed instead).
+ * It mounts the REAL `ProjectSettings` screen (same tabs, fiscal panels,
+ * directory trees and hooks) and replaces only the capability guard and
+ * Supabase transport with preview-only stand-ins.
  *
  * The hooks run unmodified: `@/lib/supabase` is aliased to
  * `memorySupabase.ts` (see `vite.preview.config.ts`), an in-memory client that
- * mints codes and derives `level`/`is_leaf` like the database triggers do. That
- * makes create / rename / toggle / delete clickable here, including the
- * refusal to delete a node that still has children.
+ * mirrors the fiscal-year/month trigger behavior and opening-balance upsert
+ * shape alongside the existing directory triggers. Authentication, RLS and
+ * the real audit trigger are not simulated here; the live database remains
+ * authoritative.
  *
  * Run with: `npm run preview:ui` (see `vite.preview.config.ts`).
  */

@@ -632,7 +632,117 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.sisterCompanies.writeError.notFound':
     'This company no longer exists. Refresh the tree and try again.',
   'settings.project.sisterCompanies.writeError.unknown': 'The operation failed. Please try again.',
-  'settings.project.tabs.generalPlaceholder': 'General settings content — coming soon.',
+  'settings.project.fiscal.heading': 'Financial settings',
+  'settings.project.fiscal.description':
+    'Manage fiscal years, accounting periods, and opening balances for stations, warehouses, and classifications.',
+  'settings.project.fiscal.tablist': 'Fiscal settings',
+  'settings.project.fiscal.tabs.annual': 'Annual settings',
+  'settings.project.fiscal.tabs.periods': 'Period settings',
+  'settings.project.fiscal.tabs.openingBalances': 'Opening balances',
+  'settings.project.fiscal.retry': 'Try again',
+  'settings.project.fiscal.dismiss': 'Dismiss alert',
+  'settings.project.fiscal.error.forbidden':
+    'You do not have permission to access fiscal settings (project.settings:manage).',
+  'settings.project.fiscal.error.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.fiscal.error.network':
+    'Could not reach the server. Check your connection and try again.',
+  'settings.project.fiscal.error.unknown': 'Could not load fiscal data.',
+  'settings.project.fiscal.writeError.forbidden':
+    'You do not have permission to perform this operation (project.settings:manage). The database refused the request.',
+  'settings.project.fiscal.writeError.unavailable':
+    'The database connection is not configured in this environment.',
+  'settings.project.fiscal.writeError.network': 'Could not reach the server. Please try again.',
+  'settings.project.fiscal.writeError.validation': 'The value or date range is invalid.',
+  'settings.project.fiscal.writeError.duplicate': 'A fiscal year with this name already exists.',
+  'settings.project.fiscal.writeError.notFound':
+    'The record no longer exists or you are not allowed to update it. Refresh and try again.',
+  'settings.project.fiscal.writeError.unknown': 'The operation failed. Please try again.',
+  'settings.project.fiscal.annual.loading': 'Loading fiscal years…',
+  'settings.project.fiscal.annual.heading': 'Fiscal years',
+  'settings.project.fiscal.annual.description':
+    'Create a fiscal year from its start and end dates; the system derives its name and generates all twelve months.',
+  'settings.project.fiscal.annual.add': 'Add fiscal year',
+  'settings.project.fiscal.annual.column.year': 'Fiscal year',
+  'settings.project.fiscal.annual.column.start': 'Start date',
+  'settings.project.fiscal.annual.column.end': 'End date',
+  'settings.project.fiscal.annual.column.status': 'Status',
+  'settings.project.fiscal.annual.column.actions': 'Action',
+  'settings.project.fiscal.annual.status.active': 'Active',
+  'settings.project.fiscal.annual.status.inactive': 'Inactive',
+  'settings.project.fiscal.annual.status.closed': 'Closed',
+  'settings.project.fiscal.annual.status.current': 'Current',
+  'settings.project.fiscal.annual.activate': 'Activate',
+  'settings.project.fiscal.annual.activateNamed': 'Activate {name}',
+  'settings.project.fiscal.annual.toggleMonths': 'Show months for {name}',
+  'settings.project.fiscal.annual.monthsLoading': 'Loading fiscal months…',
+  'settings.project.fiscal.annual.monthsCount': 'Months in this year: {count}',
+  'settings.project.fiscal.annual.monthsEmpty': 'No months were generated for this year.',
+  'settings.project.fiscal.annual.empty.title': 'No fiscal years yet',
+  'settings.project.fiscal.annual.empty.description':
+    'Add the first fiscal year by choosing its start and end dates; its name and months will be generated automatically.',
+  'settings.project.fiscal.annual.success.created':
+    'Fiscal year and its months were created successfully.',
+  'settings.project.fiscal.annual.success.activated': 'Fiscal year activated.',
+  'settings.project.fiscal.annual.dialog.title': 'Add fiscal year',
+  'settings.project.fiscal.annual.dialog.close': 'Close fiscal year dialog',
+  'settings.project.fiscal.annual.dialog.description':
+    'Choose the start and end dates. The system derives the name and automatically creates twelve months.',
+  'settings.project.fiscal.annual.dialog.startDate': 'Start date',
+  'settings.project.fiscal.annual.dialog.endDate': 'End date',
+  'settings.project.fiscal.annual.dialog.namePreview': 'Name to be generated: {name}',
+  'settings.project.fiscal.annual.dialog.namePending':
+    'The derived name appears after both dates are entered.',
+  'settings.project.fiscal.annual.dialog.monthsGenerated':
+    'When saved, the database trigger automatically creates all twelve months.',
+  'settings.project.fiscal.annual.dialog.cancel': 'Cancel',
+  'settings.project.fiscal.annual.dialog.saving': 'Creating…',
+  'settings.project.fiscal.annual.dialog.save': 'Save fiscal year',
+  'settings.project.fiscal.periods.loadingYear': 'Loading active fiscal year…',
+  'settings.project.fiscal.periods.loadingMonths': 'Loading months in the active year…',
+  'settings.project.fiscal.periods.heading': 'Accounting periods',
+  'settings.project.fiscal.periods.activeYear': 'Active year: {name}',
+  'settings.project.fiscal.periods.monthList': 'Months in the active fiscal year',
+  'settings.project.fiscal.periods.periodLabel': 'Period {period}',
+  'settings.project.fiscal.periods.nowInPeriod': 'We are now in period {period} of {month}.',
+  'settings.project.fiscal.periods.currentPeriod': 'Current period',
+  'settings.project.fiscal.periods.decrement': 'Decrease period number',
+  'settings.project.fiscal.periods.increment': 'Increase period number',
+  'settings.project.fiscal.periods.save': 'Save period',
+  'settings.project.fiscal.periods.saving': 'Saving…',
+  'settings.project.fiscal.periods.closedHint':
+    'The year or month is closed; its current period cannot be changed.',
+  'settings.project.fiscal.periods.success.saved': 'Current period updated.',
+  'settings.project.fiscal.periods.noActiveYear.title': 'No active fiscal year',
+  'settings.project.fiscal.periods.noActiveYear.description':
+    'Activate a fiscal year in Annual settings before changing its periods.',
+  'settings.project.fiscal.periods.noMonths.title': 'No months in the active year',
+  'settings.project.fiscal.periods.noMonths.description':
+    'The database returned no months for the active fiscal year.',
+  'settings.project.fiscal.openingBalances.loadingYear': 'Loading active fiscal year…',
+  'settings.project.fiscal.openingBalances.loading': 'Loading stations, warehouses, and balances…',
+  'settings.project.fiscal.openingBalances.heading': 'Opening balances',
+  'settings.project.fiscal.openingBalances.activeYear': 'Active year: {name}',
+  'settings.project.fiscal.openingBalances.totalHint':
+    'Totals add the entered balances. Enter an amount at one level of a classification branch to avoid counting it twice.',
+  'settings.project.fiscal.openingBalances.toggleStation': 'Show warehouses for {name}',
+  'settings.project.fiscal.openingBalances.stationTotal': 'Station total',
+  'settings.project.fiscal.openingBalances.toggleWarehouse': 'Show classifications for {name}',
+  'settings.project.fiscal.openingBalances.warehouseTotal': 'Total:',
+  'settings.project.fiscal.openingBalances.saveWarehouse': 'Save balances for {name}',
+  'settings.project.fiscal.openingBalances.save': 'Save balances',
+  'settings.project.fiscal.openingBalances.saving': 'Saving…',
+  'settings.project.fiscal.openingBalances.amountLabel': 'Opening balance: {path}',
+  'settings.project.fiscal.openingBalances.noClassifications':
+    'No classifications are available for balance entry.',
+  'settings.project.fiscal.openingBalances.noWarehouses': 'This station has no warehouses.',
+  'settings.project.fiscal.openingBalances.noStations.title': 'No stations',
+  'settings.project.fiscal.openingBalances.noStations.description':
+    'Add a station, warehouse, and classifications before entering opening balances.',
+  'settings.project.fiscal.openingBalances.noActiveYear.title': 'No active fiscal year',
+  'settings.project.fiscal.openingBalances.noActiveYear.description':
+    'Activate a fiscal year in Annual settings to view its opening balances.',
+  'settings.project.fiscal.openingBalances.success.saved': 'Warehouse balances saved successfully.',
   'settings.appearance.desc':
     'Default language, theme, time zone and weekend days for this project.',
   'settings.notifications.title': 'Notifications',

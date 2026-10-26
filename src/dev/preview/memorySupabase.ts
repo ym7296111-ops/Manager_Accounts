@@ -24,11 +24,14 @@
  *   refused with 23514;
  * * sister companies form a two-level tree: `SIS-001` for a parent company and
  *   `SIS-001-01` for its first branch, `parent_id`/`code`/`level` are refused
- *   on update, and deleting a company that still has branches raises 23503.
+ *   on update, and deleting a company that still has branches raises 23503;
+ * * a fiscal-year insert derives its name and generates twelve months, a
+ *   period edit writes only `current_period`, and opening balances upsert on
+ *   `(fiscal_year_id, warehouse_id, classification_id)`.
  *
  * What it does NOT reproduce: authentication, RLS, concurrency and the audit
- * trail. Those are exercised by the unit tests, the DB audit and Playwright
- * against a real stack.
+ * trigger/logs. Those remain database responsibilities and are checked by the
+ * real-stack E2E flow and database audit.
  */
 
 export interface PreviewRow {
@@ -165,6 +168,140 @@ const warehouses: SimpleRow[] = [
   { id: 'w-2', station_id: 's-1', code: 'WH-002', name: 'مخزن قطع الغيار', is_active: true },
   { id: 'w-3', station_id: 's-1', code: 'WH-003', name: 'مخزن المرتجعات', is_active: false },
   { id: 'w-4', station_id: 's-2', code: 'WH-004', name: 'مخزن العدد والأدوات', is_active: true },
+];
+
+interface FiscalYearPreviewRow {
+  id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  is_closed: boolean;
+  supplements_open: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface FiscalMonthPreviewRow {
+  id: string;
+  fiscal_year_id: string;
+  month_number: number;
+  name: string;
+  start_date: string;
+  end_date: string;
+  current_period: number;
+  is_closed: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface OpeningBalancePreviewRow {
+  id: string;
+  fiscal_year_id: string;
+  warehouse_id: string;
+  classification_id: string;
+  amount: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const MONTH_NAMES = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'أبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+] as const;
+
+function fiscalDate(year: number, monthIndex: number, day: number): string {
+  const lastDay = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate();
+  const date = new Date(Date.UTC(year, monthIndex, Math.min(day, lastDay)));
+  return date.toISOString().slice(0, 10);
+}
+
+function addFiscalMonths(startDate: string, amount: number): string {
+  const [yearText = '1970', monthText = '1', dayText = '1'] = startDate.split('-');
+  const baseYear = Number(yearText);
+  const baseMonth = Number(monthText) - 1;
+  const targetMonth = baseMonth + amount;
+  const targetYear = baseYear + Math.floor(targetMonth / 12);
+  return fiscalDate(targetYear, targetMonth % 12, Number(dayText));
+}
+
+function previousDay(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function createFiscalMonths(year: FiscalYearPreviewRow): FiscalMonthPreviewRow[] {
+  return Array.from({ length: 12 }, (_, index) => {
+    const monthStart = [addFiscalMonths(year.start_date, index), year.end_date].sort()[0]!;
+    const nextStart = [addFiscalMonths(year.start_date, index + 1), year.end_date].sort()[0]!;
+    const monthEnd =
+      index === 11 ? year.end_date : [previousDay(nextStart), year.end_date].sort()[0]!;
+    const date = new Date(`${monthStart}T00:00:00.000Z`);
+    const monthName = MONTH_NAMES[date.getUTCMonth()] ?? 'يناير';
+    return {
+      id: id('fiscal-month'),
+      fiscal_year_id: year.id,
+      month_number: index + 1,
+      name: `${monthName} ${date.getUTCFullYear()}`,
+      start_date: monthStart,
+      end_date: monthEnd < monthStart ? monthStart : monthEnd,
+      current_period: 1,
+      is_closed: false,
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    };
+  });
+}
+
+const fiscalYears: FiscalYearPreviewRow[] = [
+  {
+    id: 'fy-preview-2025',
+    name: '2025-2026',
+    start_date: '2025-07-01',
+    end_date: '2026-06-30',
+    is_active: true,
+    is_closed: false,
+    supplements_open: false,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+];
+
+const fiscalMonths = createFiscalMonths(fiscalYears[0]!);
+if (fiscalMonths[0] !== undefined) {
+  fiscalMonths[0].current_period = 3;
+}
+
+const openingBalances: OpeningBalancePreviewRow[] = [
+  {
+    id: 'ob-preview-steel',
+    fiscal_year_id: 'fy-preview-2025',
+    warehouse_id: 'w-1',
+    classification_id: 'i-steel',
+    amount: 125000.5,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'ob-preview-wood',
+    fiscal_year_id: 'fy-preview-2025',
+    warehouse_id: 'w-1',
+    classification_id: 'i-wood',
+    amount: 52500,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
 ];
 
 interface PartyPreviewRow {
@@ -577,6 +714,200 @@ function runParty(
   }
 }
 
+type PreviewPayload = Record<string, unknown> | readonly Record<string, unknown>[];
+type FiscalPreviewTable = 'fiscal_years' | 'fiscal_months' | 'opening_balances';
+
+function onePayload(payload: PreviewPayload | undefined): Record<string, unknown> {
+  if (Array.isArray(payload)) {
+    return (payload[0] as Record<string, unknown> | undefined) ?? {};
+  }
+  return (payload as Record<string, unknown> | undefined) ?? {};
+}
+
+function matchesFilters(
+  row: Record<string, unknown>,
+  filters: readonly (readonly [string, unknown])[],
+): boolean {
+  return filters.every(([column, value]) => row[column] === value);
+}
+
+function runFiscal(
+  table: FiscalPreviewTable,
+  operation: 'insert' | 'upsert' | 'update' | 'delete' | 'select',
+  payload: PreviewPayload | undefined,
+  filters: readonly (readonly [string, unknown])[],
+  single: boolean,
+): Outcome {
+  try {
+    if (table === 'fiscal_years') {
+      if (operation === 'insert') {
+        const input = onePayload(payload);
+        if ('name' in input) {
+          throw new DbError('42501', 'preview: the year name is derived by the database');
+        }
+        const startDate = typeof input.start_date === 'string' ? input.start_date : '';
+        const endDate = typeof input.end_date === 'string' ? input.end_date : '';
+        if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(startDate) ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
+          startDate >= endDate
+        ) {
+          throw new DbError('23514', 'fiscal_years_valid_date_range');
+        }
+        const name = `${startDate.slice(0, 4)}-${endDate.slice(0, 4)}`;
+        if (fiscalYears.some((year) => year.name === name)) {
+          throw new DbError('23505', 'fiscal_years_name_key');
+        }
+        const row: FiscalYearPreviewRow = {
+          id: id('fiscal-year'),
+          name,
+          start_date: startDate,
+          end_date: endDate,
+          is_active: false,
+          is_closed: false,
+          supplements_open: false,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        };
+        fiscalYears.push(row);
+        fiscalMonths.push(...createFiscalMonths(row));
+        return { data: single ? { ...row } : [{ ...row }], error: null };
+      }
+
+      if (operation === 'update') {
+        const row = matchOne(fiscalYears, filters);
+        if (row === null) {
+          throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
+        }
+        const input = onePayload(payload);
+        if (Object.keys(input).some((key) => key !== 'is_active')) {
+          throw new DbError('42501', 'preview: only fiscal year activation is exposed here');
+        }
+        if (input.is_active !== true) {
+          throw new DbError('23514', 'fiscal_years_is_active_check');
+        }
+        for (const year of fiscalYears) {
+          year.is_active = year.id === row.id;
+          year.updated_at = nowIso();
+        }
+        return { data: single ? { ...row } : [{ ...row }], error: null };
+      }
+
+      if (operation === 'select') {
+        const rows = fiscalYears
+          .filter((row) => matchesFilters(row as unknown as Record<string, unknown>, filters))
+          .slice()
+          .sort((a, b) => b.start_date.localeCompare(a.start_date))
+          .map((row) => ({ ...row }));
+        return { data: single ? (rows[0] ?? null) : rows, error: null };
+      }
+
+      return { data: [], error: null };
+    }
+
+    if (table === 'fiscal_months') {
+      if (operation === 'update') {
+        const row = matchOne(fiscalMonths, filters);
+        if (row === null) {
+          throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
+        }
+        const input = onePayload(payload);
+        if (Object.keys(input).some((key) => key !== 'current_period')) {
+          throw new DbError('42501', 'preview: only current_period is editable');
+        }
+        const period = Number(input.current_period);
+        if (!Number.isSafeInteger(period) || period < 1) {
+          throw new DbError('23514', 'fiscal_months_current_period_positive');
+        }
+        row.current_period = period;
+        row.updated_at = nowIso();
+        return { data: single ? { ...row } : [{ ...row }], error: null };
+      }
+
+      if (operation === 'select') {
+        const rows = fiscalMonths
+          .filter((row) => matchesFilters(row as unknown as Record<string, unknown>, filters))
+          .slice()
+          .sort((a, b) => a.month_number - b.month_number)
+          .map((row) => ({ ...row }));
+        return { data: single ? (rows[0] ?? null) : rows, error: null };
+      }
+
+      return { data: [], error: null };
+    }
+
+    if (operation === 'upsert') {
+      const incoming = Array.isArray(payload) ? payload : payload === undefined ? [] : [payload];
+      const saved: OpeningBalancePreviewRow[] = [];
+      for (const value of incoming) {
+        const input = value as Record<string, unknown>;
+        const fiscalYearId = typeof input.fiscal_year_id === 'string' ? input.fiscal_year_id : '';
+        const warehouseId = typeof input.warehouse_id === 'string' ? input.warehouse_id : '';
+        const classificationId =
+          typeof input.classification_id === 'string' ? input.classification_id : '';
+        const amountText =
+          typeof input.amount === 'string' || typeof input.amount === 'number'
+            ? String(input.amount)
+            : '';
+        if (
+          !fiscalYears.some((year) => year.id === fiscalYearId) ||
+          !warehouses.some((warehouse) => warehouse.id === warehouseId) ||
+          !classifications.some((classification) => classification.id === classificationId) ||
+          !/^\d{1,16}(?:\.\d{1,2})?$/.test(amountText) ||
+          !Number.isFinite(Number(amountText)) ||
+          Number(amountText) < 0
+        ) {
+          throw new DbError('23514', 'opening_balances_amount_non_negative');
+        }
+        const existing = openingBalances.find(
+          (row) =>
+            row.fiscal_year_id === fiscalYearId &&
+            row.warehouse_id === warehouseId &&
+            row.classification_id === classificationId,
+        );
+        if (existing !== undefined) {
+          existing.amount = Number(amountText);
+          existing.updated_at = nowIso();
+          saved.push({ ...existing });
+        } else {
+          const row: OpeningBalancePreviewRow = {
+            id: id('opening-balance'),
+            fiscal_year_id: fiscalYearId,
+            warehouse_id: warehouseId,
+            classification_id: classificationId,
+            amount: Number(amountText),
+            created_at: nowIso(),
+            updated_at: nowIso(),
+          };
+          openingBalances.push(row);
+          saved.push({ ...row });
+        }
+      }
+      return { data: single ? (saved[0] ?? null) : saved, error: null };
+    }
+
+    if (operation === 'select') {
+      const rows = openingBalances
+        .filter((row) => matchesFilters(row as unknown as Record<string, unknown>, filters))
+        .slice()
+        .sort(
+          (a, b) =>
+            a.warehouse_id.localeCompare(b.warehouse_id) ||
+            a.classification_id.localeCompare(b.classification_id),
+        )
+        .map((row) => ({ ...row }));
+      return { data: single ? (rows[0] ?? null) : rows, error: null };
+    }
+
+    return { data: [], error: null };
+  } catch (error) {
+    if (error instanceof DbError) {
+      return { data: null, error };
+    }
+    throw error;
+  }
+}
+
 function matchOne<T extends { id: string }>(
   rows: T[],
   filters: readonly (readonly [string, unknown])[],
@@ -656,21 +987,39 @@ interface Builder extends PromiseLike<Outcome> {
  */
 function builder(
   table: string,
-  operation: 'insert' | 'update' | 'delete' | 'select',
-  payload?: Record<string, unknown>,
+  operation: 'insert' | 'upsert' | 'update' | 'delete' | 'select',
+  payload?: PreviewPayload,
 ): Builder {
   const filters: Array<readonly [string, unknown]> = [];
   let single = false;
 
   const execute = (): Outcome => {
+    if (table === 'fiscal_years' || table === 'fiscal_months' || table === 'opening_balances') {
+      return runFiscal(table, operation, payload, filters, single);
+    }
     if (table === 'classifications') {
-      return runClassification(operation, payload, filters, single);
+      return runClassification(
+        operation as 'insert' | 'update' | 'delete' | 'select',
+        onePayload(payload),
+        filters,
+        single,
+      );
     }
     if (table === 'parties') {
-      return runParty(operation, payload, filters, single);
+      return runParty(
+        operation as 'insert' | 'update' | 'delete' | 'select',
+        onePayload(payload),
+        filters,
+        single,
+      );
     }
     if (table === 'sister_companies') {
-      return runSisterCompany(operation, payload, filters, single);
+      return runSisterCompany(
+        operation as 'insert' | 'update' | 'delete' | 'select',
+        onePayload(payload),
+        filters,
+        single,
+      );
     }
     if (operation === 'select' && table === 'stations') {
       return { data: projectStations(), error: null };
@@ -697,8 +1046,9 @@ function builder(
 export interface PreviewSupabaseClient {
   from: (table: string) => {
     select: (columns?: string) => Builder;
-    insert: (payload: Record<string, unknown>) => Builder;
-    update: (payload: Record<string, unknown>) => Builder;
+    insert: (payload: PreviewPayload) => Builder;
+    upsert: (payload: PreviewPayload, options?: { onConflict?: string }) => Builder;
+    update: (payload: PreviewPayload) => Builder;
     delete: () => Builder;
   };
 }
@@ -706,8 +1056,9 @@ export interface PreviewSupabaseClient {
 const client: PreviewSupabaseClient = {
   from: (table: string) => ({
     select: (columns?: string) => builder(table, 'select', undefined).select(columns),
-    insert: (payload: Record<string, unknown>) => builder(table, 'insert', payload),
-    update: (payload: Record<string, unknown>) => builder(table, 'update', payload),
+    insert: (payload: PreviewPayload) => builder(table, 'insert', payload),
+    upsert: (payload: PreviewPayload) => builder(table, 'upsert', payload),
+    update: (payload: PreviewPayload) => builder(table, 'update', payload),
     delete: () => builder(table, 'delete'),
   }),
 };

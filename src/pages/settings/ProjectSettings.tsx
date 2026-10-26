@@ -8,6 +8,7 @@ import Classifications from '@/pages/settings/Classifications';
 import Parties from '@/pages/settings/Parties';
 import SisterCompanies from '@/pages/settings/SisterCompanies';
 import StationsWarehouses from '@/pages/settings/StationsWarehouses';
+import FiscalSettings from '@/pages/settings/FiscalSettings';
 
 /**
  * Project-settings screen (`/settings/project`).
@@ -19,14 +20,15 @@ import StationsWarehouses from '@/pages/settings/StationsWarehouses';
  *   2. التصنيفات               classifications (flat read assembled into a tree)
  *   3. جهات الوارد وأغراض الصرف  parties (a two-root tree: inbound / outbound)
  *   4. الشركات الشقيقة          sister companies (a two-level parent → branch tree)
- *   5. عام                     a placeholder
+ *   5. عام                     financial settings (annual years, periods, opening balances)
  *
  * Every tab fetches only while its own panel is mounted, so switching tabs
  * costs no background traffic. Sister companies sits at the top level rather
  * than inside the parties tab: its shape is a tree while the parties
  * directories are flat lists, and its purpose (intercompany transfers) is
  * distinct, so it reads better as a peer tab with no sub-tabs of its own.
- * General is still a placeholder and issues no queries.
+ * General owns the fiscal-settings sub-tabs; application identity and branding
+ * remain on their separate settings screen.
  */
 type ProjectSettingsTab =
   'stations' | 'classifications' | 'parties' | 'sisterCompanies' | 'general';
@@ -34,8 +36,6 @@ type ProjectSettingsTab =
 interface ProjectSettingsTabConfig {
   id: ProjectSettingsTab;
   labelKey: TranslationKey;
-  /** Placeholder copy for the tabs whose content has not been built yet. */
-  placeholderKey?: TranslationKey;
 }
 
 const TABS: readonly ProjectSettingsTabConfig[] = [
@@ -58,7 +58,6 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'general',
     labelKey: 'settings.project.tabs.general',
-    placeholderKey: 'settings.project.tabs.generalPlaceholder',
   },
 ] as const;
 
@@ -144,9 +143,7 @@ export default function ProjectSettings() {
               /* The tree opens straight away — no sub-tabs of its own. */
               <SisterCompanies />
             ) : (
-              <p className="text-muted-foreground text-sm leading-relaxed">
-                {activeConfig.placeholderKey !== undefined ? t(activeConfig.placeholderKey) : null}
-              </p>
+              <FiscalSettings />
             )}
           </div>
         </div>

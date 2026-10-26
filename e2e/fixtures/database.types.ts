@@ -84,6 +84,70 @@ export interface E2EDatabase {
           is_active?: boolean;
         }
       >;
+      fiscal_years: Table<
+        {
+          id: string;
+          name: string;
+          start_date: string;
+          end_date: string;
+          is_active: boolean;
+          is_closed: boolean;
+          supplements_open: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          start_date: string;
+          end_date: string;
+          name?: string;
+          is_active?: boolean;
+          is_closed?: boolean;
+          supplements_open?: boolean;
+        }
+      >;
+      fiscal_months: Table<
+        {
+          id: string;
+          fiscal_year_id: string;
+          month_number: number;
+          name: string;
+          start_date: string;
+          end_date: string;
+          current_period: number;
+          is_closed: boolean;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          fiscal_year_id: string;
+          month_number: number;
+          name: string;
+          start_date: string;
+          end_date: string;
+          current_period?: number;
+          is_closed?: boolean;
+        }
+      >;
+      opening_balances: Table<
+        {
+          id: string;
+          fiscal_year_id: string;
+          warehouse_id: string;
+          classification_id: string;
+          amount: number;
+          created_at: string;
+          updated_at: string;
+        },
+        {
+          id?: string;
+          fiscal_year_id: string;
+          warehouse_id: string;
+          classification_id: string;
+          amount?: number;
+        }
+      >;
       /* `code` and `level` are absent from Insert: `sister_companies_before_write`
          mints SIS-001 for a parent and SIS-001-01 for a branch, and derives the
          level from parent_id. `parent_id` stays writable in Update only so the
