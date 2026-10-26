@@ -4,9 +4,9 @@
  * Drives the preview harness on :4173 and captures the classifications tree,
  * the two «جهات الوارد والمنصرف» sub-tabs and the «الشركات الشقيقة» tab (a
  * top-level tab of its own) in Arabic (default), plus English, dark and mobile
- * frames. It also exercises the two rules the review asks
- * about: the outbound tab offers no type control, and a parent company with
- * branches cannot be deleted.
+ * frames. It also checks the fiscal tabs, cards and date inputs at 390px, and
+ * exercises the two rules the review asks about: the outbound tab offers no
+ * type control, and a parent company with branches cannot be deleted.
  */
 import { chromium } from 'playwright-core';
 
@@ -47,6 +47,60 @@ async function openSettingsTab(tabId, heading) {
 /* Both roots render their panel: wait for it before shooting. */
 async function openPartiesRoot(branch) {
   await page.locator(`#parties-root-panel-${branch}`).waitFor();
+}
+
+async function assertMobileViewport() {
+  const measurements = await page.evaluate(() => {
+    const viewportWidth = document.documentElement.clientWidth;
+    const pageWidth = document.documentElement.scrollWidth;
+    const clippedTabs = Array.from(document.querySelectorAll('[role="tab"]'))
+      .filter((tab) => {
+        const bounds = tab.getBoundingClientRect();
+        return (
+          bounds.width > 0 &&
+          (bounds.left < -1 ||
+            bounds.right > viewportWidth + 1 ||
+            tab.scrollWidth > tab.clientWidth + 1)
+        );
+      })
+      .map((tab) => tab.id);
+    return { viewportWidth, pageWidth, clippedTabs };
+  });
+  expect(
+    measurements.pageWidth <= measurements.viewportWidth,
+    `page has horizontal overflow at ${measurements.viewportWidth}px: ${measurements.pageWidth}px`,
+  );
+  expect(
+    measurements.clippedTabs.length === 0,
+    `clipped tabs: ${measurements.clippedTabs.join(', ')}`,
+  );
+  return measurements;
+}
+
+async function assertFieldsFit(selector, label) {
+  const fields = await page.locator(selector).evaluateAll((elements) =>
+    elements.map((element) => {
+      const bounds = element.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        width: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      };
+    }),
+  );
+  expect(fields.length > 0, `${label}: no fields found`);
+  for (const field of fields) {
+    expect(
+      field.left >= 0 && field.right <= 390,
+      `${label}: field outside viewport: ${JSON.stringify(field)}`,
+    );
+    expect(
+      field.scrollWidth <= field.width + 1,
+      `${label}: field content is clipped: ${JSON.stringify(field)}`,
+    );
+  }
+  return fields;
 }
 
 /* Review scratch state must not depend on a previous run: the harness keeps
@@ -223,6 +277,64 @@ await page.locator('#project-settings-tab-parties').click();
 await openPartiesRoot('inbound');
 await page.getByText('IN-001', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-inbound-mobile.png`, fullPage: true });
+
+// General → opening balances on a real 390px RTL viewport. The cards are
+// expanded so the mobile capture includes the numeric fields, not just the
+// empty accordion headers.
+await page.goto(BASE, { waitUntil: 'networkidle' });
+await page.setViewportSize({ width: 390, height: 844 });
+await page.locator('#project-settings-tab-general').click();
+const annualViewport = await assertMobileViewport();
+console.log('annual settings mobile layout:', annualViewport);
+await page.locator('#fiscal-settings-tab-periods').click();
+await page.locator('#current-fiscal-period').waitFor();
+const periodViewport = await assertMobileViewport();
+console.log('period settings mobile layout:', periodViewport);
+const periodFields = await assertFieldsFit('#current-fiscal-period', 'current period');
+console.log('period field bounds:', periodFields);
+await page.locator('#fiscal-settings-tab-openingBalances').click();
+await page.locator('#opening-station-toggle-s-1').click();
+await page.locator('#opening-warehouse-toggle-w-1').click();
+const openingViewport = await assertMobileViewport();
+console.log('opening balances mobile layout:', openingViewport);
+const openingFields = await assertFieldsFit(
+  '#opening-warehouse-panel-w-1 input',
+  'opening-balance inputs',
+);
+console.log('opening-balance input count:', openingFields.length);
+await page.screenshot({ path: `${OUT}/fiscal-opening-balances-mobile-390.png`, fullPage: true });
+
+// The shared date inputs also remain inside the modal at phone width.
+await page.locator('#fiscal-settings-tab-annual').click();
+await page.getByRole('button', { name: 'إضافة سنة مالية' }).click();
+const fiscalDateFields = await page
+  .getByRole('dialog')
+  .locator('input[type="date"]')
+  .evaluateAll((fields) =>
+    fields.map((field) => {
+      const bounds = field.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        width: field.clientWidth,
+        scrollWidth: field.scrollWidth,
+      };
+    }),
+  );
+expect(fiscalDateFields.length === 2, 'the fiscal-year modal should have two date fields');
+for (const field of fiscalDateFields) {
+  expect(
+    field.left >= 0 && field.right <= 390,
+    `date field outside viewport: ${JSON.stringify(field)}`,
+  );
+  expect(
+    field.scrollWidth <= field.width + 1,
+    `date field text is clipped: ${JSON.stringify(field)}`,
+  );
+}
+const modalViewport = await assertMobileViewport();
+console.log('fiscal-year date modal mobile layout:', modalViewport);
+await page.screenshot({ path: `${OUT}/fiscal-year-date-modal-mobile-390.png`, fullPage: true });
 
 await browser.close();
 console.log('screenshots written');

@@ -182,6 +182,103 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 });
 
+test('project settings stay within a 390px RTL viewport, including date fields', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => localStorage.setItem('admin-system:locale', 'ar'));
+  await page.goto('/settings/project');
+
+  const assertMobileLayout = async () => {
+    const measurements = await page.evaluate(() => {
+      const browserDocument = (
+        globalThis as unknown as {
+          document: {
+            documentElement: { clientWidth: number; scrollWidth: number };
+            querySelectorAll: (selector: string) => ArrayLike<{
+              id: string;
+              clientWidth: number;
+              scrollWidth: number;
+              getBoundingClientRect: () => { width: number; left: number; right: number };
+            }>;
+          };
+        }
+      ).document;
+      const viewportWidth = browserDocument.documentElement.clientWidth;
+      const pageWidth = browserDocument.documentElement.scrollWidth;
+      const clippedTabs = Array.from(browserDocument.querySelectorAll('[role="tab"]'))
+        .filter((tab) => {
+          const bounds = tab.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            (bounds.left < -1 ||
+              bounds.right > viewportWidth + 1 ||
+              tab.scrollWidth > tab.clientWidth + 1)
+          );
+        })
+        .map((tab) => tab.id);
+      return { viewportWidth, pageWidth, clippedTabs };
+    });
+
+    expect(
+      measurements.pageWidth,
+      'The page must not scroll horizontally on a phone.',
+    ).toBeLessThanOrEqual(measurements.viewportWidth);
+    expect(
+      measurements.clippedTabs,
+      'Every tab label must remain visible and inside the viewport.',
+    ).toEqual([]);
+  };
+
+  const main = page.getByRole('main');
+  await main.locator('#project-settings-tab-general').click();
+  await expect(main.locator('#project-settings-tab-general')).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  await assertMobileLayout();
+
+  const fiscalTabIds = ['annual', 'periods', 'openingBalances'] as const;
+  for (const tabId of fiscalTabIds) {
+    const tab = main.locator(`#fiscal-settings-tab-${tabId}`);
+    await expect(tab).toBeVisible();
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-selected', 'true');
+    await assertMobileLayout();
+  }
+
+  await main.locator('#fiscal-settings-tab-annual').click();
+  await main.getByRole('button', { name: 'إضافة سنة مالية' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  type DateFieldBounds = { left: number; right: number; width: number; scrollWidth: number };
+  const dateFieldBounds: DateFieldBounds[] = await dialog
+    .locator('input[type="date"]')
+    .evaluateAll((fields: unknown[]) =>
+      fields.map((field): DateFieldBounds => {
+        const input = field as {
+          clientWidth: number;
+          scrollWidth: number;
+          getBoundingClientRect: () => { left: number; right: number };
+        };
+        const bounds = input.getBoundingClientRect();
+        return {
+          left: bounds.left,
+          right: bounds.right,
+          width: input.clientWidth,
+          scrollWidth: input.scrollWidth,
+        };
+      }),
+    );
+  expect(dateFieldBounds).toHaveLength(2);
+  for (const field of dateFieldBounds) {
+    expect(field.left).toBeGreaterThanOrEqual(0);
+    expect(field.right).toBeLessThanOrEqual(390);
+    expect(field.scrollWidth).toBeLessThanOrEqual(field.width + 1);
+  }
+  await assertMobileLayout();
+});
+
 test('hard load of /settings/project serves the screen, never a 404', async ({ page }) => {
   /* Regression guard for the production incident: a direct navigation to a
      client route fell through to the hosting SPA fallback and answered

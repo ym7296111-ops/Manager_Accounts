@@ -313,15 +313,15 @@ export default function OpeningBalancesSettings() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="w-full max-w-full min-w-0 space-y-4">
       {banner !== null ? (
         <FiscalBanner tone={banner.tone} onDismiss={() => setBanner(null)}>
           {t(banner.key)}
         </FiscalBanner>
       ) : null}
 
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
           <h3 className="text-foreground font-semibold">
             {t('settings.project.fiscal.openingBalances.heading')}
           </h3>
@@ -329,7 +329,7 @@ export default function OpeningBalancesSettings() {
             {t('settings.project.fiscal.openingBalances.activeYear', { name: activeYear.name })}
           </p>
         </div>
-        <div className="bg-muted/30 text-muted-foreground rounded-lg px-3 py-2 text-xs leading-relaxed">
+        <div className="bg-muted/30 text-muted-foreground max-w-full rounded-lg px-3 py-2 text-xs leading-relaxed">
           {t('settings.project.fiscal.openingBalances.totalHint')}
         </div>
       </header>
@@ -351,7 +351,7 @@ export default function OpeningBalancesSettings() {
             return (
               <section
                 key={station.id}
-                className="bg-card border-border overflow-hidden rounded-2xl border"
+                className="bg-card border-border w-full max-w-full min-w-0 overflow-hidden rounded-2xl border"
               >
                 <button
                   type="button"
@@ -362,9 +362,9 @@ export default function OpeningBalancesSettings() {
                     name: station.name,
                   })}
                   onClick={() => toggleStation(station.id)}
-                  className="hover:bg-muted/25 flex w-full items-center justify-between gap-4 px-4 py-4 text-start transition-colors"
+                  className="hover:bg-muted/25 flex w-full min-w-0 flex-wrap items-start justify-between gap-3 px-3 py-3 text-start transition-colors sm:gap-4 sm:px-4 sm:py-4"
                 >
-                  <span className="flex min-w-0 items-center gap-3">
+                  <span className="flex min-w-0 flex-1 items-center gap-3">
                     {stationOpen ? (
                       <ChevronDown
                         className="text-muted-foreground size-4 shrink-0"
@@ -377,13 +377,13 @@ export default function OpeningBalancesSettings() {
                       />
                     )}
                     <span className="min-w-0">
-                      <span className="text-foreground block truncate font-semibold">
+                      <span className="text-foreground block font-semibold break-words">
                         {station.name}
                       </span>
                       <span className="text-muted-foreground block text-xs">{station.code}</span>
                     </span>
                   </span>
-                  <span className="text-end">
+                  <span className="shrink-0 text-end">
                     <span className="text-muted-foreground block text-xs">
                       {t('settings.project.fiscal.openingBalances.stationTotal')}
                     </span>
@@ -432,9 +432,9 @@ export default function OpeningBalancesSettings() {
                         return (
                           <section
                             key={warehouse.id}
-                            className="bg-background border-border rounded-xl border"
+                            className="bg-background border-border w-full max-w-full min-w-0 rounded-xl border"
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 sm:p-3">
+                            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 p-2.5 sm:p-3">
                               <button
                                 type="button"
                                 id={warehouseToggleId}
@@ -447,9 +447,9 @@ export default function OpeningBalancesSettings() {
                                   },
                                 )}
                                 onClick={() => toggleWarehouse(warehouseKey)}
-                                className="focus-visible:ring-ring flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-1.5 py-1 text-start focus-visible:ring-2 focus-visible:outline-none"
+                                className="focus-visible:ring-ring flex max-w-full min-w-0 flex-1 basis-full items-center justify-between gap-3 rounded-lg px-1.5 py-1 text-start focus-visible:ring-2 focus-visible:outline-none sm:basis-auto"
                               >
-                                <span className="flex min-w-0 items-center gap-2.5">
+                                <span className="flex min-w-0 flex-1 items-center gap-2.5">
                                   {warehouseOpen ? (
                                     <ChevronDown
                                       className="text-muted-foreground size-4 shrink-0"
@@ -462,7 +462,7 @@ export default function OpeningBalancesSettings() {
                                     />
                                   )}
                                   <span className="min-w-0">
-                                    <span className="text-foreground block truncate text-sm font-semibold">
+                                    <span className="text-foreground block text-sm font-semibold break-words">
                                       {warehouse.name}
                                     </span>
                                     <span className="text-muted-foreground block text-xs">
@@ -530,7 +530,7 @@ export default function OpeningBalancesSettings() {
                                         className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b py-2 last:border-b-0"
                                         style={{ paddingInlineStart: `${depth * 1.25}rem` }}
                                       >
-                                        <div className="min-w-44 flex-1">
+                                        <div className="min-w-0 flex-1 basis-40">
                                           <p className="text-foreground text-sm font-medium">
                                             {node.name}
                                           </p>
@@ -538,7 +538,7 @@ export default function OpeningBalancesSettings() {
                                             {node.code}
                                           </p>
                                         </div>
-                                        <label className="w-full max-w-56">
+                                        <label className="w-full max-w-56 min-w-0">
                                           <span className="sr-only">
                                             {t(
                                               'settings.project.fiscal.openingBalances.amountLabel',

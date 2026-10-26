@@ -245,7 +245,11 @@ describe('FiscalSettings', () => {
     });
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'تفعيل السنة المالية 2035-2036' }));
+    fireEvent.click(
+      within(screen.getByRole('table')).getByRole('button', {
+        name: 'تفعيل السنة المالية 2035-2036',
+      }),
+    );
     await waitFor(() => expect(fiscalState.activateYear).toHaveBeenCalledWith('fy-2035'));
 
     await waitFor(() => expect(screen.getAllByTestId('fiscal-month-row')).toHaveLength(12));

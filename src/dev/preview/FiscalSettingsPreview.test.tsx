@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as SupabaseModule from '@/lib/supabase';
 import { I18nProvider } from '@/i18n/I18nContext';
@@ -36,19 +36,20 @@ describe('fiscal settings with the preview-only Supabase stand-in', () => {
   it('creates and activates a year, updates its period, and upserts opening balances', async () => {
     renderPreviewFiscalSettings();
 
-    await screen.findByRole('button', { name: 'Show months for 2025-2026' });
+    const yearTable = await screen.findByRole('table');
+    await within(yearTable).findByRole('button', { name: 'Show months for 2025-2026' });
     fireEvent.click(screen.getByRole('button', { name: 'Add fiscal year' }));
     const dialog = screen.getByRole('dialog');
     fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2035-07-01' } });
     fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2036-06-30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save fiscal year' }));
 
-    await screen.findByRole('button', { name: 'Show months for 2035-2036' });
+    await within(yearTable).findByRole('button', { name: 'Show months for 2035-2036' });
     await waitFor(() => expect(screen.getAllByTestId('fiscal-month-row')).toHaveLength(12));
     expect(dialog.isConnected).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Activate 2035-2036' }));
-    await screen.findByText('Current', { exact: true });
+    fireEvent.click(within(yearTable).getByRole('button', { name: 'Activate 2035-2036' }));
+    await within(yearTable).findByText('Current', { exact: true });
 
     fireEvent.click(screen.getByRole('tab', { name: 'Period settings' }));
     await screen.findByText('We are now in period 1 of July 2035.');

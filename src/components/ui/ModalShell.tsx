@@ -51,7 +51,7 @@ export function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="bg-card text-card-foreground border-border max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 shadow-xl"
+        className="bg-card text-card-foreground border-border max-h-[calc(100dvh-2rem)] w-full max-w-md min-w-0 overflow-y-auto rounded-2xl border p-5 shadow-xl"
       >
         <div className="flex items-start justify-between gap-4">
           <h2 id={titleId} className="text-base font-semibold">

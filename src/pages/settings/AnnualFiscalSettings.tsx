@@ -224,6 +224,164 @@ function FiscalYearRow({
   );
 }
 
+function FiscalYearCard({
+  year,
+  onActivate,
+  activating,
+  expanded,
+  onToggle,
+}: {
+  readonly year: FiscalYear;
+  readonly onActivate: (year: FiscalYear) => void;
+  readonly activating: boolean;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const monthsQuery = useFiscalMonths(expanded ? year.id : null);
+  const toggleId = `fiscal-year-mobile-toggle-${year.id}`;
+  const panelId = `fiscal-year-mobile-months-${year.id}`;
+  const statusLabel = year.is_active
+    ? t('settings.project.fiscal.annual.status.active')
+    : t('settings.project.fiscal.annual.status.inactive');
+  const monthsError = monthsQuery.isError
+    ? READ_ERROR_KEYS[classifyFiscalSettingsReadError(monthsQuery.error)]
+    : null;
+
+  return (
+    <article className="bg-card border-border min-w-0 rounded-xl border p-3">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <button
+          type="button"
+          id={toggleId}
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          aria-label={t('settings.project.fiscal.annual.toggleMonths', { name: year.name })}
+          onClick={onToggle}
+          className="focus-visible:ring-ring inline-flex min-w-0 flex-1 items-center gap-2 rounded-md text-start font-semibold focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {expanded ? (
+            <ChevronDown className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          )}
+          <span className="min-w-0 break-words">{year.name}</span>
+        </button>
+        {year.is_active ? (
+          <span className="text-success shrink-0 text-xs font-semibold">
+            {t('settings.project.fiscal.annual.status.current')}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onActivate(year)}
+            disabled={activating || year.is_closed}
+            aria-label={t('settings.project.fiscal.annual.activateNamed', { name: year.name })}
+            className={`${OUTLINE_BUTTON_CLASS} px-3 py-1.5 text-xs`}
+          >
+            {t('settings.project.fiscal.annual.activate')}
+          </button>
+        )}
+      </div>
+
+      <dl className="mt-3 grid min-w-0 grid-cols-2 gap-3 text-sm">
+        <div className="min-w-0">
+          <dt className="text-muted-foreground text-xs font-medium">
+            {t('settings.project.fiscal.annual.column.start')}
+          </dt>
+          <dd className="mt-0.5 break-words">{formatFiscalDate(year.start_date, locale)}</dd>
+        </div>
+        <div className="min-w-0">
+          <dt className="text-muted-foreground text-xs font-medium">
+            {t('settings.project.fiscal.annual.column.end')}
+          </dt>
+          <dd className="mt-0.5 break-words">{formatFiscalDate(year.end_date, locale)}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <span className="inline-flex items-center gap-1.5">
+          <StatusIcon active={year.is_active} label={statusLabel} />
+          <span>{statusLabel}</span>
+        </span>
+        {year.is_closed ? (
+          <span className="text-destructive">
+            {t('settings.project.fiscal.annual.status.closed')}
+          </span>
+        ) : null}
+      </div>
+
+      <div
+        id={panelId}
+        role="region"
+        aria-labelledby={toggleId}
+        hidden={!expanded}
+        className="border-border mt-3 border-t pt-3"
+      >
+        {expanded ? (
+          monthsQuery.isLoading ? (
+            <FiscalLoading label={t('settings.project.fiscal.annual.monthsLoading')} />
+          ) : monthsError !== null ? (
+            <div
+              role="alert"
+              className="text-destructive flex flex-wrap items-center gap-3 py-3 text-sm"
+            >
+              <span>{t(monthsError)}</span>
+              <button
+                type="button"
+                onClick={() => void monthsQuery.refetch()}
+                className="underline underline-offset-4"
+              >
+                {t('settings.project.fiscal.retry')}
+              </button>
+            </div>
+          ) : (
+            <>
+              <h3 className="text-foreground mb-3 text-sm font-semibold">
+                {t('settings.project.fiscal.annual.monthsCount', {
+                  count: monthsQuery.data?.length ?? 0,
+                })}
+              </h3>
+              {monthsQuery.data?.length ? (
+                <ul className="divide-border divide-y rounded-xl border">
+                  {monthsQuery.data.map((month) => (
+                    <li
+                      key={month.id}
+                      className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-2.5 text-sm"
+                    >
+                      <span className="min-w-0 font-medium break-words">
+                        {formatFiscalMonthName(month.start_date, locale)}
+                      </span>
+                      <span className="text-muted-foreground break-words">
+                        {formatFiscalDate(month.start_date, locale)} –{' '}
+                        {formatFiscalDate(month.end_date, locale)}
+                      </span>
+                      <span className="text-muted-foreground text-xs">
+                        {t('settings.project.fiscal.periods.periodLabel', {
+                          period: month.current_period,
+                        })}
+                      </span>
+                      {month.is_closed ? (
+                        <span className="text-destructive text-xs">
+                          {t('settings.project.fiscal.annual.status.closed')}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  {t('settings.project.fiscal.annual.monthsEmpty')}
+                </p>
+              )}
+            </>
+          )
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
 export default function AnnualFiscalSettings() {
   const { t } = useI18n();
   const yearsQuery = useFiscalYears();
@@ -302,15 +460,15 @@ export default function AnnualFiscalSettings() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="w-full max-w-full min-w-0 space-y-4">
       {banner !== null ? (
         <FiscalBanner tone={banner.tone} onDismiss={() => setBanner(null)}>
           {t(banner.key)}
         </FiscalBanner>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-0.5">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-0.5">
           <h3 className="text-foreground font-semibold">
             {t('settings.project.fiscal.annual.heading')}
           </h3>
@@ -332,51 +490,75 @@ export default function AnnualFiscalSettings() {
       </div>
 
       {yearsQuery.data?.length ? (
-        <div className="overflow-x-auto rounded-xl border">
-          <table className="w-full min-w-[760px] border-collapse text-start">
-            <thead className="bg-muted/40 text-muted-foreground text-xs">
-              <tr>
-                <th scope="col" className="px-3 py-3 font-semibold">
-                  {t('settings.project.fiscal.annual.column.year')}
-                </th>
-                <th scope="col" className="px-3 py-3 font-semibold">
-                  {t('settings.project.fiscal.annual.column.start')}
-                </th>
-                <th scope="col" className="px-3 py-3 font-semibold">
-                  {t('settings.project.fiscal.annual.column.end')}
-                </th>
-                <th scope="col" className="px-3 py-3 font-semibold">
-                  {t('settings.project.fiscal.annual.column.status')}
-                </th>
-                <th scope="col" className="px-3 py-3 text-end font-semibold">
-                  {t('settings.project.fiscal.annual.column.actions')}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {yearsQuery.data.map((year) => (
-                <FiscalYearRow
-                  key={year.id}
-                  year={year}
-                  onActivate={(candidate) => void handleActivate(candidate)}
-                  activating={activateYear.isPending}
-                  expanded={expandedIds.has(year.id)}
-                  onToggle={() =>
-                    setExpandedIds((current) => {
-                      const next = new Set(current);
-                      if (next.has(year.id)) {
-                        next.delete(year.id);
-                      } else {
-                        next.add(year.id);
-                      }
-                      return next;
-                    })
-                  }
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="min-w-0 space-y-3 xl:hidden">
+            {yearsQuery.data.map((year) => (
+              <FiscalYearCard
+                key={`mobile-${year.id}`}
+                year={year}
+                onActivate={(candidate) => void handleActivate(candidate)}
+                activating={activateYear.isPending}
+                expanded={expandedIds.has(year.id)}
+                onToggle={() =>
+                  setExpandedIds((current) => {
+                    const next = new Set(current);
+                    if (next.has(year.id)) {
+                      next.delete(year.id);
+                    } else {
+                      next.add(year.id);
+                    }
+                    return next;
+                  })
+                }
+              />
+            ))}
+          </div>
+          <div className="hidden w-full max-w-full min-w-0 scrollbar-thin overflow-x-auto rounded-xl border xl:block">
+            <table className="w-full min-w-[760px] border-collapse text-start">
+              <thead className="bg-muted/40 text-muted-foreground text-xs">
+                <tr>
+                  <th scope="col" className="px-3 py-3 font-semibold">
+                    {t('settings.project.fiscal.annual.column.year')}
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-semibold">
+                    {t('settings.project.fiscal.annual.column.start')}
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-semibold">
+                    {t('settings.project.fiscal.annual.column.end')}
+                  </th>
+                  <th scope="col" className="px-3 py-3 font-semibold">
+                    {t('settings.project.fiscal.annual.column.status')}
+                  </th>
+                  <th scope="col" className="px-3 py-3 text-end font-semibold">
+                    {t('settings.project.fiscal.annual.column.actions')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {yearsQuery.data.map((year) => (
+                  <FiscalYearRow
+                    key={year.id}
+                    year={year}
+                    onActivate={(candidate) => void handleActivate(candidate)}
+                    activating={activateYear.isPending}
+                    expanded={expandedIds.has(year.id)}
+                    onToggle={() =>
+                      setExpandedIds((current) => {
+                        const next = new Set(current);
+                        if (next.has(year.id)) {
+                          next.delete(year.id);
+                        } else {
+                          next.add(year.id);
+                        }
+                        return next;
+                      })
+                    }
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       ) : (
         <EmptyState
           icon={CalendarDays}
