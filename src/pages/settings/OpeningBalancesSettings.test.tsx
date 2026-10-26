@@ -11,6 +11,7 @@ import type {
   FiscalYear,
   OpeningBalanceRow,
   OpeningBalanceWrite,
+  SetOpeningBalancesLockInput,
 } from '@/hooks/useFiscalSettings';
 import type * as StationsModule from '@/hooks/useStationsDirectory';
 import type { StationWithWarehouses } from '@/hooks/useStationsDirectory';
@@ -50,8 +51,11 @@ interface TestState {
   save: Mock<(input: SavePayload) => Promise<readonly OpeningBalanceWrite[]>>;
   remove: Mock<(input: DeletePayload) => Promise<string>>;
   refetchBalances: ReturnType<typeof vi.fn>;
+  refetchYears: ReturnType<typeof vi.fn>;
   savePending: boolean;
   deletePending: boolean;
+  lock: Mock<(input: SetOpeningBalancesLockInput) => Promise<FiscalYear>>;
+  lockPending: boolean;
 }
 
 const state = vi.hoisted<TestState>(() => ({
@@ -63,8 +67,11 @@ const state = vi.hoisted<TestState>(() => ({
   save: vi.fn(),
   remove: vi.fn(),
   refetchBalances: vi.fn(),
+  refetchYears: vi.fn(),
   savePending: false,
   deletePending: false,
+  lock: vi.fn(),
+  lockPending: false,
 }));
 
 vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
@@ -76,7 +83,7 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
       isLoading: false,
       isError: false,
       error: null,
-      refetch: vi.fn(),
+      refetch: state.refetchYears,
     }),
     useFiscalMonths: () => ({
       data: state.months,
@@ -102,6 +109,10 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
     useDeleteOpeningBalance: () => ({
       mutateAsync: state.remove,
       isPending: state.deletePending,
+    }),
+    useSetOpeningBalancesLock: () => ({
+      mutateAsync: state.lock,
+      isPending: state.lockPending,
     }),
   };
 });
@@ -134,7 +145,7 @@ vi.mock('@/hooks/useClassifications', async (importOriginal) => {
   };
 });
 
-function fiscalYear(): FiscalYear {
+function fiscalYear(locked = false): FiscalYear {
   return {
     id: YEAR_ID,
     name: '2025-2026',
@@ -143,6 +154,7 @@ function fiscalYear(): FiscalYear {
     is_active: true,
     is_closed: false,
     supplements_open: false,
+    opening_balances_locked: locked,
     created_at: '2025-07-01T00:00:00.000Z',
     updated_at: '2025-07-01T00:00:00.000Z',
   };
@@ -289,7 +301,10 @@ beforeEach(() => {
   state.classifications = [leaf(1), leaf(2), leaf(3)];
   state.savePending = false;
   state.deletePending = false;
+  state.lockPending = false;
+  state.lock = vi.fn(() => Promise.resolve(fiscalYear(true)));
   state.refetchBalances = vi.fn();
+  state.refetchYears = vi.fn(() => Promise.resolve({}));
   state.save = vi.fn((input: { fiscalYearId: string; rows: readonly OpeningBalanceWrite[] }) => {
     saveCalls += 1;
     /* Mirror the real mutation: the saved rows come back and the cache is
@@ -803,5 +818,170 @@ describe('U14/U15 — unsaved changes guard', () => {
     expect(removeSpy.mock.calls.some(([event]) => event === 'beforeunload')).toBe(true);
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+});
+
+/**
+ * U17 — «قفل أرصدة أول المدة».
+ *
+ * The switch, the confirmation and the frozen state are UI contracts; the
+ * enforcement itself is asserted twice elsewhere: the RLS policy in
+ * `scripts/audit/database.mjs`, and the real click-through in
+ * `e2e/tests/fiscal-settings.spec.ts`. What is checked here is that the screen
+ * never offers a write it cannot perform, and never performs one silently.
+ */
+describe('U17 — opening-balance freeze', () => {
+  function lockSwitch() {
+    return screen.getByRole('switch');
+  }
+
+  function openLockedWarehouse() {
+    openStation();
+    openWarehouse();
+  }
+
+  it('renders the switch in the open state next to the active year', () => {
+    renderScreen();
+
+    expect(lockSwitch().getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByText('الأرصدة مفتوحة للتعديل')).toBeTruthy();
+    expect(screen.queryByText(/مقفلة/)).toBeNull();
+  });
+
+  it('asks before locking and sends only the freeze flag', async () => {
+    renderScreen();
+
+    fireEvent.click(lockSwitch());
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('قفل أرصدة أول المدة')).toBeTruthy();
+    expect(dialog.textContent).toContain('2025-2026');
+    expect(state.lock).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'قفل الأرصدة' }));
+
+    await waitFor(() =>
+      expect(state.lock).toHaveBeenCalledWith({ fiscalYearId: YEAR_ID, locked: true }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(
+      screen.getByText('تم قفل أرصدة أول المدة.'),
+      'The screen confirms the transition it just requested.',
+    ).toBeTruthy();
+  });
+
+  it('cancels without touching the database', () => {
+    renderScreen();
+
+    fireEvent.click(lockSwitch());
+    fireEvent.click(screen.getByRole('button', { name: 'إلغاء' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(state.lock).not.toHaveBeenCalled();
+  });
+
+  it('disables every write control and shows the banner when the year is locked', () => {
+    state.years = [fiscalYear(true)];
+    state.balances = [savedBalance(1, 125.5, { classification: { name: 'حديد وصلب' } })];
+    renderScreen();
+    openLockedWarehouse();
+
+    expect(lockSwitch().getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByText('الأرصدة مقفلة - لا يمكن التعديل')).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole('status')
+        .map((element) => element.textContent)
+        .join(' '),
+      'The banner must name the year and say the balances are frozen.',
+    ).toContain('مقفلة');
+
+    const amount = screen.getByRole<HTMLInputElement>('spinbutton', {
+      name: 'رصيد أول المدة: حديد وصلب',
+    });
+    expect(amount.disabled).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'إضافة تصنيف' }).disabled).toBe(
+      true,
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', {
+        name: 'حفظ أرصدة مخزن مخزن المواد الخام',
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'حذف رصيد حديد وصلب' }).disabled,
+    ).toBe(true);
+  });
+
+  it('warns that locking discards drafts that were typed but not saved', () => {
+    renderScreen();
+    openLockedWarehouse();
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف' }));
+    const picker = screen.getByTestId('classification-picker');
+    fireEvent.click(within(picker).getByRole('option', { name: /تصنيف 1/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: /إضافة/ }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'رصيد أول المدة: تصنيف 1' }), {
+      target: { value: '10.00' },
+    });
+
+    fireEvent.click(lockSwitch());
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('ستُفقد عند القفل');
+  });
+
+  it('reopens the year through the same switch and sends locked=false', async () => {
+    state.years = [fiscalYear(true)];
+    renderScreen();
+
+    expect(screen.getByText('الأرصدة مقفلة - لا يمكن التعديل')).toBeTruthy();
+    fireEvent.click(lockSwitch());
+
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('فتح أرصدة أول المدة')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'فتح الأرصدة' }));
+
+    await waitFor(() =>
+      expect(state.lock).toHaveBeenCalledWith({ fiscalYearId: YEAR_ID, locked: false }),
+    );
+    await waitFor(() => expect(screen.getByText('تم فتح أرصدة أول المدة.')).toBeTruthy());
+  });
+
+  it('re-reads the year when a save is refused, so a freeze from another tab surfaces', async () => {
+    state.save = vi.fn(() => Promise.reject(new FiscalSettingsWriteError('forbidden')));
+    renderScreen();
+    openStation();
+    openWarehouse();
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف' }));
+    const picker = screen.getByTestId('classification-picker');
+    fireEvent.click(within(picker).getByRole('option', { name: /تصنيف 1/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: /إضافة/ }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'رصيد أول المدة: تصنيف 1' }), {
+      target: { value: '10.00' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ أرصدة مخزن مخزن المواد الخام' }));
+
+    await waitFor(() =>
+      expect(
+        state.refetchYears,
+        'A refused save must re-read the year, not just report an error.',
+      ).toHaveBeenCalled(),
+    );
+  });
+
+  it('reports a refused transition instead of pretending it happened', async () => {
+    state.lock = vi.fn(() => Promise.reject(new FiscalSettingsWriteError('forbidden')));
+    renderScreen();
+
+    fireEvent.click(lockSwitch());
+    fireEvent.click(screen.getByRole('button', { name: 'قفل الأرصدة' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('alert').textContent,
+        'A caller without project.settings:manage sees why the switch did nothing.',
+      ).toContain('صلاحية'),
+    );
+    expect(screen.queryByText('تم قفل أرصدة أول المدة.')).toBeNull();
   });
 });

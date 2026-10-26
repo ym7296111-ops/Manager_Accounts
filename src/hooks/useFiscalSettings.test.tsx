@@ -8,25 +8,38 @@ import {
   OPENING_BALANCES_QUERY_KEY,
   openingBalanceReviewReason,
   parseOpeningBalances,
+  FISCAL_YEARS_QUERY_KEY,
   useDeleteOpeningBalance,
   useOpeningBalances,
+  useSetOpeningBalancesLock,
   type OpeningBalanceRow,
 } from '@/hooks/useFiscalSettings';
 
+interface RecordedCalls {
+  table: string | undefined;
+  select: string | undefined;
+  deleted: boolean;
+  updated: unknown;
+  filters: Array<readonly [string, unknown]>;
+  orders: string[];
+}
+
 const { mock, calls } = vi.hoisted(() => {
   const response: { data: unknown; error: unknown } = { data: [], error: null };
+  const recorded: RecordedCalls = {
+    table: undefined,
+    select: undefined,
+    deleted: false,
+    updated: undefined,
+    filters: [],
+    orders: [],
+  };
   return {
     mock: {
       client: null as { from: (table: string) => unknown } | null,
       response,
     },
-    calls: {
-      table: undefined as string | undefined,
-      select: undefined as string | undefined,
-      deleted: false,
-      filters: [] as Array<readonly [string, unknown]>,
-      orders: [] as string[],
-    },
+    calls: recorded,
   };
 });
 
@@ -45,6 +58,7 @@ function configureClient() {
   calls.table = undefined;
   calls.select = undefined;
   calls.deleted = false;
+  calls.updated = undefined;
   calls.filters = [];
   calls.orders = [];
 
@@ -56,6 +70,7 @@ function configureClient() {
         then: (resolve: (value: unknown) => void, reject: (reason: unknown) => void): void => {
           resolveWith().then(resolve, reject);
         },
+        single: resolveWith,
       };
       const ordering = {
         order: (column: string) => {
@@ -83,6 +98,10 @@ function configureClient() {
         },
         delete: () => {
           calls.deleted = true;
+          return filtered;
+        },
+        update: (payload: unknown) => {
+          calls.updated = payload;
           return filtered;
         },
       };
@@ -341,6 +360,71 @@ describe('useDeleteOpeningBalance', () => {
 
     await expect(
       result.current.mutateAsync({ fiscalYearId: 'year-1', balanceId: '  ' }),
+    ).rejects.toMatchObject({ code: 'validation' });
+
+    expect(calls.table).toBeUndefined();
+  });
+});
+
+describe('useSetOpeningBalancesLock', () => {
+  const yearWire = (locked: boolean) => ({
+    id: 'year-1',
+    name: '2025-2026',
+    start_date: '2025-07-01',
+    end_date: '2026-06-30',
+    is_active: true,
+    is_closed: false,
+    supplements_open: false,
+    opening_balances_locked: locked,
+    created_at: '2025-07-01T00:00:00.000Z',
+    updated_at: '2025-07-01T00:00:00.000Z',
+  });
+
+  it('sends only the freeze column and patches the cached year', async () => {
+    respondWith(yearWire(true));
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(FISCAL_YEARS_QUERY_KEY, [yearWire(false)]);
+    const { result } = mountQuery(() => useSetOpeningBalancesLock(), queryClient);
+
+    await expect(
+      result.current.mutateAsync({ fiscalYearId: 'year-1', locked: true }),
+    ).resolves.toMatchObject({ id: 'year-1', opening_balances_locked: true });
+
+    expect(calls.table).toBe('fiscal_years');
+    expect(calls.updated).toEqual({ opening_balances_locked: true });
+    expect(calls.filters).toEqual([['id', 'year-1']]);
+    expect(calls.select).toContain('opening_balances_locked');
+
+    const cached =
+      queryClient.getQueryData<readonly { opening_balances_locked: boolean }[]>(
+        FISCAL_YEARS_QUERY_KEY,
+      );
+    expect(cached?.[0]?.opening_balances_locked).toBe(true);
+  });
+
+  it('reports a row filtered by RLS as notFound, never as a successful lock', async () => {
+    respondWith(null, { code: 'PGRST116', message: '0 rows returned' });
+    const { result } = mountQuery(() => useSetOpeningBalancesLock());
+
+    await expect(
+      result.current.mutateAsync({ fiscalYearId: 'year-1', locked: true }),
+    ).rejects.toMatchObject({ code: 'notFound' });
+  });
+
+  it('classifies an RLS refusal as forbidden', async () => {
+    respondWith(null, { code: '42501', message: 'permission denied for table fiscal_years' });
+    const { result } = mountQuery(() => useSetOpeningBalancesLock());
+
+    await expect(
+      result.current.mutateAsync({ fiscalYearId: 'year-1', locked: false }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('refuses an empty identifier before touching the network', async () => {
+    const { result } = mountQuery(() => useSetOpeningBalancesLock());
+
+    await expect(
+      result.current.mutateAsync({ fiscalYearId: '  ', locked: true }),
     ).rejects.toMatchObject({ code: 'validation' });
 
     expect(calls.table).toBeUndefined();

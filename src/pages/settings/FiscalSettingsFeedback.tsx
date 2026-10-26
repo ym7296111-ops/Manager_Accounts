@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, LoaderCircle, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, LoaderCircle, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useI18n } from '@/i18n/I18nContext';
 
@@ -7,12 +7,12 @@ export function FiscalBanner({
   children,
   onDismiss,
 }: {
-  readonly tone: 'error' | 'success';
+  readonly tone: 'error' | 'success' | 'warning';
   readonly children: ReactNode;
   readonly onDismiss?: () => void;
 }) {
   const { t } = useI18n();
-  const Icon = tone === 'success' ? CheckCircle2 : AlertCircle;
+  const Icon = tone === 'success' ? CheckCircle2 : tone === 'warning' ? AlertTriangle : AlertCircle;
   return (
     <div
       role={tone === 'error' ? 'alert' : 'status'}
@@ -20,7 +20,9 @@ export function FiscalBanner({
         'flex items-start gap-2 rounded-xl border px-3.5 py-3 text-sm',
         tone === 'success'
           ? 'border-success/25 bg-success/5 text-success'
-          : 'border-destructive/25 bg-destructive/5 text-destructive',
+          : tone === 'warning'
+            ? 'border-warning/30 bg-warning/10 text-warning'
+            : 'border-destructive/25 bg-destructive/5 text-destructive',
       ].join(' ')}
     >
       <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />

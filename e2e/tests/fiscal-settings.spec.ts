@@ -468,3 +468,197 @@ test('owner enters sparse opening balances: picker, save, reload, delete and rev
   await admin.from('classifications').delete().eq('parent_id', reviewParent!.id);
   await admin.from('classifications').delete().eq('id', reviewParent!.id);
 });
+
+/*
+ * The opening-balance freeze («قفل أرصدة أول المدة»).
+ *
+ * E9  the screen starts with the switch in the open state
+ * E10 locking asks for confirmation, then freezes every write control
+ * E11 the database refuses writes in the locked year even outside the screen
+ *     (INSERT → 42501, UPDATE → zero rows), so the freeze is not a UI opinion
+ * E12 the lock is audited once, with the transition it recorded
+ * E13 unlocking restores editing and the next save reaches the database
+ *
+ * The refusal is exercised with a *user* client, not the service-role admin:
+ * `service_role` bypasses RLS by design, so only an authenticated session can
+ * prove that the policy — not the disabled input — is what protects the year.
+ */
+test('owner freezes opening balances: controls freeze, RLS refuses writes, unlocking restores editing', async ({
+  page,
+}) => {
+  await cleanFiscalYear();
+  const admin = await createLocalAdminClient();
+  const fixtures = await readFixtures();
+  const year = await seedActiveYear();
+
+  const { data: warehouse, error: warehouseError } = await admin
+    .from('warehouses')
+    .select('id')
+    .eq('name', 'مخزن المواد الخام')
+    .single();
+  expect(warehouseError).toBeNull();
+  const { data: steel, error: steelError } = await admin
+    .from('classifications')
+    .select('id')
+    .eq('name', 'حديد وصلب')
+    .single();
+  expect(steelError).toBeNull();
+  /* A leaf with no balance in this year: the frozen INSERT below must fail on
+     the policy, not on the (year, warehouse, classification) unique key. */
+  const { data: wood, error: woodError } = await admin
+    .from('classifications')
+    .select('id')
+    .eq('name', 'أخشاب')
+    .single();
+  expect(woodError).toBeNull();
+
+  const main = await openOpeningBalances(page);
+  await expandStation(page, 'المحطة الرئيسية');
+  const panel = await expandWarehouse(page, 'مخزن المواد الخام');
+
+  // E9 — one balance to freeze, entered through the ordinary flow.
+  await panel.getByRole('button', { name: 'Add classification' }).click();
+  const picker = panel.getByTestId('classification-picker');
+  await picker.getByRole('option', { name: /حديد وصلب/ }).click();
+  await picker.getByRole('button', { name: 'Add (1)' }).click();
+  const balanceInput = panel.getByRole('spinbutton', { name: 'Opening balance: حديد وصلب' });
+  await balanceInput.fill('125.50');
+  await panel.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
+  await expect(
+    main.getByRole('status').filter({ hasText: 'Warehouse balances saved successfully.' }),
+  ).toBeVisible();
+
+  const lockSwitch = main.getByRole('switch');
+  await expect(lockSwitch).toHaveAttribute('aria-checked', 'false');
+  await expect(lockSwitch).toHaveText('Balances are open for editing');
+
+  // E10 — locking is a confirmation, not a stray click.
+  await lockSwitch.click();
+  const lockDialog = page.getByRole('dialog');
+  await expect(lockDialog).toContainText('Lock opening balances');
+  await expect(lockDialog).toContainText(year.name);
+  await lockDialog.getByRole('button', { name: 'Lock balances' }).click();
+
+  await expect(
+    main.getByRole('status').filter({ hasText: 'Opening balances for 2035-2036 are locked.' }),
+    'A frozen year must say so above the tree.',
+  ).toBeVisible();
+  await expect(lockSwitch).toHaveAttribute('aria-checked', 'true');
+  await expect(lockSwitch).toHaveText('Balances are locked — no edits allowed');
+
+  await expect(balanceInput, 'An amount field in a frozen year is disabled.').toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Add classification' })).toBeDisabled();
+  await expect(
+    panel.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }),
+  ).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Delete balance حديد وصلب' })).toBeDisabled();
+
+  // E11 — the policy, not the disabled attribute, is the authority.
+  const owner = createClient<E2EDatabase>(fixtures.supabaseUrl, fixtures.anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { error: ownerSignInError } = await owner.auth.signInWithPassword({
+    email: fixtures.owner.email,
+    password: fixtures.owner.password,
+  });
+  expect(ownerSignInError).toBeNull();
+
+  const { error: frozenInsertError } = await owner.from('opening_balances').insert({
+    fiscal_year_id: year.id,
+    warehouse_id: warehouse!.id,
+    classification_id: wood!.id,
+    amount: 999,
+  });
+  expect(frozenInsertError?.code, 'INSERT into a locked year must raise 42501').toBe('42501');
+
+  const { data: frozenUpdate, error: frozenUpdateError } = await owner
+    .from('opening_balances')
+    .update({ amount: 999 })
+    .eq('fiscal_year_id', year.id)
+    .eq('classification_id', steel!.id)
+    .select('id, amount');
+  expect(frozenUpdateError).toBeNull();
+  expect(frozenUpdate, 'UPDATE in a locked year is filtered to zero rows').toEqual([]);
+
+  const { data: frozenDelete, error: frozenDeleteError } = await owner
+    .from('opening_balances')
+    .delete()
+    .eq('fiscal_year_id', year.id)
+    .eq('classification_id', steel!.id)
+    .select('id');
+  expect(frozenDeleteError).toBeNull();
+  expect(frozenDelete, 'DELETE in a locked year is filtered to zero rows').toEqual([]);
+
+  const { data: untouched, error: untouchedError } = await admin
+    .from('opening_balances')
+    .select('amount')
+    .eq('fiscal_year_id', year.id)
+    .eq('classification_id', steel!.id)
+    .single();
+  expect(untouchedError).toBeNull();
+  expect(untouched?.amount).toBe(125.5);
+
+  // E12 — exactly one lock event, with old/new values.
+  const { data: lockAudit, error: lockAuditError } = await admin
+    .from('audit_logs')
+    .select('action, entity, entity_id, actor_id, metadata')
+    .eq('entity', 'fiscal_years')
+    .eq('entity_id', year.id)
+    .order('id', { ascending: true });
+  expect(lockAuditError).toBeNull();
+  expect(lockAudit).toHaveLength(1);
+  expect(lockAudit?.[0]).toMatchObject({
+    action: 'fiscal_year.opening_balances_locked',
+    actor_id: fixtures.owner.id,
+    metadata: { fiscal_year_id: year.id, old_value: false, new_value: true },
+  });
+
+  // E13 — unlocking restores editing, and the write goes through.
+  await lockSwitch.click();
+  const unlockDialog = page.getByRole('dialog');
+  await expect(unlockDialog).toContainText('Unlock opening balances');
+  await unlockDialog.getByRole('button', { name: 'Unlock balances' }).click();
+
+  await expect(lockSwitch).toHaveAttribute('aria-checked', 'false');
+  await expect(lockSwitch).toHaveText('Balances are open for editing');
+  await expect(
+    main.getByRole('status').filter({ hasText: 'Opening balances are open for editing again.' }),
+  ).toBeVisible();
+  await expect(balanceInput).toBeEnabled();
+
+  await balanceInput.fill('222.00');
+  await panel.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
+  await expect
+    .poll(async () => {
+      const { data } = await admin
+        .from('opening_balances')
+        .select('amount')
+        .eq('fiscal_year_id', year.id)
+        .eq('classification_id', steel!.id)
+        .single();
+      return data?.amount;
+    }, 'editing after an unlock must reach the database')
+    .toBe(222);
+
+  const { data: unlockAudit, error: unlockAuditError } = await admin
+    .from('audit_logs')
+    .select('action, metadata')
+    .eq('entity', 'fiscal_years')
+    .eq('entity_id', year.id)
+    .eq('action', 'fiscal_year.opening_balances_unlocked');
+  expect(unlockAuditError).toBeNull();
+  expect(unlockAudit).toHaveLength(1);
+  expect(unlockAudit?.[0]?.metadata).toMatchObject({
+    fiscal_year_id: year.id,
+    old_value: true,
+    new_value: false,
+  });
+
+  /* Local scope on purpose. `signOut()` defaults to `global`, which revokes
+     every refresh token the owner holds — including the session the shared
+     `storageState` of every later spec depends on. The next specs then fail in
+     the Edge Functions (`approve-user`, `admin-reset-password`) because their
+     GoTrue `getUser(token)` no longer resolves, which is exactly how this test
+     used to leak into `notifications.spec` and `password.spec`. */
+  await owner.auth.signOut({ scope: 'local' });
+});

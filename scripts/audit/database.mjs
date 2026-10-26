@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 51);
+    assert.equal(migrations.length, 52);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1856,6 +1856,7 @@ try {
     assert.ok(migrations.includes('20261109000000_parties_two_root_tree.sql'));
     assert.ok(migrations.includes('20261110000000_fiscal_years_and_opening_balances.sql'));
     assert.ok(migrations.includes('20261111000000_opening_balances_delete_audit.sql'));
+    assert.ok(migrations.includes('20261112000000_opening_balances_freeze.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2285,6 +2286,372 @@ try {
       await db.query('delete from public.classifications where id=$1', [classificationId]);
     }
   });
+  await test('opening-balance freeze: RLS refuses writes in a locked year and lock/unlock are audited', async () => {
+    const yearIds = [randomUUID(), randomUUID()];
+    const stationId = randomUUID();
+    const warehouseId = randomUUID();
+    const classificationIds = [randomUUID(), randomUUID()];
+
+    try {
+      await db.query('insert into public.stations(id,name) values ($1,$2)', [
+        stationId,
+        `Freeze audit station ${randomUUID()}`,
+      ]);
+      await db.query('insert into public.warehouses(id,station_id,name) values ($1,$2,$3)', [
+        warehouseId,
+        stationId,
+        `Freeze audit warehouse ${randomUUID()}`,
+      ]);
+      for (const classificationId of classificationIds) {
+        await db.query('insert into public.classifications(id,name) values ($1,$2)', [
+          classificationId,
+          `Freeze audit classification ${randomUUID()}`,
+        ]);
+      }
+
+      // The column is boolean, not null and defaults to open.
+      const column = await db.query(
+        `select data_type,is_nullable,column_default
+           from information_schema.columns
+          where table_schema='public' and table_name='fiscal_years'
+            and column_name='opening_balances_locked'`,
+      );
+      assert.deepEqual(column.rows, [
+        { data_type: 'boolean', is_nullable: 'NO', column_default: 'false' },
+      ]);
+
+      const createYear = (id, startDate, endDate) =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.fiscal_years (id,name,start_date,end_date)
+               values ($1,'freeze audit',$2::date,$3::date)
+               returning opening_balances_locked`,
+            [id, startDate, endDate],
+          ),
+        );
+
+      assert.deepEqual((await createYear(yearIds[0], '2036-07-01', '2037-06-30')).rows, [
+        { opening_balances_locked: false },
+      ]);
+      assert.deepEqual((await createYear(yearIds[1], '2037-07-01', '2038-06-30')).rows, [
+        { opening_balances_locked: false },
+      ]);
+
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('select public.is_opening_balances_locked($1) as locked', [yearIds[0]]),
+          )
+        ).rows[0].locked,
+        false,
+      );
+
+      const inserted = await asRole('authenticated', A, (c) =>
+        c.query(
+          `insert into public.opening_balances
+               (fiscal_year_id,warehouse_id,classification_id,amount)
+             values ($1,$2,$3,100.00)
+             returning id`,
+          [yearIds[0], warehouseId, classificationIds[0]],
+        ),
+      );
+      const balanceId = inserted.rows[0].id;
+
+      /* A balance in the second, still-open year: the freeze must also stop a
+         row being moved into the locked year. */
+      const openYearBalance = await asRole('authenticated', A, (c) =>
+        c.query(
+          `insert into public.opening_balances
+               (fiscal_year_id,warehouse_id,classification_id,amount)
+             values ($1,$2,$3,20.00)
+             returning id`,
+          [yearIds[1], warehouseId, classificationIds[0]],
+        ),
+      );
+      const openYearBalanceId = openYearBalance.rows[0].id;
+
+      const locked = await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.fiscal_years set opening_balances_locked=true where id=$1 returning opening_balances_locked',
+          [yearIds[0]],
+        ),
+      );
+      assert.deepEqual(locked.rows, [{ opening_balances_locked: true }]);
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('select public.is_opening_balances_locked($1) as locked', [yearIds[0]]),
+          )
+        ).rows[0].locked,
+        true,
+      );
+
+      // INSERT is refused outright: the candidate row violates the WITH CHECK.
+      await expectCode('42501', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.opening_balances
+                 (fiscal_year_id,warehouse_id,classification_id,amount)
+               values ($1,$2,$3,5.00)`,
+            [yearIds[0], warehouseId, classificationIds[1]],
+          ),
+        ),
+      );
+
+      // UPDATE and DELETE are filtered by the USING clause: zero rows, no error,
+      // and — this is the part that matters — no change.
+      const frozenUpdate = await asRole('authenticated', A, (c) =>
+        c.query('update public.opening_balances set amount=999.99 where id=$1 returning id', [
+          balanceId,
+        ]),
+      );
+      assert.equal(frozenUpdate.rowCount, 0);
+      assert.equal(
+        (
+          await db.query('select amount::text from public.opening_balances where id=$1', [
+            balanceId,
+          ])
+        ).rows[0].amount,
+        '100.00',
+        'a filtered update in a locked year must not change the amount',
+      );
+
+      const frozenDelete = await asRole('authenticated', A, (c) =>
+        c.query('delete from public.opening_balances where id=$1 returning id', [balanceId]),
+      );
+      assert.equal(frozenDelete.rowCount, 0);
+      assert.equal(
+        (await db.query('select id from public.opening_balances where id=$1', [balanceId]))
+          .rowCount,
+        1,
+        'a filtered delete in a locked year must not remove the row',
+      );
+
+      // Moving a row *into* the locked year passes the USING clause (the source
+      // year is open) and fails the WITH CHECK: a hard 42501, not a silent no-op.
+      await expectCode('42501', () =>
+        asRole('authenticated', A, (c) =>
+          c.query('update public.opening_balances set fiscal_year_id=$1 where id=$2 returning id', [
+            yearIds[0],
+            openYearBalanceId,
+          ]),
+        ),
+      );
+      assert.equal(
+        (
+          await db.query('select fiscal_year_id from public.opening_balances where id=$1', [
+            openYearBalanceId,
+          ])
+        ).rows[0].fiscal_year_id,
+        yearIds[1],
+      );
+
+      // The lock itself is audited once, with the transition it recorded.
+      const lockAudit = await db.query(
+        `select actor_id,action,entity,entity_id,metadata
+           from public.audit_logs
+          where entity='fiscal_years' and entity_id=$1
+          order by id`,
+        [yearIds[0]],
+      );
+      assert.deepEqual(
+        lockAudit.rows.map((row) => ({
+          actor_id: row.actor_id,
+          action: row.action,
+          entity: row.entity,
+          entity_id: row.entity_id,
+          metadata: row.metadata,
+        })),
+        [
+          {
+            actor_id: A,
+            action: 'fiscal_year.opening_balances_locked',
+            entity: 'fiscal_years',
+            entity_id: yearIds[0],
+            metadata: { fiscal_year_id: yearIds[0], old_value: false, new_value: true },
+          },
+        ],
+      );
+
+      // Any other column must not look like a freeze event, and a viewer may
+      // neither lock nor unlock.
+      await asRole('authenticated', A, (c) =>
+        c.query('update public.fiscal_years set is_closed=true where id=$1', [yearIds[0]]),
+      );
+      const viewerUnlock = await asRole('authenticated', V, (c) =>
+        c.query(
+          'update public.fiscal_years set opening_balances_locked=false where id=$1 returning id',
+          [yearIds[0]],
+        ),
+      );
+      assert.equal(viewerUnlock.rowCount, 0);
+      assert.equal(
+        (
+          await db.query('select opening_balances_locked from public.fiscal_years where id=$1', [
+            yearIds[0],
+          ])
+        ).rows[0].opening_balances_locked,
+        true,
+        'a viewer must not be able to unlock the year',
+      );
+      assert.equal(
+        (
+          await db.query(
+            `select count(*)::int as n from public.audit_logs
+              where entity='fiscal_years' and entity_id=$1`,
+            [yearIds[0]],
+          )
+        ).rows[0].n,
+        1,
+        'is_closed and a filtered viewer update must not write freeze audit rows',
+      );
+
+      const unlocked = await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.fiscal_years set opening_balances_locked=false where id=$1 returning opening_balances_locked',
+          [yearIds[0]],
+        ),
+      );
+      assert.deepEqual(unlocked.rows, [{ opening_balances_locked: false }]);
+
+      const unlockedAudit = await db.query(
+        `select actor_id,action,entity,entity_id,metadata
+           from public.audit_logs
+          where entity='fiscal_years' and entity_id=$1
+          order by id`,
+        [yearIds[0]],
+      );
+      assert.equal(unlockedAudit.rowCount, 2);
+      assert.deepEqual(
+        {
+          action: unlockedAudit.rows[1].action,
+          actor_id: unlockedAudit.rows[1].actor_id,
+          metadata: unlockedAudit.rows[1].metadata,
+        },
+        {
+          action: 'fiscal_year.opening_balances_unlocked',
+          actor_id: A,
+          metadata: { fiscal_year_id: yearIds[0], old_value: true, new_value: false },
+        },
+      );
+
+      // Reopened means writable again, through the same policies.
+      const reopenedUpdate = await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.opening_balances set amount=456.78 where id=$1 returning amount::text',
+          [balanceId],
+        ),
+      );
+      assert.deepEqual(reopenedUpdate.rows, [{ amount: '456.78' }]);
+      const reopenedInsert = await asRole('authenticated', A, (c) =>
+        c.query(
+          `insert into public.opening_balances
+               (fiscal_year_id,warehouse_id,classification_id,amount)
+             values ($1,$2,$3,7.25)
+             returning amount::text`,
+          [yearIds[0], warehouseId, classificationIds[1]],
+        ),
+      );
+      assert.deepEqual(reopenedInsert.rows, [{ amount: '7.25' }]);
+
+      const policies = await db.query(
+        `select policyname,qual,with_check
+           from pg_catalog.pg_policies
+          where schemaname='public' and tablename='opening_balances'
+          order by policyname`,
+      );
+      const byName = new Map(policies.rows.map((row) => [row.policyname, row]));
+      const qual = (name) => String(byName.get(name)?.qual ?? '');
+      const withCheck = (name) => String(byName.get(name)?.with_check ?? '');
+
+      for (const name of [
+        'opening_balances_project_settings_select',
+        'opening_balances_project_settings_insert',
+        'opening_balances_project_settings_update',
+        'opening_balances_project_settings_delete',
+      ]) {
+        assert.ok(byName.has(name), `${name} is missing`);
+      }
+      assert.equal(
+        qual('opening_balances_project_settings_select').includes('is_opening_balances_locked'),
+        false,
+        'a locked year must stay readable',
+      );
+      assert.equal(withCheck('opening_balances_project_settings_select'), '');
+      for (const name of [
+        'opening_balances_project_settings_insert',
+        'opening_balances_project_settings_update',
+      ]) {
+        assert.ok(
+          withCheck(name).includes('can_manage_project_settings'),
+          `${name} keeps the capability predicate`,
+        );
+      }
+      assert.ok(
+        qual('opening_balances_project_settings_delete').includes('can_manage_project_settings'),
+        'the delete policy keeps the capability predicate',
+      );
+      assert.ok(
+        withCheck('opening_balances_project_settings_insert').includes(
+          'is_opening_balances_locked',
+        ),
+      );
+      assert.equal(qual('opening_balances_project_settings_insert'), '');
+      for (const name of [
+        'opening_balances_project_settings_update',
+        'opening_balances_project_settings_delete',
+      ]) {
+        assert.ok(
+          qual(name).includes('is_opening_balances_locked'),
+          `${name} must refuse closed-year writes through USING`,
+        );
+      }
+      assert.ok(
+        withCheck('opening_balances_project_settings_update').includes(
+          'is_opening_balances_locked',
+        ),
+        'an update must not move a row into a locked year',
+      );
+      assert.equal(withCheck('opening_balances_project_settings_delete'), '');
+
+      const privileges = await db.query(
+        `select has_function_privilege('authenticated','public.is_opening_balances_locked(uuid)','EXECUTE') as authenticated_can,
+                has_function_privilege('anon','public.is_opening_balances_locked(uuid)','EXECUTE') as anon_can,
+                has_function_privilege('authenticated','public.audit_opening_balances_lock_change()','EXECUTE') as trigger_can`,
+      );
+      assert.deepEqual(privileges.rows, [
+        { authenticated_can: true, anon_can: false, trigger_can: false },
+      ]);
+
+      const trigger = await db.query(
+        `select (tgtype & 1) = 1 as is_row,
+                (tgtype & 2) = 0 as is_after,
+                (tgtype & 16) = 16 as is_update,
+                (tgtype & 8) = 0 as not_delete,
+                pg_get_triggerdef(oid) as definition
+           from pg_trigger
+          where tgrelid='public.fiscal_years'::regclass
+            and tgname='fiscal_years_audit_opening_balances_lock'`,
+      );
+      assert.deepEqual(
+        trigger.rows.map(({ definition: _definition, ...rest }) => rest),
+        [{ is_row: true, is_after: true, is_update: true, not_delete: true }],
+      );
+      assert.ok(trigger.rows[0].definition.includes('UPDATE OF opening_balances_locked'));
+      assert.ok(trigger.rows[0].definition.includes('WHEN'));
+    } finally {
+      await db.query('delete from public.opening_balances where fiscal_year_id=any($1::uuid[])', [
+        yearIds,
+      ]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [yearIds]);
+      await db.query('delete from public.warehouses where id=$1', [warehouseId]);
+      await db.query('delete from public.stations where id=$1', [stationId]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        classificationIds,
+      ]);
+    }
+  });
+
   await test('classifications: derived level and is_leaf at any depth, sequence codes, subtree moves', async () => {
     const columns = await db.query(
       "select column_name from information_schema.columns where table_schema='public' and table_name='classifications' order by ordinal_position",

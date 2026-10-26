@@ -27,7 +27,10 @@
  *   on update, and deleting a company that still has branches raises 23503;
  * * a fiscal-year insert derives its name and generates twelve months, a
  *   period edit writes only `current_period`, and opening balances upsert on
- *   `(fiscal_year_id, warehouse_id, classification_id)`.
+ *   `(fiscal_year_id, warehouse_id, classification_id)`;
+ * * the opening-balance freeze is honoured: a year flipped to
+ *   `opening_balances_locked` refuses new balances (42501) and filters deletes,
+ *   which is what the RLS policies do.
  *
  * What it does NOT reproduce: authentication, RLS, concurrency and the audit
  * trigger/logs. Those remain database responsibilities and are checked by the
@@ -178,6 +181,12 @@ interface FiscalYearPreviewRow {
   is_active: boolean;
   is_closed: boolean;
   supplements_open: boolean;
+  /**
+   * Mirrors `fiscal_years.opening_balances_locked` (20261112000000). The real
+   * enforcement is the RLS policies on `opening_balances`; this copy exists so
+   * the preview can disable the same controls and refuse the same writes.
+   */
+  opening_balances_locked: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -273,6 +282,7 @@ const fiscalYears: FiscalYearPreviewRow[] = [
     is_active: true,
     is_closed: false,
     supplements_open: false,
+    opening_balances_locked: false,
     created_at: nowIso(),
     updated_at: nowIso(),
   },
@@ -818,6 +828,7 @@ function runFiscal(
           is_active: false,
           is_closed: false,
           supplements_open: false,
+          opening_balances_locked: false,
           created_at: nowIso(),
           updated_at: nowIso(),
         };
@@ -832,11 +843,29 @@ function runFiscal(
           throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
         }
         const input = onePayload(payload);
-        if (Object.keys(input).some((key) => key !== 'is_active')) {
-          throw new DbError('42501', 'preview: only fiscal year activation is exposed here');
+        const editable = ['is_active', 'opening_balances_locked'];
+        if (Object.keys(input).some((key) => !editable.includes(key))) {
+          throw new DbError(
+            '42501',
+            'preview: only activation and the opening-balance freeze are exposed here',
+          );
         }
-        if (input.is_active !== true) {
+        if ('is_active' in input && input.is_active !== true) {
           throw new DbError('23514', 'fiscal_years_is_active_check');
+        }
+        if (
+          'opening_balances_locked' in input &&
+          typeof input.opening_balances_locked !== 'boolean'
+        ) {
+          throw new DbError('23514', 'fiscal_years_opening_balances_locked_check');
+        }
+        if (!('is_active' in input) && !('opening_balances_locked' in input)) {
+          throw new DbError('23514', 'preview: nothing to update');
+        }
+        if ('opening_balances_locked' in input) {
+          row.opening_balances_locked = input.opening_balances_locked as boolean;
+          row.updated_at = nowIso();
+          return { data: single ? { ...row } : [{ ...row }], error: null };
         }
         for (const year of fiscalYears) {
           year.is_active = year.id === row.id;
@@ -888,6 +917,9 @@ function runFiscal(
       return { data: [], error: null };
     }
 
+    const yearById = (fiscalYearId: unknown): FiscalYearPreviewRow | undefined =>
+      fiscalYears.find((year) => year.id === fiscalYearId);
+
     if (operation === 'upsert') {
       const incoming = Array.isArray(payload) ? payload : payload === undefined ? [] : [payload];
       const saved: OpeningBalancePreviewRow[] = [];
@@ -901,8 +933,14 @@ function runFiscal(
           typeof input.amount === 'string' || typeof input.amount === 'number'
             ? String(input.amount)
             : '';
+        const year = yearById(fiscalYearId);
+        if (year !== undefined && year.opening_balances_locked) {
+          // The real database answers an INSERT into a frozen year with the RLS
+          // violation 42501; the preview must not pretend the save worked.
+          throw new DbError('42501', 'preview: opening balances are locked for this year');
+        }
         if (
-          !fiscalYears.some((year) => year.id === fiscalYearId) ||
+          year === undefined ||
           !warehouses.some((warehouse) => warehouse.id === warehouseId) ||
           !classifications.some((classification) => classification.id === classificationId) ||
           !/^\d{1,16}(?:\.\d{1,2})?$/.test(amountText) ||
@@ -943,10 +981,16 @@ function runFiscal(
       const removed: OpeningBalancePreviewRow[] = [];
       for (let index = openingBalances.length - 1; index >= 0; index -= 1) {
         const row = openingBalances[index]!;
-        if (matchesFilters(row as unknown as Record<string, unknown>, filters)) {
-          removed.unshift(row);
-          openingBalances.splice(index, 1);
+        if (!matchesFilters(row as unknown as Record<string, unknown>, filters)) {
+          continue;
         }
+        /* RLS filters a delete in a frozen year to zero rows instead of
+           failing — the client then reports it as "already deleted". */
+        if (yearById(row.fiscal_year_id)?.opening_balances_locked) {
+          continue;
+        }
+        removed.unshift(row);
+        openingBalances.splice(index, 1);
       }
       const projected = removed.map((row) => withBalanceEmbed(row, columns));
       return { data: single ? (projected[0] ?? null) : projected, error: null };

@@ -27,6 +27,12 @@ export interface OpeningBalancesWarehouseProps {
   readonly eligibleCount: number;
   readonly options: readonly ActiveLeafClassification[];
   readonly open: boolean;
+  /**
+   * The year's opening balances are frozen: inputs, the add-picker, delete and
+   * save are all disabled. The reason lives above, in the screen banner — this
+   * component only refuses the interactions.
+   */
+  readonly locked: boolean;
   readonly onToggle: () => void;
   readonly saving: boolean;
   readonly deleting: boolean;
@@ -45,6 +51,10 @@ export interface OpeningBalancesWarehouseProps {
  * hand-off to the first new amount field. Everything that survives a collapse —
  * the drafts and their dirty state — lives above, in `useOpeningBalanceDrafts`.
  *
+ * When the year is frozen (`locked`), every control that would write is
+ * disabled and the picker is closed — the disabled state mirrors an RLS policy,
+ * it does not replace it.
+ *
  * The body is not rendered while the panel is collapsed. That is the difference
  * between "hidden" and "cheap": previously every warehouse kept its inputs
  * mounted, so the page carried `warehouses × classifications` fields whether or
@@ -56,6 +66,7 @@ export function OpeningBalancesWarehouse({
   eligibleCount,
   options,
   open,
+  locked,
   onToggle,
   saving,
   deleting,
@@ -200,7 +211,7 @@ export function OpeningBalancesWarehouse({
                     amountText={row.amountText}
                     invalid={row.invalid}
                     added={row.kind === 'added'}
-                    disabled={saving || deleting}
+                    disabled={saving || deleting || locked}
                     inputRef={(element) => {
                       if (element === null) {
                         inputs.current.delete(row.classificationId);
@@ -254,7 +265,7 @@ export function OpeningBalancesWarehouse({
                       name={row.name}
                       amountText={formatCents(amountToCents(row.amount) ?? 0n, locale)}
                       reasonLabel={t(REVIEW_REASON_KEYS[row.reason])}
-                      deleting={deleting}
+                      deleting={deleting || locked}
                       onDelete={() =>
                         setDeleteTarget({
                           balanceId: row.balanceId,
@@ -282,7 +293,7 @@ export function OpeningBalancesWarehouse({
                   onClick={() => setPickerOpen((current) => !current)}
                   aria-expanded={pickerOpen}
                   aria-controls={pickerId}
-                  disabled={!hasEligible || saving}
+                  disabled={!hasEligible || saving || locked}
                   className={OUTLINE_BUTTON_CLASS}
                 >
                   <Plus className="size-4" aria-hidden="true" />
@@ -298,7 +309,7 @@ export function OpeningBalancesWarehouse({
                 <button
                   type="button"
                   onClick={onSave}
-                  disabled={saving || model.dirtyRows.length === 0 || model.invalid}
+                  disabled={saving || model.dirtyRows.length === 0 || model.invalid || locked}
                   aria-label={t('settings.project.fiscal.openingBalances.saveWarehouse', {
                     name: warehouse.name,
                   })}
@@ -312,8 +323,8 @@ export function OpeningBalancesWarehouse({
               ) : null}
             </div>
 
-            <div id={pickerId} hidden={!pickerOpen}>
-              {pickerOpen ? (
+            <div id={pickerId} hidden={!pickerOpen || locked}>
+              {pickerOpen && !locked ? (
                 <ClassificationPicker
                   options={options}
                   excludedIds={excluded}

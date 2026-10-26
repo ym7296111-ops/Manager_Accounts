@@ -580,6 +580,11 @@ export type Database = {
           is_active: boolean;
           is_closed: boolean;
           name: string;
+          /**
+           * Freeze flag for «أرصدة أول المدة» (20261112000000): while true the
+           * RLS policies on `opening_balances` refuse every write.
+           */
+          opening_balances_locked: boolean;
           start_date: string;
           supplements_open: boolean;
           updated_at: string;
@@ -592,6 +597,7 @@ export type Database = {
           is_closed?: boolean;
           /** Derived server-side from `start_date` and `end_date`. */
           name?: string;
+          opening_balances_locked?: boolean;
           start_date: string;
           supplements_open?: boolean;
           updated_at?: string;
@@ -604,6 +610,7 @@ export type Database = {
           is_closed?: boolean;
           /** Re-derived server-side whenever the row is updated. */
           name?: string;
+          opening_balances_locked?: boolean;
           start_date?: string;
           supplements_open?: boolean;
           updated_at?: string;
