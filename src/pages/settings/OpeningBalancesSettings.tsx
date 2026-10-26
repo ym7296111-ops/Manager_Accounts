@@ -11,7 +11,11 @@ import {
   type OpeningBalance,
   type OpeningBalanceWrite,
 } from '@/hooks/useFiscalSettings';
-import { classifyClassificationsError, useClassifications } from '@/hooks/useClassifications';
+import {
+  classifyClassificationsError,
+  useActiveLeafClassifications,
+} from '@/hooks/useClassifications';
+import type { ActiveLeafClassification } from '@/hooks/useClassifications';
 import {
   classifyStationsError,
   useStationsDirectory,
@@ -20,12 +24,7 @@ import {
 } from '@/hooks/useStationsDirectory';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import { FiscalBanner, FiscalLoading } from './FiscalSettingsFeedback';
-import {
-  amountToCents,
-  flattenClassifications,
-  formatCents,
-  normalizeAmountText,
-} from './fiscalSettingsUtils';
+import { amountToCents, formatCents, normalizeAmountText } from './fiscalSettingsUtils';
 
 const READ_ERROR_KEYS: Record<
   ReturnType<typeof classifyFiscalSettingsReadError>,
@@ -120,13 +119,13 @@ function amountForTotal(
 function warehouseTotal(
   fiscalYearId: string,
   warehouse: StationWarehouse,
-  classifications: ReturnType<typeof flattenClassifications>,
+  classifications: readonly ActiveLeafClassification[],
   drafts: Readonly<Record<string, string>>,
   balancesByKey: ReadonlyMap<string, OpeningBalance>,
 ): bigint {
   return classifications.reduce(
-    (total, entry) =>
-      total + amountForTotal(fiscalYearId, warehouse.id, entry.node.id, drafts, balancesByKey),
+    (total, classification) =>
+      total + amountForTotal(fiscalYearId, warehouse.id, classification.id, drafts, balancesByKey),
     0n,
   );
 }
@@ -134,7 +133,7 @@ function warehouseTotal(
 function stationTotal(
   fiscalYearId: string,
   station: StationWithWarehouses,
-  classifications: ReturnType<typeof flattenClassifications>,
+  classifications: readonly ActiveLeafClassification[],
   drafts: Readonly<Record<string, string>>,
   balancesByKey: ReadonlyMap<string, OpeningBalance>,
 ): bigint {
@@ -150,7 +149,7 @@ export default function OpeningBalancesSettings() {
   const yearsQuery = useFiscalYears();
   const activeYear = yearsQuery.data?.find((year) => year.is_active) ?? null;
   const stationsQuery = useStationsDirectory({ enabled: activeYear !== null });
-  const classificationsQuery = useClassifications({ enabled: activeYear !== null });
+  const classificationsQuery = useActiveLeafClassifications({ enabled: activeYear !== null });
   const balancesQuery = useOpeningBalances(activeYear?.id ?? null);
   const saveBalances = useSaveOpeningBalances();
   const [expandedStations, setExpandedStations] = useState<ReadonlySet<string>>(() => new Set());
@@ -162,11 +161,7 @@ export default function OpeningBalancesSettings() {
     readonly tone: 'error' | 'success';
     readonly key: TranslationKey;
   } | null>(null);
-
-  const flatClassifications = useMemo(
-    () => flattenClassifications(classificationsQuery.data ?? []),
-    [classificationsQuery.data],
-  );
+  const activeLeafClassifications = classificationsQuery.data ?? [];
   const balancesByKey = useMemo(() => {
     const result = new Map<string, OpeningBalance>();
     for (const balance of balancesQuery.data ?? []) {
@@ -264,15 +259,20 @@ export default function OpeningBalancesSettings() {
   };
 
   const handleSaveWarehouse = async (warehouse: StationWarehouse) => {
-    const changedClassifications = flatClassifications.filter((entry) =>
-      hasChanged(activeYear.id, warehouse.id, entry.node.id, drafts, balancesByKey),
+    const changedClassifications = activeLeafClassifications.filter((classification) =>
+      hasChanged(activeYear.id, warehouse.id, classification.id, drafts, balancesByKey),
     );
     const rows: OpeningBalanceWrite[] = [];
 
-    for (const entry of changedClassifications) {
-      const key = balanceKey(activeYear.id, warehouse.id, entry.node.id);
+    for (const classification of changedClassifications) {
+      const key = balanceKey(activeYear.id, warehouse.id, classification.id);
       const raw = drafts[key] ?? '';
-      const existing = originalBalance(balancesByKey, activeYear.id, warehouse.id, entry.node.id);
+      const existing = originalBalance(
+        balancesByKey,
+        activeYear.id,
+        warehouse.id,
+        classification.id,
+      );
       if (raw.trim() === '' && existing === undefined) {
         continue;
       }
@@ -284,7 +284,7 @@ export default function OpeningBalancesSettings() {
       rows.push({
         fiscal_year_id: activeYear.id,
         warehouse_id: warehouse.id,
-        classification_id: entry.node.id,
+        classification_id: classification.id,
         amount: normalized,
       });
     }
@@ -329,9 +329,6 @@ export default function OpeningBalancesSettings() {
             {t('settings.project.fiscal.openingBalances.activeYear', { name: activeYear.name })}
           </p>
         </div>
-        <div className="bg-muted/30 text-muted-foreground max-w-full rounded-lg px-3 py-2 text-xs leading-relaxed">
-          {t('settings.project.fiscal.openingBalances.totalHint')}
-        </div>
       </header>
 
       {stations.length > 0 ? (
@@ -343,7 +340,7 @@ export default function OpeningBalancesSettings() {
             const total = stationTotal(
               activeYear.id,
               station,
-              flatClassifications,
+              activeLeafClassifications,
               drafts,
               balancesByKey,
             );
@@ -410,22 +407,23 @@ export default function OpeningBalancesSettings() {
                         const warehouseBalanceTotal = warehouseTotal(
                           activeYear.id,
                           warehouse,
-                          flatClassifications,
+                          activeLeafClassifications,
                           drafts,
                           balancesByKey,
                         );
-                        const changedRows = flatClassifications.filter((entry) =>
+                        const changedRows = activeLeafClassifications.filter((classification) =>
                           hasChanged(
                             activeYear.id,
                             warehouse.id,
-                            entry.node.id,
+                            classification.id,
                             drafts,
                             balancesByKey,
                           ),
                         );
-                        const invalidDraft = changedRows.some((entry) => {
+                        const invalidDraft = changedRows.some((classification) => {
                           const raw =
-                            drafts[balanceKey(activeYear.id, warehouse.id, entry.node.id)] ?? '';
+                            drafts[balanceKey(activeYear.id, warehouse.id, classification.id)] ??
+                            '';
                           return raw.trim() !== '' && normalizeAmountText(raw) === null;
                         });
 
@@ -505,15 +503,19 @@ export default function OpeningBalancesSettings() {
                               hidden={!warehouseOpen}
                               className="border-border border-t px-3 py-3 sm:px-4"
                             >
-                              {flatClassifications.length > 0 ? (
+                              {activeLeafClassifications.length > 0 ? (
                                 <div className="space-y-2">
-                                  {flatClassifications.map(({ node, depth, path }) => {
-                                    const key = balanceKey(activeYear.id, warehouse.id, node.id);
+                                  {activeLeafClassifications.map((classification) => {
+                                    const key = balanceKey(
+                                      activeYear.id,
+                                      warehouse.id,
+                                      classification.id,
+                                    );
                                     const existing = originalBalance(
                                       balancesByKey,
                                       activeYear.id,
                                       warehouse.id,
-                                      node.id,
+                                      classification.id,
                                     );
                                     const inputValue =
                                       drafts[key] ??
@@ -526,25 +528,22 @@ export default function OpeningBalancesSettings() {
 
                                     return (
                                       <div
-                                        key={node.id}
+                                        key={classification.id}
                                         className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b py-2 last:border-b-0"
-                                        style={{ paddingInlineStart: `${depth * 1.25}rem` }}
                                       >
                                         <div className="min-w-0 flex-1 basis-40">
                                           <p className="text-foreground text-sm font-medium">
-                                            {node.name}
+                                            {classification.name}
                                           </p>
                                           <p className="text-muted-foreground text-xs">
-                                            {node.code}
+                                            {classification.code}
                                           </p>
                                         </div>
                                         <label className="w-full max-w-56 min-w-0">
                                           <span className="sr-only">
                                             {t(
                                               'settings.project.fiscal.openingBalances.amountLabel',
-                                              {
-                                                path: path.join(' / '),
-                                              },
+                                              { classification: classification.name },
                                             )}
                                           </span>
                                           <input
@@ -556,7 +555,7 @@ export default function OpeningBalancesSettings() {
                                             value={inputValue}
                                             aria-label={t(
                                               'settings.project.fiscal.openingBalances.amountLabel',
-                                              { path: path.join(' / ') },
+                                              { classification: classification.name },
                                             )}
                                             aria-invalid={isInvalid}
                                             onChange={(event) =>

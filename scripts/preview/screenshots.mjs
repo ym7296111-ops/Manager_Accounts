@@ -77,7 +77,7 @@ async function assertMobileViewport() {
   return measurements;
 }
 
-async function assertFieldsFit(selector, label) {
+async function assertFieldsFit(selector, label, viewportWidth = 390) {
   const fields = await page.locator(selector).evaluateAll((elements) =>
     elements.map((element) => {
       const bounds = element.getBoundingClientRect();
@@ -92,8 +92,8 @@ async function assertFieldsFit(selector, label) {
   expect(fields.length > 0, `${label}: no fields found`);
   for (const field of fields) {
     expect(
-      field.left >= 0 && field.right <= 390,
-      `${label}: field outside viewport: ${JSON.stringify(field)}`,
+      field.left >= 0 && field.right <= viewportWidth,
+      `${label}: field outside ${viewportWidth}px viewport: ${JSON.stringify(field)}`,
     );
     expect(
       field.scrollWidth <= field.width + 1,
@@ -301,10 +301,44 @@ const openingFields = await assertFieldsFit(
   '#opening-warehouse-panel-w-1 input',
   'opening-balance inputs',
 );
-console.log('opening-balance input count:', openingFields.length);
+expect(openingFields.length === 7, `expected 7 active leaves, got ${openingFields.length}`);
+const openingLabels = await page
+  .locator('#opening-warehouse-panel-w-1 input')
+  .evaluateAll((fields) => fields.map((field) => field.getAttribute('aria-label') ?? ''));
+expect(
+  !openingLabels.some((label) =>
+    ['المواد الخام', 'وقود', 'سولار', 'بلاستيك ومطاط'].some((name) => label.includes(name)),
+  ),
+  'parent and inactive classifications must not appear in the opening-balance list',
+);
+expect(
+  (await page.getByText(/تجنب تكراره/).count()) === 0,
+  'the duplicate-entry warning should be removed',
+);
+console.log('opening-balance active-leaf input count:', openingFields.length);
 await page.screenshot({ path: `${OUT}/fiscal-opening-balances-mobile-390.png`, fullPage: true });
 
+// Capture the same flat list at desktop width for the review.
+await page.setViewportSize({ width: 1280, height: 900 });
+await page.goto(BASE, { waitUntil: 'networkidle' });
+await page.locator('#project-settings-tab-general').click();
+await page.locator('#fiscal-settings-tab-openingBalances').click();
+await page.locator('#opening-station-toggle-s-1').click();
+await page.locator('#opening-warehouse-toggle-w-1').click();
+const desktopViewport = await assertMobileViewport();
+console.log('opening balances desktop layout:', desktopViewport);
+const desktopFields = await assertFieldsFit(
+  '#opening-warehouse-panel-w-1 input',
+  'desktop opening-balance inputs',
+  1280,
+);
+expect(desktopFields.length === 7, `expected 7 active leaves, got ${desktopFields.length}`);
+await page.screenshot({ path: `${OUT}/fiscal-opening-balances-desktop-1280.png`, fullPage: true });
+
 // The shared date inputs also remain inside the modal at phone width.
+await page.setViewportSize({ width: 390, height: 844 });
+await page.goto(BASE, { waitUntil: 'networkidle' });
+await page.locator('#project-settings-tab-general').click();
 await page.locator('#fiscal-settings-tab-annual').click();
 await page.getByRole('button', { name: 'إضافة سنة مالية' }).click();
 const fiscalDateFields = await page
