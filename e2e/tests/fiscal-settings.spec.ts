@@ -8,6 +8,11 @@ const YEAR_NAME = '2035-2036';
 const START_DATE = '2035-07-01';
 const END_DATE = '2036-06-30';
 
+/* Prefix of the throw-away classification the review scenario derives. Cleaned
+   up in `afterEach` so a failed run cannot leave an extra branch in the seeded
+   tree and change the counters of the next one. */
+const REVIEW_NAME_PREFIX = 'E2E review ';
+
 async function cleanFiscalYear() {
   const admin = await createLocalAdminClient();
   const { data: years, error: readError } = await admin
@@ -76,7 +81,37 @@ async function expandWarehouse(page: Page, name: string) {
   return page.locator(`#${panelId}`);
 }
 
+async function cleanReviewClassifications() {
+  const admin = await createLocalAdminClient();
+  const { data, error } = await admin
+    .from('classifications')
+    .select('id')
+    .like('name', `${REVIEW_NAME_PREFIX}%`);
+  if (error) throw new Error(`Could not find the E2E review classifications: ${error.message}`);
+
+  const ids = (data ?? []).map((row) => row.id);
+  if (ids.length === 0) {
+    return;
+  }
+  const { error: balanceError } = await admin
+    .from('opening_balances')
+    .delete()
+    .in('classification_id', ids);
+  if (balanceError) {
+    throw new Error(`Could not clean the E2E review balances: ${balanceError.message}`);
+  }
+  const { error: childError } = await admin.from('classifications').delete().in('parent_id', ids);
+  if (childError) {
+    throw new Error(`Could not clean the E2E review children: ${childError.message}`);
+  }
+  const { error: parentError } = await admin.from('classifications').delete().in('id', ids);
+  if (parentError) {
+    throw new Error(`Could not clean the E2E review classifications: ${parentError.message}`);
+  }
+}
+
 test.afterEach(async () => {
+  await cleanReviewClassifications();
   await cleanFiscalYear();
 });
 
@@ -258,7 +293,8 @@ test('owner enters sparse opening balances: picker, save, reload, delete and rev
   await woodBalance.fill('300.25');
   await panel.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
   await expect(
-    panel.getByRole('status').filter({ hasText: 'Warehouse balances saved successfully.' }),
+    main.getByRole('status').filter({ hasText: 'Warehouse balances saved successfully.' }),
+    'Saving reports success through the screen-level banner.',
   ).toBeVisible();
   await expect(steelBalance).toHaveValue('125.50');
 
@@ -277,9 +313,18 @@ test('owner enters sparse opening balances: picker, save, reload, delete and rev
   // E6 — editing a saved row updates the same balance and appends one audit row.
   await steelBalance.fill('130.00');
   await panel.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
-  await expect(
-    panel.getByRole('status').filter({ hasText: 'Warehouse balances saved successfully.' }),
-  ).toBeVisible();
+  await expect
+    .poll(async () => {
+      const { data } = await admin
+        .from('opening_balances')
+        .select('amount')
+        .eq('fiscal_year_id', year.id)
+        .eq('warehouse_id', warehouse!.id)
+        .eq('classification_id', steel!.id)
+        .single();
+      return data?.amount;
+    }, 'the edited amount reaches the database')
+    .toBe(130);
 
   const { data: steelBalanceRow, error: steelBalanceError } = await admin
     .from('opening_balances')
@@ -371,7 +416,7 @@ test('owner enters sparse opening balances: picker, save, reload, delete and rev
 
   // E8 — a balance whose classification stopped being a leaf moves to review,
   // stays read-only, and keeps counting inside the warehouse total.
-  const parentName = `مراجعة ${Date.now()}`;
+  const parentName = `${REVIEW_NAME_PREFIX}${Date.now()}`;
   const { data: reviewParent, error: reviewParentError } = await admin
     .from('classifications')
     .insert({ name: parentName })
@@ -411,9 +456,9 @@ test('owner enters sparse opening balances: picker, save, reload, delete and rev
     'Only the one remaining leaf row keeps an amount field.',
   ).toHaveCount(1);
   await expect(
-    reviewPanel.getByText('350.25', { exact: true }).first(),
-    'The review row stays part of the warehouse total (300.25 + 50).',
-  ).toBeVisible();
+    main.getByText('350.25', { exact: true }),
+    'The review row stays part of the warehouse and station totals (300.25 + 50).',
+  ).toHaveCount(2);
   await expect(
     reviewRegion.getByRole('button', { name: `Delete balance ${parentName}` }),
   ).toBeVisible();
