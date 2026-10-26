@@ -116,17 +116,24 @@ test('owner creates a fiscal year, changes its period, saves opening balances an
   await ordinaryAdmin.auth.signOut();
 
   await fiscalTabs.getByRole('tab', { name: 'Opening balances' }).click();
-  const stationToggle = main.getByRole('button', {
-    name: 'Show warehouses for المحطة الرئيسية',
-  });
+  const stationToggle = main
+    .locator('button[aria-controls^="opening-station-panel-"]')
+    .filter({ hasText: 'المحطة الرئيسية' });
+  await expect(
+    stationToggle,
+    'The active year should expose the seeded station accordion.',
+  ).toBeVisible();
   await expect(stationToggle).toHaveAttribute('aria-expanded', 'false');
   await stationToggle.click();
   await expect(stationToggle).toHaveAttribute('aria-expanded', 'true');
 
-  const warehouseToggle = main.getByRole('button', {
-    name: 'Show classifications for مخزن المواد الخام',
-  });
-  await expect(warehouseToggle).toBeVisible();
+  const warehouseToggle = main
+    .locator('button[aria-controls^="opening-warehouse-panel-"]')
+    .filter({ hasText: 'مخزن المواد الخام' });
+  await expect(
+    warehouseToggle,
+    'Expanding the seeded station should expose the raw-material warehouse accordion.',
+  ).toBeVisible();
   await expect(warehouseToggle).toHaveAttribute('aria-expanded', 'false');
   await warehouseToggle.click();
   await expect(warehouseToggle).toHaveAttribute('aria-expanded', 'true');
