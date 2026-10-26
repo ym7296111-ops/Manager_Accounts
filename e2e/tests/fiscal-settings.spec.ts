@@ -144,7 +144,8 @@ test('owner creates a fiscal year, changes its period, saves opening balances an
   await steelBalance.fill('125.50');
   await main.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
   await expect(
-    main.getByRole('status').filter({ hasText: 'Opening balances saved.' }),
+    main.getByRole('status').filter({ hasText: 'Warehouse balances saved successfully.' }),
+    'Saving the edited opening balance should report success.',
   ).toBeVisible();
   await expect(steelBalance).toHaveValue('125.50');
   await expect(main.getByText('125.50', { exact: true })).toHaveCount(2);
