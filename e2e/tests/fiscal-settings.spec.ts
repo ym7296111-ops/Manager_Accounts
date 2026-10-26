@@ -654,5 +654,11 @@ test('owner freezes opening balances: controls freeze, RLS refuses writes, unloc
     new_value: false,
   });
 
-  await owner.auth.signOut();
+  /* Local scope on purpose. `signOut()` defaults to `global`, which revokes
+     every refresh token the owner holds — including the session the shared
+     `storageState` of every later spec depends on. The next specs then fail in
+     the Edge Functions (`approve-user`, `admin-reset-password`) because their
+     GoTrue `getUser(token)` no longer resolves, which is exactly how this test
+     used to leak into `notifications.spec` and `password.spec`. */
+  await owner.auth.signOut({ scope: 'local' });
 });
