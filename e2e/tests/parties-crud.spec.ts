@@ -215,8 +215,9 @@ test.describe('parties — the two-root tree', () => {
     await inboundRoot.click();
     await expect(main.locator('#parties-root-panel-inbound')).toBeVisible();
 
-    /* The scaffold is fixed: two roots, never derived from the rows. */
-    await expect(main.locator('[id^="parties-root-"]')).toHaveCount(2);
+    /* The scaffold is fixed: two roots, never derived from the rows. Scope to
+       the toggles — `parties-root-panel-*` shares the prefix. */
+    await expect(main.locator('button[id^="parties-root-"]')).toHaveCount(2);
   });
 });
 
