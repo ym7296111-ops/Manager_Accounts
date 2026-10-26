@@ -47,6 +47,12 @@ jobs:
         with:
           version: 2.118.0
 
+      - name: Cache Playwright browser binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: Install Playwright Chromium
         env:
           # The browser CDN is the flakiest dependency of this job: give a stalled
