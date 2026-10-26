@@ -5,13 +5,14 @@
  * (`20261002120000_notification_transports_and_secrets.sql`) and the message
  * template tables (`20261002150000_notification_templates_schema.sql`), plus the
  * RPCs that are the only sanctioned access path, plus the app-identity
- * contracts used by Manager_Accounts, plus the project-settings
- * stations/warehouses, classifications and parties tables
- * (`20261104030000_stations_and_warehouses.sql`,
+ * contracts used by Manager_Accounts, plus project-settings
+ * stations/warehouses, classifications, fiscal years/months, opening balances,
+ * and parties tables (`20261104030000_stations_and_warehouses.sql`,
  * `20261104040000_classifications_schema.sql`,
  * `20261106000000_parties_schema.sql`,
  * `20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
- * `20261109000000_parties_two_root_tree.sql`). This
+ * `20261109000000_parties_two_root_tree.sql`,
+ * `20261110000000_fiscal_years_and_opening_balances.sql`). This
  * file does NOT describe
  * the rest of the schema (profiles, RBAC, backups, support, workspaces,
  * localization); regenerate the complete file against the linked project when
@@ -524,6 +525,143 @@ export type Database = {
           },
         ];
       };
+      fiscal_months: {
+        Row: {
+          created_at: string;
+          current_period: number;
+          end_date: string;
+          fiscal_year_id: string;
+          id: string;
+          is_closed: boolean;
+          month_number: number;
+          name: string;
+          start_date: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          current_period?: number;
+          end_date: string;
+          fiscal_year_id: string;
+          id?: string;
+          is_closed?: boolean;
+          month_number: number;
+          name: string;
+          start_date: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          current_period?: number;
+          end_date?: string;
+          fiscal_year_id?: string;
+          id?: string;
+          is_closed?: boolean;
+          month_number?: number;
+          name?: string;
+          start_date?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'fiscal_months_fiscal_year_id_fkey';
+            columns: ['fiscal_year_id'];
+            isOneToOne: false;
+            referencedRelation: 'fiscal_years';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      fiscal_years: {
+        Row: {
+          created_at: string;
+          end_date: string;
+          id: string;
+          is_active: boolean;
+          is_closed: boolean;
+          name: string;
+          start_date: string;
+          supplements_open: boolean;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          end_date: string;
+          id?: string;
+          is_active?: boolean;
+          is_closed?: boolean;
+          /** Derived server-side from `start_date` and `end_date`. */
+          name?: string;
+          start_date: string;
+          supplements_open?: boolean;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          end_date?: string;
+          id?: string;
+          is_active?: boolean;
+          is_closed?: boolean;
+          /** Re-derived server-side whenever the row is updated. */
+          name?: string;
+          start_date?: string;
+          supplements_open?: boolean;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      opening_balances: {
+        Row: {
+          amount: number;
+          classification_id: string;
+          created_at: string;
+          fiscal_year_id: string;
+          id: string;
+          updated_at: string;
+          warehouse_id: string;
+        };
+        Insert: {
+          amount?: number;
+          classification_id: string;
+          created_at?: string;
+          fiscal_year_id: string;
+          id?: string;
+          updated_at?: string;
+          warehouse_id: string;
+        };
+        Update: {
+          amount?: number;
+          classification_id?: string;
+          created_at?: string;
+          fiscal_year_id?: string;
+          id?: string;
+          updated_at?: string;
+          warehouse_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'opening_balances_classification_id_fkey';
+            columns: ['classification_id'];
+            isOneToOne: false;
+            referencedRelation: 'classifications';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'opening_balances_fiscal_year_id_fkey';
+            columns: ['fiscal_year_id'];
+            isOneToOne: false;
+            referencedRelation: 'fiscal_years';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'opening_balances_warehouse_id_fkey';
+            columns: ['warehouse_id'];
+            isOneToOne: false;
+            referencedRelation: 'warehouses';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       parties: {
         Row: {
           /** The root this party sits under. Immutable after creation. */
@@ -856,6 +994,7 @@ export type Database = {
         | 'backup.restored'
         | 'email.credentials_rotated'
         | 'email.transport_updated'
+        | 'opening_balance.updated'
         | 'role.granted'
         | 'role.permissions_updated'
         | 'role.revoked'
