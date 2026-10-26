@@ -291,6 +291,8 @@ interface ClassificationPickerProps {
 
 > **مستحيل بالتصميم:** الحذف. `opening_balances.classification_id` و`warehouse_id` مُعرَّفان `on delete restrict` (`20261110000000…sql:167-172`)، فلا يمكن أن يصبح الصف يتيماً بحذف مرجعه.
 
+> **حالة دفاعية ثالثة (`unavailable`):** أُضيفت أثناء تنفيذ PR A. إن تعذّرت قراءة التصنيف المدمج (صف مشوّه أو محجوب) فلا تُسقط الواجهة الرصيد ولا تُخفيه من الإجمالي؛ يُصنَّف السطر للمراجعة بسبب `unavailable`. القاعدة: **المال لا يختفي أبداً لأن عنوانه لم يُقرأ**.
+
 ### 5.2 الكشف — الدمج بدل استعلام ثانٍ
 
 يُوسَّع `OPENING_BALANCE_SELECT` (`useFiscalSettings.ts:20`) بدمج **مع تلميح المفتاح الأجنبي** وفق قاعدة `postgrest-embeds.test.ts`:

@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 50);
+    assert.equal(migrations.length, 51);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1855,6 +1855,7 @@ try {
     );
     assert.ok(migrations.includes('20261109000000_parties_two_root_tree.sql'));
     assert.ok(migrations.includes('20261110000000_fiscal_years_and_opening_balances.sql'));
+    assert.ok(migrations.includes('20261111000000_opening_balances_delete_audit.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2084,6 +2085,94 @@ try {
           },
         ],
       );
+
+      // Deletion must be audited with the amount that was removed: the row is
+      // gone, so the audit entry is the only remaining record of it.
+      const deleteTarget = await asRole('authenticated', A, (c) =>
+        c.query(
+          `insert into public.opening_balances
+               (fiscal_year_id,warehouse_id,classification_id,amount)
+             values ($1,$2,$3,77.70)
+             returning id`,
+          [fiscalYearIds[1], warehouseId, classificationId],
+        ),
+      );
+      const deleteTargetId = deleteTarget.rows[0].id;
+
+      // A caller without project.settings:manage is filtered by RLS: the
+      // statement succeeds with zero rows and the row survives.
+      const viewerDelete = await asRole('authenticated', V, (c) =>
+        c.query('delete from public.opening_balances where id=$1 returning id', [deleteTargetId]),
+      );
+      assert.equal(viewerDelete.rowCount, 0, 'viewer delete must be filtered by RLS');
+      assert.equal(
+        (await db.query('select id from public.opening_balances where id=$1', [deleteTargetId]))
+          .rowCount,
+        1,
+        'a filtered delete must not remove the row',
+      );
+
+      const deletedBalance = await asRole('authenticated', A, (c) =>
+        c.query('delete from public.opening_balances where id=$1 returning id', [deleteTargetId]),
+      );
+      assert.equal(deletedBalance.rowCount, 1);
+      assert.equal(
+        (await db.query('select id from public.opening_balances where id=$1', [deleteTargetId]))
+          .rowCount,
+        0,
+      );
+
+      const deleteAudit = await db.query(
+        `select actor_id,action,entity,entity_id,metadata
+             from public.audit_logs
+            where entity='opening_balances' and entity_id=$1
+            order by id`,
+        [deleteTargetId],
+      );
+      assert.deepEqual(
+        deleteAudit.rows.map((row) => ({
+          actor_id: row.actor_id,
+          action: row.action,
+          entity: row.entity,
+          entity_id: row.entity_id,
+          classification_id: row.metadata.classification_id,
+          old_amount: row.metadata.old_amount,
+          new_amount: row.metadata.new_amount,
+        })),
+        [
+          {
+            actor_id: A,
+            action: 'opening_balance.updated',
+            entity: 'opening_balances',
+            entity_id: deleteTargetId,
+            classification_id: classificationId,
+            old_amount: null,
+            new_amount: 77.7,
+          },
+          {
+            actor_id: A,
+            action: 'opening_balance.deleted',
+            entity: 'opening_balances',
+            entity_id: deleteTargetId,
+            classification_id: classificationId,
+            old_amount: 77.7,
+            new_amount: null,
+          },
+        ],
+        'INSERT and DELETE are both audited, with the removed amount preserved',
+      );
+
+      const deleteTrigger = await db.query(
+        `select (tgtype & 8) = 8 as listens_to_delete,
+                (tgtype & 1) = 1 as is_row_level,
+                (tgtype & 2) = 0 as is_after
+           from pg_trigger
+          where tgrelid='public.opening_balances'::regclass
+            and tgname='opening_balances_audit_write'`,
+      );
+      assert.deepEqual(deleteTrigger.rows, [
+        { listens_to_delete: true, is_row_level: true, is_after: true },
+      ]);
 
       for (const [table, policyPrefix] of [
         ['fiscal_years', 'fiscal_years_project_settings_'],

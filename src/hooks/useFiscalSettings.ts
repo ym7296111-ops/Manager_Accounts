@@ -17,8 +17,31 @@ const FISCAL_YEAR_SELECT =
   'id, name, start_date, end_date, is_active, is_closed, supplements_open, created_at, updated_at';
 const FISCAL_MONTH_SELECT =
   'id, fiscal_year_id, month_number, name, start_date, end_date, current_period, is_closed, created_at, updated_at';
-const OPENING_BALANCE_SELECT =
-  'id, fiscal_year_id, warehouse_id, classification_id, amount, created_at, updated_at';
+
+/**
+ * The classification columns an opening-balance row needs to render.
+ *
+ * `is_leaf` and `is_active` are derived by the classifications triggers. They
+ * are read next to the balance — in the same response — so the editor cannot
+ * observe a row and its classification from two different instants. That is
+ * what makes the "needs review" state (a saved balance whose classification
+ * stopped being an active leaf) exact rather than a guess.
+ */
+export const OPENING_BALANCE_CLASSIFICATION_SELECT = 'id, code, name, is_leaf, is_active';
+
+/**
+ * Balances plus their classification, in one request.
+ *
+ * `!classification_id` pins the embed to the balance's own foreign key, the
+ * same disambiguation rule the users/support embeds follow (see
+ * `src/hooks/postgrest-embeds.test.ts`): an unqualified `classifications(...)`
+ * succeeds today but breaks the moment a second relationship to that table is
+ * added, and it fails as an empty response rather than an error. The hint must
+ * not be aliased — the response key stays `classifications`.
+ */
+export const OPENING_BALANCE_SELECT =
+  `id, fiscal_year_id, warehouse_id, classification_id, amount, created_at, updated_at, ` +
+  `classifications!classification_id(${OPENING_BALANCE_CLASSIFICATION_SELECT})`;
 
 export type FiscalSettingsReadErrorCode = 'unavailable' | 'forbidden' | 'network' | 'unknown';
 
@@ -26,7 +49,162 @@ export type FiscalSettingsWriteErrorCode =
   'unavailable' | 'forbidden' | 'network' | 'validation' | 'duplicate' | 'notFound' | 'unknown';
 
 export type FiscalSettingsWriteOperation =
-  'createYear' | 'activateYear' | 'updatePeriod' | 'saveOpeningBalances';
+  'createYear' | 'activateYear' | 'updatePeriod' | 'saveOpeningBalances' | 'deleteOpeningBalance';
+
+/** The classification embedded in an opening-balance response. */
+export interface OpeningBalanceClassification {
+  readonly id: string;
+  readonly code: string;
+  readonly name: string;
+  readonly isLeaf: boolean;
+  readonly isActive: boolean;
+}
+
+/**
+ * A balance row as read from the database, with its classification.
+ *
+ * `classification` is `null` only when the embedded row is missing or
+ * malformed: the foreign key is `ON DELETE RESTRICT`, so a real balance always
+ * points at a real classification. Callers must still render the money — a
+ * balance is never dropped because its label could not be read.
+ */
+export interface OpeningBalanceRow extends OpeningBalance {
+  readonly classification: OpeningBalanceClassification | null;
+}
+
+/**
+ * Why a saved balance is not editable in the classification list of its
+ * warehouse. `null` means it is a normal, editable row.
+ *
+ * - `not_leaf`: a child classification was added underneath it, so the editor's
+ *   leaf list no longer contains it.
+ * - `inactive`: the classification was deactivated.
+ * - `unavailable`: the embedded classification could not be read; the amount is
+ *   still real and must still be shown (and counted).
+ */
+export type OpeningBalanceReviewReason = 'not_leaf' | 'inactive' | 'unavailable';
+
+export function openingBalanceReviewReason(
+  row: OpeningBalanceRow,
+): OpeningBalanceReviewReason | null {
+  if (row.classification === null) {
+    return 'unavailable';
+  }
+  if (!row.classification.isLeaf) {
+    return 'not_leaf';
+  }
+  if (!row.classification.isActive) {
+    return 'inactive';
+  }
+  return null;
+}
+
+/**
+ * The bounds of the write-path validator (`isValidOpeningAmount`): up to 16
+ * integer digits and at most two decimals, never negative. A read that falls
+ * outside them is malformed, not merely surprising.
+ */
+const BALANCE_AMOUNT_PATTERN = /^\d{1,16}(?:\.\d{1,2})?$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+/**
+ * PostgREST sends `numeric` as a JSON number. A string is accepted defensively
+ * (a proxy or a future `casts` change can do that) as long as it is a plain
+ * non-negative decimal that fits the column.
+ */
+function readAmount(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  if (typeof value === 'string' && BALANCE_AMOUNT_PATTERN.test(value.trim())) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseClassification(value: unknown): OpeningBalanceClassification | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = readNonEmptyString(value.id);
+  const code = readNonEmptyString(value.code);
+  const name = readNonEmptyString(value.name);
+  if (id === null || code === null || name === null) {
+    return null;
+  }
+  return {
+    id,
+    code,
+    name,
+    isLeaf: value.is_leaf === true,
+    isActive: value.is_active === true,
+  };
+}
+
+/**
+ * Normalize an opening-balance response.
+ *
+ * Malformed rows are dropped rather than throwing, exactly like
+ * `parseClassifications` and `parseStationsDirectory`: one bad row must not
+ * blank the screen. A row is only malformed when an identifier or the amount
+ * cannot be read; a missing classification is not — those rows are kept and
+ * surface as `unavailable` so the amount stays visible.
+ *
+ * The order is the server's (`warehouse_id`, then `classification_id`); display
+ * ordering by classification code is applied by the editor, where the code is
+ * known.
+ */
+export function parseOpeningBalances(raw: unknown): readonly OpeningBalanceRow[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const byId = new Map<string, OpeningBalanceRow>();
+  for (const entry of raw) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const id = readNonEmptyString(entry.id);
+    const fiscalYearId = readNonEmptyString(entry.fiscal_year_id);
+    const warehouseId = readNonEmptyString(entry.warehouse_id);
+    const classificationId = readNonEmptyString(entry.classification_id);
+    const amount = readAmount(entry.amount);
+    if (
+      id === null ||
+      fiscalYearId === null ||
+      warehouseId === null ||
+      classificationId === null ||
+      amount === null ||
+      byId.has(id)
+    ) {
+      continue;
+    }
+
+    byId.set(id, {
+      id,
+      fiscal_year_id: fiscalYearId,
+      warehouse_id: warehouseId,
+      classification_id: classificationId,
+      amount,
+      created_at: typeof entry.created_at === 'string' ? entry.created_at : '',
+      updated_at: typeof entry.updated_at === 'string' ? entry.updated_at : '',
+      classification: parseClassification(entry.classifications),
+    });
+  }
+
+  return [...byId.values()];
+}
 
 export class FiscalSettingsError extends Error {
   readonly code: FiscalSettingsReadErrorCode;
@@ -70,6 +248,11 @@ export interface OpeningBalanceWrite {
 export interface SaveOpeningBalancesInput {
   readonly fiscalYearId: string;
   readonly rows: readonly OpeningBalanceWrite[];
+}
+
+export interface DeleteOpeningBalanceInput {
+  readonly fiscalYearId: string;
+  readonly balanceId: string;
 }
 
 function isIsoDate(value: string): boolean {
@@ -240,7 +423,7 @@ export function useOpeningBalances(fiscalYearId: string | null) {
   return useQuery({
     queryKey: [...OPENING_BALANCES_QUERY_KEY, fiscalYearId],
     enabled: fiscalYearId !== null,
-    queryFn: async (): Promise<readonly OpeningBalance[]> => {
+    queryFn: async (): Promise<readonly OpeningBalanceRow[]> => {
       if (fiscalYearId === null) {
         return [];
       }
@@ -259,7 +442,7 @@ export function useOpeningBalances(fiscalYearId: string | null) {
       if (error !== null && error !== undefined) {
         throw new FiscalSettingsError(classifyFiscalSettingsReadError(error));
       }
-      return data ?? [];
+      return parseOpeningBalances(data);
     },
   });
 }
@@ -363,7 +546,7 @@ export function useSaveOpeningBalances() {
   const invalidation = useInvalidateFiscalSettings();
 
   return useMutation({
-    mutationFn: async (input: SaveOpeningBalancesInput): Promise<readonly OpeningBalance[]> => {
+    mutationFn: async (input: SaveOpeningBalancesInput): Promise<readonly OpeningBalanceRow[]> => {
       if (input.fiscalYearId.trim() === '' || input.rows.length === 0) {
         throw new FiscalSettingsWriteError('validation');
       }
@@ -405,11 +588,11 @@ export function useSaveOpeningBalances() {
           classifyFiscalSettingsWriteError(error, 'saveOpeningBalances'),
         );
       }
-      return data ?? [];
+      return parseOpeningBalances(data);
     },
     onSuccess: (savedRows, input) => {
       const queryKey = [...OPENING_BALANCES_QUERY_KEY, input.fiscalYearId] as const;
-      queryClient.setQueryData<readonly OpeningBalance[]>(queryKey, (current) => {
+      queryClient.setQueryData<readonly OpeningBalanceRow[]>(queryKey, (current) => {
         const merged = new Map(
           (current ?? []).map((row) => [
             `${row.fiscal_year_id}:${row.warehouse_id}:${row.classification_id}`,
@@ -421,6 +604,67 @@ export function useSaveOpeningBalances() {
         }
         return [...merged.values()];
       });
+      invalidation.invalidateBalances(input.fiscalYearId);
+    },
+  });
+}
+
+/**
+ * Remove one saved opening balance.
+ *
+ * Deleting is deliberately a separate request from `useSaveOpeningBalances`: a
+ * warehouse save stays a single upsert, so a failure can never leave a batch
+ * half saved and half deleted. The database records the removal itself — the
+ * audit trigger on `public.opening_balances` writes `opening_balance.deleted`
+ * with the old amount (`20261111000000_opening_balances_delete_audit.sql`) —
+ * so the client only has to identify the row.
+ *
+ * Both filters are sent. `id` alone is enough for the primary key, but scoping
+ * by `fiscal_year_id` keeps a stale row from a previous year from being
+ * deleted by a double click after the year switched.
+ *
+ * Zero affected rows is reported as `notFound`, never as success. That case
+ * covers two indistinguishable situations: the row was already deleted in
+ * another session, or row-level security filtered it out because the caller
+ * lost `project.settings:manage`. The editor treats it as "refresh and look
+ * again" rather than claiming a deletion that may not have happened.
+ */
+export function useDeleteOpeningBalance() {
+  const queryClient = useQueryClient();
+  const invalidation = useInvalidateFiscalSettings();
+
+  return useMutation({
+    mutationFn: async (input: DeleteOpeningBalanceInput): Promise<string> => {
+      if (input.fiscalYearId.trim() === '' || input.balanceId.trim() === '') {
+        throw new FiscalSettingsWriteError('validation');
+      }
+
+      const supabase = requireSupabase();
+      const { data, error } = await supabase
+        .from('opening_balances')
+        .delete()
+        .eq('id', input.balanceId)
+        .eq('fiscal_year_id', input.fiscalYearId)
+        .select('id');
+
+      if (error !== null && error !== undefined) {
+        throw new FiscalSettingsWriteError(
+          classifyFiscalSettingsWriteError(error, 'deleteOpeningBalance'),
+        );
+      }
+
+      const deleted = Array.isArray(data) ? data.length : 0;
+      if (deleted === 0) {
+        throw new FiscalSettingsWriteError('notFound');
+      }
+
+      return input.balanceId;
+    },
+    onSuccess: (balanceId, input) => {
+      queryClient.setQueryData<readonly OpeningBalanceRow[]>(
+        [...OPENING_BALANCES_QUERY_KEY, input.fiscalYearId],
+        (current) => current?.filter((row) => row.id !== balanceId),
+      );
       invalidation.invalidateBalances(input.fiscalYearId);
     },
   });
