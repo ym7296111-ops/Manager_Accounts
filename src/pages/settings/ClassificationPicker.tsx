@@ -181,6 +181,9 @@ export function ClassificationPicker({
           }
           autoComplete="off"
           value={query}
+          /* A placeholder is not a label: without this the field is announced
+             as an unnamed combobox, and the listbox borrows its name. */
+          aria-label={t('settings.project.fiscal.openingBalances.picker.search')}
           placeholder={t('settings.project.fiscal.openingBalances.picker.search')}
           onChange={(event) => {
             setQuery(event.target.value);

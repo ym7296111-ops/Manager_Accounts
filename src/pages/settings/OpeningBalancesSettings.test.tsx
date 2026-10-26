@@ -393,7 +393,7 @@ describe('U3/U4 — picker contents and Arabic search', () => {
     openStation();
     openWarehouse();
     const picker = openPicker();
-    const search = within(picker).getByRole('combobox');
+    const search = within(picker).getByRole('combobox', { name: 'ابحث بالاسم أو الكود…' });
 
     fireEvent.change(search, { target: { value: 'اخشاب' } });
     expect(within(picker).getAllByRole('option')).toHaveLength(1);
