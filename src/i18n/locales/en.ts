@@ -741,6 +741,49 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.openingBalances.noActiveYear.description':
     'Activate a fiscal year in Annual settings to view its opening balances.',
   'settings.project.fiscal.openingBalances.success.saved': 'Warehouse balances saved successfully.',
+  'settings.project.fiscal.openingBalances.emptyWarehouse':
+    'No balances recorded for this warehouse yet. Add a classification to start.',
+  'settings.project.fiscal.openingBalances.inactiveWarehouse': 'Inactive',
+  'settings.project.fiscal.openingBalances.addClassification': 'Add classification',
+  'settings.project.fiscal.openingBalances.counter':
+    '{entered} of {eligible} classifications entered',
+  'settings.project.fiscal.openingBalances.row.new': 'Not saved',
+  'settings.project.fiscal.openingBalances.row.emptyHint': 'Empty row — it will not be saved',
+  'settings.project.fiscal.openingBalances.row.discard': 'Discard row {classification}',
+  'settings.project.fiscal.openingBalances.picker.title': 'Select a classification',
+  'settings.project.fiscal.openingBalances.picker.search': 'Search by name or code…',
+  'settings.project.fiscal.openingBalances.picker.noResults': 'No matching classifications.',
+  'settings.project.fiscal.openingBalances.picker.allAdded':
+    'Every active leaf classification is already added to this warehouse.',
+  'settings.project.fiscal.openingBalances.picker.selected': 'Selected: {count}',
+  'settings.project.fiscal.openingBalances.picker.addSelected': 'Add ({count})',
+  'settings.project.fiscal.openingBalances.picker.remove': 'Remove {name}',
+  'settings.project.fiscal.openingBalances.picker.close': 'Close',
+  'settings.project.fiscal.openingBalances.picker.showMore': 'Show more ({remaining})',
+  'settings.project.fiscal.openingBalances.review.title': 'Balances needing review ({count})',
+  'settings.project.fiscal.openingBalances.review.badge': '{count} balance(s) need review',
+  'settings.project.fiscal.openingBalances.review.notLeaf':
+    'Classification has sub-classifications',
+  'settings.project.fiscal.openingBalances.review.inactive': 'Classification is inactive',
+  'settings.project.fiscal.openingBalances.review.unavailable':
+    'The classification could not be read',
+  'settings.project.fiscal.openingBalances.review.hint':
+    'Review the classification tree: either make it a leaf again or move the balance to a sub-classification. This balance stays included in the total.',
+  'settings.project.fiscal.openingBalances.delete.action': 'Delete balance {classification}',
+  'settings.project.fiscal.openingBalances.delete.title': 'Delete opening balance',
+  'settings.project.fiscal.openingBalances.delete.body':
+    'This removes the balance of «{classification}» ({code}) amounting to {amount} from {warehouse}. It cannot be undone, but it is recorded in the audit log.',
+  'settings.project.fiscal.openingBalances.delete.confirm': 'Delete balance',
+  'settings.project.fiscal.openingBalances.delete.cancel': 'Cancel',
+  'settings.project.fiscal.openingBalances.success.deleted': 'The balance was deleted.',
+  'settings.project.fiscal.openingBalances.success.addedRows': '{count} row(s) added.',
+  'settings.project.fiscal.openingBalances.notice.alreadyDeleted':
+    'Balances were already updated — the list has been reloaded.',
+  'settings.project.fiscal.openingBalances.guard.title': 'You have unsaved changes',
+  'settings.project.fiscal.openingBalances.guard.body':
+    'Leaving this screen will discard the balances you entered and did not save.',
+  'settings.project.fiscal.openingBalances.guard.stay': 'Back to editing',
+  'settings.project.fiscal.openingBalances.guard.leave': 'Leave without saving',
   'settings.appearance.desc':
     'Default language, theme, time zone and weekend days for this project.',
   'settings.notifications.title': 'Notifications',

@@ -302,6 +302,28 @@ const openingBalances: OpeningBalancePreviewRow[] = [
     created_at: nowIso(),
     updated_at: nowIso(),
   },
+  /* Two balances that no longer have a writable leaf underneath them, so the
+     review section is visible in the preview build and in screenshots:
+     «المواد الخام» gained children after the balance was entered, and
+     «بلاستيك ومطاط» was deactivated. Both stay inside the warehouse total. */
+  {
+    id: 'ob-preview-raw',
+    fiscal_year_id: 'fy-preview-2025',
+    warehouse_id: 'w-1',
+    classification_id: 'g-raw',
+    amount: 40000,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'ob-preview-plastic',
+    fiscal_year_id: 'fy-preview-2025',
+    warehouse_id: 'w-1',
+    classification_id: 'i-plastic',
+    amount: 7500,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
 ];
 
 interface PartyPreviewRow {
@@ -731,12 +753,42 @@ function matchesFilters(
   return filters.every(([column, value]) => row[column] === value);
 }
 
+/**
+ * Honours the one embed the fiscal screens ask for: `classifications!...(...)`
+ * on `opening_balances`. Real PostgREST returns exactly the requested columns,
+ * and the editor's «needs review» state is derived from this embed — a preview
+ * that silently dropped it would show every saved balance as unreadable.
+ */
+function withBalanceEmbed(
+  row: OpeningBalancePreviewRow,
+  columns: string | undefined,
+): Record<string, unknown> {
+  if (columns === undefined || !columns.includes('classifications!')) {
+    return { ...row };
+  }
+  const classification = classifications.find((entry) => entry.id === row.classification_id);
+  return {
+    ...row,
+    classifications:
+      classification === undefined
+        ? null
+        : {
+            id: classification.id,
+            code: classification.code,
+            name: classification.name,
+            is_leaf: classification.is_leaf,
+            is_active: classification.is_active,
+          },
+  };
+}
+
 function runFiscal(
   table: FiscalPreviewTable,
   operation: 'insert' | 'upsert' | 'update' | 'delete' | 'select',
   payload: PreviewPayload | undefined,
   filters: readonly (readonly [string, unknown])[],
   single: boolean,
+  columns: string | undefined,
 ): Outcome {
   try {
     if (table === 'fiscal_years') {
@@ -883,7 +935,21 @@ function runFiscal(
           saved.push({ ...row });
         }
       }
-      return { data: single ? (saved[0] ?? null) : saved, error: null };
+      const projected = saved.map((row) => withBalanceEmbed(row, columns));
+      return { data: single ? (projected[0] ?? null) : projected, error: null };
+    }
+
+    if (operation === 'delete') {
+      const removed: OpeningBalancePreviewRow[] = [];
+      for (let index = openingBalances.length - 1; index >= 0; index -= 1) {
+        const row = openingBalances[index]!;
+        if (matchesFilters(row as unknown as Record<string, unknown>, filters)) {
+          removed.unshift(row);
+          openingBalances.splice(index, 1);
+        }
+      }
+      const projected = removed.map((row) => withBalanceEmbed(row, columns));
+      return { data: single ? (projected[0] ?? null) : projected, error: null };
     }
 
     if (operation === 'select') {
@@ -895,7 +961,7 @@ function runFiscal(
             a.warehouse_id.localeCompare(b.warehouse_id) ||
             a.classification_id.localeCompare(b.classification_id),
         )
-        .map((row) => ({ ...row }));
+        .map((row) => withBalanceEmbed(row, columns));
       return { data: single ? (rows[0] ?? null) : rows, error: null };
     }
 
@@ -992,10 +1058,11 @@ function builder(
 ): Builder {
   const filters: Array<readonly [string, unknown]> = [];
   let single = false;
+  let columns: string | undefined;
 
   const execute = (): Outcome => {
     if (table === 'fiscal_years' || table === 'fiscal_months' || table === 'opening_balances') {
-      return runFiscal(table, operation, payload, filters, single);
+      return runFiscal(table, operation, payload, filters, single, columns);
     }
     if (table === 'classifications') {
       return runClassification(
@@ -1028,7 +1095,10 @@ function builder(
   };
 
   const chain: Builder = {
-    select: () => chain,
+    select: (projection?: string) => {
+      columns = projection;
+      return chain;
+    },
     order: () => chain,
     eq: (column, value) => {
       filters.push([column, value] as const);

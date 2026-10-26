@@ -716,6 +716,46 @@ export const ar = {
   'settings.project.fiscal.openingBalances.noActiveYear.description':
     'فعّل سنة مالية من الضبط السنوي لعرض أرصدة أول المدة الخاصة بها.',
   'settings.project.fiscal.openingBalances.success.saved': 'تم حفظ أرصدة المخزن بنجاح.',
+  'settings.project.fiscal.openingBalances.emptyWarehouse':
+    'لا توجد أرصدة مسجّلة لهذا المخزن بعد. أضف تصنيفاً للبدء.',
+  'settings.project.fiscal.openingBalances.inactiveWarehouse': 'معطّل',
+  'settings.project.fiscal.openingBalances.addClassification': 'إضافة تصنيف',
+  'settings.project.fiscal.openingBalances.counter': '{entered} من {eligible} تصنيفاً مُدخلاً',
+  'settings.project.fiscal.openingBalances.row.new': 'لم يُحفظ',
+  'settings.project.fiscal.openingBalances.row.emptyHint': 'سطر فارغ — لن يُحفظ',
+  'settings.project.fiscal.openingBalances.row.discard': 'تجاهل سطر {classification}',
+  'settings.project.fiscal.openingBalances.picker.title': 'اختر تصنيفاً',
+  'settings.project.fiscal.openingBalances.picker.search': 'ابحث بالاسم أو الكود…',
+  'settings.project.fiscal.openingBalances.picker.noResults': 'لا توجد تصنيفات مطابقة.',
+  'settings.project.fiscal.openingBalances.picker.allAdded':
+    'كل التصنيفات الورقية النشطة مضافة لهذا المخزن.',
+  'settings.project.fiscal.openingBalances.picker.selected': 'المحدد: {count}',
+  'settings.project.fiscal.openingBalances.picker.addSelected': 'إضافة ({count})',
+  'settings.project.fiscal.openingBalances.picker.remove': 'إزالة {name}',
+  'settings.project.fiscal.openingBalances.picker.close': 'إغلاق',
+  'settings.project.fiscal.openingBalances.picker.showMore': 'عرض المزيد ({remaining})',
+  'settings.project.fiscal.openingBalances.review.title': 'أرصدة تحتاج مراجعة ({count})',
+  'settings.project.fiscal.openingBalances.review.badge': '{count} رصيد يحتاج مراجعة',
+  'settings.project.fiscal.openingBalances.review.notLeaf': 'تصنيف له تصنيفات فرعية',
+  'settings.project.fiscal.openingBalances.review.inactive': 'تصنيف معطّل',
+  'settings.project.fiscal.openingBalances.review.unavailable': 'تعذّرت قراءة التصنيف',
+  'settings.project.fiscal.openingBalances.review.hint':
+    'راجع شجرة التصنيفات: إمّا إعادة التصنيف ورقةً أو نقل الرصيد إلى تصنيف فرعي. يبقى هذا الرصيد محسوباً في الإجمالي.',
+  'settings.project.fiscal.openingBalances.delete.action': 'حذف رصيد {classification}',
+  'settings.project.fiscal.openingBalances.delete.title': 'حذف رصيد أول المدة',
+  'settings.project.fiscal.openingBalances.delete.body':
+    'سيُحذف رصيد «{classification}» ({code}) بمبلغ {amount} من {warehouse}. لا يمكن التراجع عن هذا الإجراء، لكنه يُسجَّل في سجل التدقيق.',
+  'settings.project.fiscal.openingBalances.delete.confirm': 'حذف الرصيد',
+  'settings.project.fiscal.openingBalances.delete.cancel': 'إلغاء',
+  'settings.project.fiscal.openingBalances.success.deleted': 'حُذف الرصيد بنجاح.',
+  'settings.project.fiscal.openingBalances.success.addedRows': 'أُضيف {count} سطراً.',
+  'settings.project.fiscal.openingBalances.notice.alreadyDeleted':
+    'حُدِّثت الأرصدة مسبقاً — أُعيد التحميل.',
+  'settings.project.fiscal.openingBalances.guard.title': 'لديك تغييرات غير محفوظة',
+  'settings.project.fiscal.openingBalances.guard.body':
+    'مغادرة الشاشة ستُفقد الأرصدة التي أدخلتها ولم تحفظها.',
+  'settings.project.fiscal.openingBalances.guard.stay': 'العودة للحفظ',
+  'settings.project.fiscal.openingBalances.guard.leave': 'مغادرة بدون حفظ',
   'settings.appearance.desc':
     'اللغة والمظهر الافتراضيان والمنطقة الزمنية وأيام العطلة لهذا المشروع.',
   'settings.notifications.title': 'التنبيهات',
