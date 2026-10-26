@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 49);
+    assert.equal(migrations.length, 50);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1854,6 +1854,7 @@ try {
       migrations.includes('20261108000000_inbound_outbound_parties_and_sister_companies.sql'),
     );
     assert.ok(migrations.includes('20261109000000_parties_two_root_tree.sql'));
+    assert.ok(migrations.includes('20261110000000_fiscal_years_and_opening_balances.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -1894,6 +1895,306 @@ try {
       (Number((await db.query('show server_version_num')).rows[0].server_version_num) / 10000) | 0,
       17,
     );
+  });
+  await test('fiscal years derive names, rotate the active year, generate twelve months, and gate opening balances', async () => {
+    const fiscalYearIds = [randomUUID(), randomUUID(), randomUUID()];
+    const invalidYearId = randomUUID();
+    const stationId = randomUUID();
+    const warehouseId = randomUUID();
+    const classificationId = randomUUID();
+    let openingBalanceId = null;
+
+    try {
+      await db.query('insert into public.stations(id,name) values ($1,$2)', [
+        stationId,
+        `Fiscal audit station ${randomUUID()}`,
+      ]);
+      await db.query('insert into public.warehouses(id,station_id,name) values ($1,$2,$3)', [
+        warehouseId,
+        stationId,
+        `Fiscal audit warehouse ${randomUUID()}`,
+      ]);
+      await db.query('insert into public.classifications(id,name) values ($1,$2)', [
+        classificationId,
+        `Fiscal audit classification ${randomUUID()}`,
+      ]);
+
+      const createFiscalYear = (id, startDate, endDate, isActive) =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.fiscal_years (id,name,start_date,end_date,is_active)
+               values ($1,'client supplied name',$2::date,$3::date,$4)
+               returning name,is_active,is_closed,supplements_open`,
+            [id, startDate, endDate, isActive],
+          ),
+        );
+
+      const firstYear = await createFiscalYear(fiscalYearIds[0], '2026-07-01', '2027-06-30', true);
+      assert.deepEqual(firstYear.rows[0], {
+        name: '2026-2027',
+        is_active: true,
+        is_closed: false,
+        supplements_open: false,
+      });
+
+      const firstYearMonths = await db.query(
+        `select month_number,name,start_date::text,end_date::text,current_period,is_closed
+             from public.fiscal_months
+            where fiscal_year_id=$1
+            order by month_number`,
+        [fiscalYearIds[0]],
+      );
+      assert.equal(firstYearMonths.rowCount, 12);
+      assert.deepEqual(firstYearMonths.rows[0], {
+        month_number: 1,
+        name: 'يوليو 2026',
+        start_date: '2026-07-01',
+        end_date: '2026-07-31',
+        current_period: 1,
+        is_closed: false,
+      });
+      assert.deepEqual(firstYearMonths.rows[11], {
+        month_number: 12,
+        name: 'يونيو 2027',
+        start_date: '2027-06-01',
+        end_date: '2027-06-30',
+        current_period: 1,
+        is_closed: false,
+      });
+
+      await createFiscalYear(fiscalYearIds[1], '2027-07-01', '2028-06-30', false);
+      const activatedByUpdate = await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.fiscal_years set is_active=true where id=$1 returning name,is_active',
+          [fiscalYearIds[1]],
+        ),
+      );
+      assert.deepEqual(activatedByUpdate.rows[0], { name: '2027-2028', is_active: true });
+
+      const thirdYear = await createFiscalYear(fiscalYearIds[2], '2028-07-01', '2029-06-30', true);
+      assert.equal(thirdYear.rows[0].name, '2028-2029');
+      const activeYears = await db.query(
+        'select id,name from public.fiscal_years where is_active order by name',
+      );
+      assert.deepEqual(activeYears.rows, [{ id: fiscalYearIds[2], name: '2028-2029' }]);
+      const allYearMonthCounts = await db.query(
+        `select fiscal_year_id,count(*)::int as month_count
+             from public.fiscal_months
+            where fiscal_year_id=any($1::uuid[])
+            group by fiscal_year_id`,
+        [fiscalYearIds],
+      );
+      assert.equal(allYearMonthCounts.rowCount, 3);
+      assert.ok(allYearMonthCounts.rows.every((row) => row.month_count === 12));
+
+      await expectCode('23514', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.fiscal_years(id,name,start_date,end_date)
+               values ($1,'invalid date range','2030-01-01','2030-01-01')`,
+            [invalidYearId],
+          ),
+        ),
+      );
+
+      const insertedBalance = await asRole('authenticated', A, (c) =>
+        c.query(
+          `insert into public.opening_balances
+               (fiscal_year_id,warehouse_id,classification_id,amount)
+             values ($1,$2,$3,123.45)
+             returning id,amount::text`,
+          [fiscalYearIds[0], warehouseId, classificationId],
+        ),
+      );
+      openingBalanceId = insertedBalance.rows[0].id;
+      assert.equal(insertedBalance.rows[0].amount, '123.45');
+
+      await expectCode('23505', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.opening_balances
+                 (fiscal_year_id,warehouse_id,classification_id,amount)
+               values ($1,$2,$3,9.99)`,
+            [fiscalYearIds[0], warehouseId, classificationId],
+          ),
+        ),
+      );
+      await expectCode('23514', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.opening_balances
+                 (fiscal_year_id,warehouse_id,classification_id,amount)
+               values ($1,$2,$3,-0.01)`,
+            [fiscalYearIds[1], warehouseId, classificationId],
+          ),
+        ),
+      );
+
+      const updatedBalance = await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.opening_balances set amount=234.56 where id=$1 returning amount::text',
+          [openingBalanceId],
+        ),
+      );
+      assert.deepEqual(updatedBalance.rows, [{ amount: '234.56' }]);
+
+      const balanceAudit = await db.query(
+        `select actor_id,action,entity,entity_id,metadata
+             from public.audit_logs
+            where entity='opening_balances' and entity_id=$1
+              and action='opening_balance.updated'::public.audit_action
+            order by id`,
+        [openingBalanceId],
+      );
+      assert.equal(balanceAudit.rowCount, 2, 'both INSERT and UPDATE are audited');
+      assert.deepEqual(
+        balanceAudit.rows.map((row) => ({
+          actor_id: row.actor_id,
+          action: row.action,
+          entity: row.entity,
+          entity_id: row.entity_id,
+          fiscal_year_id: row.metadata.fiscal_year_id,
+          warehouse_id: row.metadata.warehouse_id,
+          classification_id: row.metadata.classification_id,
+          old_amount: row.metadata.old_amount,
+          new_amount: row.metadata.new_amount,
+        })),
+        [
+          {
+            actor_id: A,
+            action: 'opening_balance.updated',
+            entity: 'opening_balances',
+            entity_id: openingBalanceId,
+            fiscal_year_id: fiscalYearIds[0],
+            warehouse_id: warehouseId,
+            classification_id: classificationId,
+            old_amount: null,
+            new_amount: 123.45,
+          },
+          {
+            actor_id: A,
+            action: 'opening_balance.updated',
+            entity: 'opening_balances',
+            entity_id: openingBalanceId,
+            fiscal_year_id: fiscalYearIds[0],
+            warehouse_id: warehouseId,
+            classification_id: classificationId,
+            old_amount: 123.45,
+            new_amount: 234.56,
+          },
+        ],
+      );
+
+      for (const [table, policyPrefix] of [
+        ['fiscal_years', 'fiscal_years_project_settings_'],
+        ['fiscal_months', 'fiscal_months_project_settings_'],
+        ['opening_balances', 'opening_balances_project_settings_'],
+      ]) {
+        const flags = await db.query(
+          'select relrowsecurity,relforcerowsecurity from pg_class where oid=$1::regclass',
+          [`public.${table}`],
+        );
+        assert.deepEqual(flags.rows[0], { relrowsecurity: true, relforcerowsecurity: true });
+        const policies = await db.query(
+          `select polname,polpermissive from pg_policy
+              where polrelid=$1::regclass and polname like $2 order by polname`,
+          [`public.${table}`, `${policyPrefix}%`],
+        );
+        assert.deepEqual(
+          policies.rows,
+          ['delete', 'insert', 'select', 'update'].map((command) => ({
+            polname: `${policyPrefix}${command}`,
+            polpermissive: true,
+          })),
+        );
+        for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+          assert.equal(
+            (
+              await db.query('select has_table_privilege($1,$2,$3) as allowed', [
+                'authenticated',
+                `public.${table}`,
+                privilege,
+              ])
+            ).rows[0].allowed,
+            true,
+            `authenticated must have ${privilege} on public.${table}`,
+          );
+          assert.equal(
+            (
+              await db.query('select has_table_privilege($1,$2,$3) as allowed', [
+                'anon',
+                `public.${table}`,
+                privilege,
+              ])
+            ).rows[0].allowed,
+            false,
+            `anon must not have ${privilege} on public.${table}`,
+          );
+        }
+      }
+
+      const viewerCapability = await asRole('authenticated', V, (c) =>
+        c.query('select public.can_manage_project_settings() as allowed'),
+      );
+      assert.equal(viewerCapability.rows[0].allowed, false);
+      for (const [table, idColumn, id] of [
+        ['fiscal_years', 'id', fiscalYearIds[0]],
+        ['fiscal_months', 'fiscal_year_id', fiscalYearIds[0]],
+        ['opening_balances', 'id', openingBalanceId],
+      ]) {
+        const hidden = await asRole('authenticated', V, (c) =>
+          c.query(`select * from public.${table} where ${idColumn}=$1`, [id]),
+        );
+        assert.equal(hidden.rowCount, 0, `viewer must not read public.${table}`);
+      }
+
+      const viewerYearUpdate = await asRole('authenticated', V, (c) =>
+        c.query('update public.fiscal_years set is_closed=true where id=$1 returning id', [
+          fiscalYearIds[0],
+        ]),
+      );
+      assert.equal(viewerYearUpdate.rowCount, 0);
+      const viewerMonthUpdate = await asRole('authenticated', V, (c) =>
+        c.query(
+          'update public.fiscal_months set current_period=2 where fiscal_year_id=$1 and month_number=1 returning id',
+          [fiscalYearIds[0]],
+        ),
+      );
+      assert.equal(viewerMonthUpdate.rowCount, 0);
+      const viewerBalanceUpdate = await asRole('authenticated', V, (c) =>
+        c.query('update public.opening_balances set amount=999 where id=$1 returning id', [
+          openingBalanceId,
+        ]),
+      );
+      assert.equal(viewerBalanceUpdate.rowCount, 0);
+      await expectDenied(() =>
+        asRole('authenticated', V, (c) =>
+          c.query(
+            `insert into public.fiscal_years(id,name,start_date,end_date)
+               values ($1,'viewer attempt','2031-07-01','2032-06-30')`,
+            [randomUUID()],
+          ),
+        ),
+      );
+      await expectDenied(() =>
+        asRole('authenticated', V, (c) =>
+          c.query(
+            `insert into public.opening_balances
+                 (fiscal_year_id,warehouse_id,classification_id,amount)
+               values ($1,$2,$3,1.00)`,
+            [fiscalYearIds[2], warehouseId, classificationId],
+          ),
+        ),
+      );
+    } finally {
+      await db.query('delete from public.opening_balances where fiscal_year_id=any($1::uuid[])', [
+        fiscalYearIds,
+      ]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [fiscalYearIds]);
+      await db.query('delete from public.warehouses where id=$1', [warehouseId]);
+      await db.query('delete from public.stations where id=$1', [stationId]);
+      await db.query('delete from public.classifications where id=$1', [classificationId]);
+    }
   });
   await test('classifications: derived level and is_leaf at any depth, sequence codes, subtree moves', async () => {
     const columns = await db.query(
