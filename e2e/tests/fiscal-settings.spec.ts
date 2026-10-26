@@ -141,6 +141,19 @@ test('owner creates a fiscal year, changes its period, saves opening balances an
   const steelBalance = main.getByRole('spinbutton', {
     name: /Opening balance: .*حديد وصلب/,
   });
+  await expect(steelBalance).toBeVisible();
+  await expect(
+    main.getByRole('spinbutton', { name: /Opening balance: .*أخشاب/ }),
+    'Active leaf classifications should remain available in a flat list.',
+  ).toBeVisible();
+  await expect(
+    main.getByRole('spinbutton', { name: /Opening balance: .*المواد الخام/ }),
+    'A parent classification must not have an opening-balance input.',
+  ).toHaveCount(0);
+  await expect(
+    main.getByRole('spinbutton', { name: /Opening balance: .*بلاستيك ومطاط/ }),
+    'An inactive leaf classification must not have an opening-balance input.',
+  ).toHaveCount(0);
   await steelBalance.fill('125.50');
   await main.getByRole('button', { name: 'Save balances for مخزن المواد الخام' }).click();
   await expect(

@@ -723,8 +723,6 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.openingBalances.loading': 'Loading stations, warehouses, and balances…',
   'settings.project.fiscal.openingBalances.heading': 'Opening balances',
   'settings.project.fiscal.openingBalances.activeYear': 'Active year: {name}',
-  'settings.project.fiscal.openingBalances.totalHint':
-    'Totals add the entered balances. Enter an amount at one level of a classification branch to avoid counting it twice.',
   'settings.project.fiscal.openingBalances.toggleStation': 'Show warehouses for {name}',
   'settings.project.fiscal.openingBalances.stationTotal': 'Station total',
   'settings.project.fiscal.openingBalances.toggleWarehouse': 'Show classifications for {name}',
@@ -732,7 +730,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.openingBalances.saveWarehouse': 'Save balances for {name}',
   'settings.project.fiscal.openingBalances.save': 'Save balances',
   'settings.project.fiscal.openingBalances.saving': 'Saving…',
-  'settings.project.fiscal.openingBalances.amountLabel': 'Opening balance: {path}',
+  'settings.project.fiscal.openingBalances.amountLabel': 'Opening balance: {classification}',
   'settings.project.fiscal.openingBalances.noClassifications':
     'No classifications are available for balance entry.',
   'settings.project.fiscal.openingBalances.noWarehouses': 'This station has no warehouses.',

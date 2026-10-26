@@ -3,11 +3,15 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ACTIVE_LEAF_CLASSIFICATIONS_QUERY_KEY,
+  ACTIVE_LEAF_CLASSIFICATIONS_SELECT,
   CLASSIFICATIONS_QUERY_KEY,
   CLASSIFICATIONS_SELECT,
   ClassificationsError,
   classifyClassificationsError,
+  parseActiveLeafClassifications,
   parseClassifications,
+  useActiveLeafClassifications,
   useClassifications,
 } from '@/hooks/useClassifications';
 import type { ClassificationNode } from '@/hooks/useClassifications';
@@ -22,6 +26,7 @@ const { mock, calls } = vi.hoisted(() => {
     calls: {
       table: undefined as string | undefined,
       select: undefined as string | undefined,
+      filters: [] as Array<readonly [string, unknown]>,
       orders: [] as string[],
     },
   };
@@ -29,10 +34,11 @@ const { mock, calls } = vi.hoisted(() => {
 
 vi.mock('@/lib/supabase', () => ({ getSupabase: () => mock.client }));
 
-/** Minimal thenable PostgREST builder: `.select(...).order(...)`. */
+/** Minimal thenable PostgREST builder: `.select(...).eq(...).order(...)`. */
 function configureClient() {
   calls.table = undefined;
   calls.select = undefined;
+  calls.filters = [];
   calls.orders = [];
 
   mock.client = {
@@ -42,6 +48,10 @@ function configureClient() {
         select: (projection: string) => {
           calls.select = projection;
           const builder = {
+            eq: (column: string, value: unknown) => {
+              calls.filters.push([column, value]);
+              return builder;
+            },
             order: (column: string) => {
               calls.orders.push(column);
               return builder;
@@ -69,6 +79,16 @@ function mountHook() {
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
   return renderHook(() => useClassifications(), { wrapper: Wrapper });
+}
+
+function mountActiveLeafHook(enabled = true) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
+  });
+  const Wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return renderHook(() => useActiveLeafClassifications({ enabled }), { wrapper: Wrapper });
 }
 
 beforeEach(() => {
@@ -211,6 +231,34 @@ describe('parseClassifications', () => {
   });
 });
 
+describe('parseActiveLeafClassifications', () => {
+  it('returns a flat, ordered list of active leaves only', () => {
+    const parsed = parseActiveLeafClassifications([
+      { id: 'parent', code: 'CLS-001', name: 'وقود', is_leaf: false, is_active: true },
+      { id: 'inactive', code: 'CLS-003', name: 'بلاستيك', is_leaf: true, is_active: false },
+      { id: 'leaf-b', code: 'CLS-012', name: 'أخشاب', is_leaf: true, is_active: true },
+      { id: 'leaf-a', code: 'CLS-006', name: 'حديد وصلب', is_leaf: true, is_active: true },
+      {
+        id: 'invalid-flag',
+        code: 'CLS-004',
+        name: 'تصنيف غير موثوق',
+        is_leaf: 'true',
+        is_active: true,
+      },
+    ]);
+
+    expect(parsed).toEqual([
+      { id: 'leaf-a', code: 'CLS-006', name: 'حديد وصلب' },
+      { id: 'leaf-b', code: 'CLS-012', name: 'أخشاب' },
+    ]);
+  });
+
+  it('returns an empty list for a non-array payload', () => {
+    expect(parseActiveLeafClassifications(null)).toEqual([]);
+    expect(parseActiveLeafClassifications({ id: 'leaf' })).toEqual([]);
+  });
+});
+
 describe('classifyClassificationsError', () => {
   it('maps RLS and JWT rejections to forbidden', () => {
     expect(classifyClassificationsError({ code: '42501', message: 'permission denied' })).toBe(
@@ -242,11 +290,15 @@ describe('classifyClassificationsError', () => {
   });
 });
 
-describe('CLASSIFICATIONS_SELECT', () => {
+describe('classification projections', () => {
   it('projects exactly what the tree needs and never asks for a level', () => {
     /* `level` is derived from parent_id on both sides; selecting it would give
        the UI a second, possibly stale, source of truth. `code` is read-only. */
     expect(CLASSIFICATIONS_SELECT).toBe('id, parent_id, code, name, is_leaf, is_active');
+  });
+
+  it('selects only the fields needed for flat active-leaf balance rows', () => {
+    expect(ACTIVE_LEAF_CLASSIFICATIONS_SELECT).toBe('id, code, name, is_leaf, is_active');
   });
 });
 
@@ -307,5 +359,40 @@ describe('useClassifications', () => {
     const { result } = mountHook();
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(CLASSIFICATIONS_QUERY_KEY).toEqual(['project-settings', 'classifications']);
+  });
+});
+
+describe('useActiveLeafClassifications', () => {
+  it('queries and returns only rows that are both active and leaves', async () => {
+    respondWith([
+      { id: 'parent', code: 'CLS-001', name: 'وقود', is_leaf: false, is_active: true },
+      { id: 'inactive', code: 'CLS-003', name: 'بلاستيك', is_leaf: true, is_active: false },
+      { id: 'leaf', code: 'CLS-002', name: 'سولار', is_leaf: true, is_active: true },
+    ]);
+
+    const { result } = mountActiveLeafHook();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(calls.table).toBe('classifications');
+    expect(calls.select).toBe(ACTIVE_LEAF_CLASSIFICATIONS_SELECT);
+    expect(calls.filters).toEqual([
+      ['is_leaf', true],
+      ['is_active', true],
+    ]);
+    expect(calls.orders).toEqual(['code']);
+    expect(result.current.data).toEqual([{ id: 'leaf', code: 'CLS-002', name: 'سولار' }]);
+    expect(ACTIVE_LEAF_CLASSIFICATIONS_QUERY_KEY).toEqual([
+      'project-settings',
+      'classifications',
+      'active-leaves',
+    ]);
+  });
+
+  it('does not query while disabled', async () => {
+    mountActiveLeafHook(false);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.table).toBeUndefined();
   });
 });

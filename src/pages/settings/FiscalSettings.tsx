@@ -37,8 +37,11 @@ export default function FiscalSettings() {
   const activeConfig = TABS.find((tab) => tab.id === activeTab) ?? TABS[0]!;
 
   return (
-    <section aria-labelledby="fiscal-settings-heading" className="space-y-5">
-      <header className="space-y-1">
+    <section
+      aria-labelledby="fiscal-settings-heading"
+      className="w-full max-w-full min-w-0 space-y-5"
+    >
+      <header className="min-w-0 space-y-1">
         <h2 id="fiscal-settings-heading" className="text-foreground text-lg font-semibold">
           {t('settings.project.fiscal.heading')}
         </h2>
@@ -47,11 +50,11 @@ export default function FiscalSettings() {
         </p>
       </header>
 
-      <div className="space-y-5">
+      <div className="w-full max-w-full min-w-0 space-y-5">
         <div
           role="tablist"
           aria-label={t('settings.project.fiscal.tablist')}
-          className="border-border flex overflow-x-auto border-b"
+          className="border-border flex max-w-full min-w-0 flex-wrap gap-x-1 border-b"
         >
           {TABS.map(({ id, labelKey, Icon }) => {
             const selected = activeTab === id;
@@ -66,7 +69,7 @@ export default function FiscalSettings() {
                 tabIndex={selected ? 0 : -1}
                 onClick={() => setActiveTab(id)}
                 className={[
-                  'relative inline-flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors',
+                  'relative inline-flex max-w-full min-w-0 items-center gap-2 border-b-2 px-3 py-3 text-start text-sm font-medium transition-colors sm:px-4',
                   'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
                   selected
                     ? 'border-primary text-foreground'
@@ -84,7 +87,7 @@ export default function FiscalSettings() {
           role="tabpanel"
           id={`fiscal-settings-tabpanel-${activeConfig.id}`}
           aria-labelledby={`fiscal-settings-tab-${activeConfig.id}`}
-          className="min-w-0"
+          className="w-full max-w-full min-w-0"
         >
           {activeTab === 'annual' ? (
             <AnnualFiscalSettings />

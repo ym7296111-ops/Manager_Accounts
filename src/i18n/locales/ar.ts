@@ -699,8 +699,6 @@ export const ar = {
   'settings.project.fiscal.openingBalances.loading': 'جارٍ تحميل المحطات والمخازن والأرصدة…',
   'settings.project.fiscal.openingBalances.heading': 'أرصدة أول المدة',
   'settings.project.fiscal.openingBalances.activeYear': 'السنة النشطة: {name}',
-  'settings.project.fiscal.openingBalances.totalHint':
-    'المجاميع تحتسب القيم المدخلة. أدخل الرصيد على مستوى واحد من التصنيف لتجنب تكراره.',
   'settings.project.fiscal.openingBalances.toggleStation': 'عرض مخازن محطة {name}',
   'settings.project.fiscal.openingBalances.stationTotal': 'إجمالي المحطة',
   'settings.project.fiscal.openingBalances.toggleWarehouse': 'عرض تصنيفات مخزن {name}',
@@ -708,7 +706,7 @@ export const ar = {
   'settings.project.fiscal.openingBalances.saveWarehouse': 'حفظ أرصدة مخزن {name}',
   'settings.project.fiscal.openingBalances.save': 'حفظ الأرصدة',
   'settings.project.fiscal.openingBalances.saving': 'جارٍ الحفظ…',
-  'settings.project.fiscal.openingBalances.amountLabel': 'رصيد أول المدة: {path}',
+  'settings.project.fiscal.openingBalances.amountLabel': 'رصيد أول المدة: {classification}',
   'settings.project.fiscal.openingBalances.noClassifications': 'لا توجد تصنيفات لإدخال الأرصدة.',
   'settings.project.fiscal.openingBalances.noWarehouses': 'لا توجد مخازن في هذه المحطة.',
   'settings.project.fiscal.openingBalances.noStations.title': 'لا توجد محطات',

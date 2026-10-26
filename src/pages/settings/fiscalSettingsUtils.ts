@@ -1,24 +1,4 @@
-import type { ClassificationNode } from '@/hooks/useClassifications';
 import type { Locale } from '@/i18n/I18nContext';
-
-export interface FlatClassification {
-  readonly node: ClassificationNode;
-  readonly depth: number;
-  readonly path: readonly string[];
-}
-
-export function flattenClassifications(
-  nodes: readonly ClassificationNode[],
-  ancestors: readonly string[] = [],
-): readonly FlatClassification[] {
-  return nodes.flatMap((node) => {
-    const path = [...ancestors, node.name];
-    return [
-      { node, depth: ancestors.length, path },
-      ...flattenClassifications(node.children, path),
-    ];
-  });
-}
 
 export function deriveFiscalYearName(startDate: string, endDate: string): string {
   return `${startDate.slice(0, 4)}-${endDate.slice(0, 4)}`;

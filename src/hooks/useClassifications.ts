@@ -52,12 +52,26 @@ export class ClassificationsError extends Error {
 }
 
 export const CLASSIFICATIONS_QUERY_KEY = ['project-settings', 'classifications'] as const;
+export const ACTIVE_LEAF_CLASSIFICATIONS_QUERY_KEY = [
+  ...CLASSIFICATIONS_QUERY_KEY,
+  'active-leaves',
+] as const;
+
+/** A flat classification row eligible for an opening-balance input. */
+export interface ActiveLeafClassification {
+  readonly id: string;
+  readonly code: string;
+  readonly name: string;
+}
+
+/** The columns needed to verify and render eligible balance classifications. */
+export const ACTIVE_LEAF_CLASSIFICATIONS_SELECT = 'id, code, name, is_leaf, is_active';
 
 /**
  * The columns the tree renders — and nothing else. `level` is intentionally
  * absent: it is derived client-side from `parent_id`, so the read cannot go
- * stale against the trigger, and `is_leaf` is only used to keep the flag
- * coherent for the future letter-creation screen.
+ * stale against the trigger. The flags are retained for the classification
+ * screen's leaf and activity actions.
  */
 export const CLASSIFICATIONS_SELECT = 'id, parent_id, code, name, is_leaf, is_active';
 
@@ -185,6 +199,33 @@ export function parseClassifications(raw: unknown): readonly ClassificationNode[
   return roots.sort(byCode).map(finalize);
 }
 
+/**
+ * Parse the explicitly filtered opening-balance response into a flat list.
+ * Re-checking both server-owned flags protects the editor if a stale or
+ * unexpected response slips through; no parent rows are exposed to the UI.
+ */
+export function parseActiveLeafClassifications(raw: unknown): readonly ActiveLeafClassification[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const byId = new Map<string, ActiveLeafClassification>();
+  for (const row of raw) {
+    if (!isRecord(row) || row.is_leaf !== true || row.is_active !== true) {
+      continue;
+    }
+    const id = readString(row.id);
+    const code = readString(row.code);
+    const name = readString(row.name);
+    if (id === null || code === null || name === null || byId.has(id)) {
+      continue;
+    }
+    byId.set(id, { id, code, name });
+  }
+
+  return [...byId.values()].sort(byCode);
+}
+
 export function classifyClassificationsError(error: unknown): ClassificationsErrorCode {
   if (error instanceof ClassificationsError) {
     return error.code;
@@ -214,6 +255,39 @@ export function useClassifications(options?: { readonly enabled?: boolean }) {
       }
 
       return parseClassifications(data);
+    },
+  });
+}
+
+/**
+ * The opening-balance editor has no use for a classification tree: query only
+ * active leaves at the database and expose a flat list, excluding parent and
+ * inactive rows before any balance inputs are rendered.
+ */
+export function useActiveLeafClassifications(options?: { readonly enabled?: boolean }) {
+  const enabled = options?.enabled ?? true;
+
+  return useQuery({
+    queryKey: ACTIVE_LEAF_CLASSIFICATIONS_QUERY_KEY,
+    enabled,
+    queryFn: async (): Promise<readonly ActiveLeafClassification[]> => {
+      const supabase = getSupabase();
+      if (supabase === null) {
+        throw new ClassificationsError('unavailable');
+      }
+
+      const { data, error } = await supabase
+        .from('classifications')
+        .select(ACTIVE_LEAF_CLASSIFICATIONS_SELECT)
+        .eq('is_leaf', true)
+        .eq('is_active', true)
+        .order('code', { ascending: true });
+
+      if (error !== null && error !== undefined) {
+        throw new ClassificationsError(classifyClassificationsError(error));
+      }
+
+      return parseActiveLeafClassifications(data);
     },
   });
 }

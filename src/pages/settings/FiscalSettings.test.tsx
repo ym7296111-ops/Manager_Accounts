@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as ClassificationsModule from '@/hooks/useClassifications';
 import type * as FiscalHooksModule from '@/hooks/useFiscalSettings';
 import type * as StationsModule from '@/hooks/useStationsDirectory';
-import type { ClassificationNode } from '@/hooks/useClassifications';
+import type { ActiveLeafClassification } from '@/hooks/useClassifications';
 import type {
   FiscalMonth,
   FiscalYear,
@@ -20,7 +20,7 @@ interface TestState {
   months: FiscalMonth[];
   balances: OpeningBalance[];
   stations: StationWithWarehouses[];
-  classifications: ClassificationNode[];
+  classifications: ActiveLeafClassification[];
   createYear: ReturnType<typeof vi.fn>;
   activateYear: ReturnType<typeof vi.fn>;
   updatePeriod: ReturnType<typeof vi.fn>;
@@ -95,7 +95,7 @@ vi.mock('@/hooks/useClassifications', async (importOriginal) => {
   const actual = await importOriginal<typeof ClassificationsModule>();
   return {
     ...actual,
-    useClassifications: () => ({
+    useActiveLeafClassifications: () => ({
       data: fiscalState.classifications,
       isLoading: false,
       isError: false,
@@ -245,7 +245,11 @@ describe('FiscalSettings', () => {
     });
     expect(screen.queryByRole('dialog')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'تفعيل السنة المالية 2035-2036' }));
+    fireEvent.click(
+      within(screen.getByRole('table')).getByRole('button', {
+        name: 'تفعيل السنة المالية 2035-2036',
+      }),
+    );
     await waitFor(() => expect(fiscalState.activateYear).toHaveBeenCalledWith('fy-2035'));
 
     await waitFor(() => expect(screen.getAllByTestId('fiscal-month-row')).toHaveLength(12));
@@ -296,15 +300,12 @@ describe('FiscalSettings', () => {
         id: 'classification-steel',
         code: 'CLS-001',
         name: 'حديد وصلب',
-        level: 1,
-        isLeaf: true,
-        isActive: true,
-        children: [],
       },
     ];
     renderFiscalSettings();
 
     fireEvent.click(screen.getByRole('tab', { name: 'أرصدة أول المدة' }));
+    expect(screen.queryByText(/تجنب تكراره/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'عرض مخازن محطة المحطة الرئيسية' }));
     fireEvent.click(screen.getByRole('button', { name: 'عرض تصنيفات مخزن مخزن المواد الخام' }));
 

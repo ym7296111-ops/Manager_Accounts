@@ -155,8 +155,8 @@ export default function DashboardLayout() {
           dashboardOnly={dashboardOnly}
         />
 
-        <main className="flex-1 px-4 py-6 md:px-6 md:py-8">
-          <div className="mx-auto w-full max-w-7xl">
+        <main className="w-full max-w-full min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
+          <div className="mx-auto w-full max-w-7xl min-w-0">
             <Outlet />
           </div>
         </main>

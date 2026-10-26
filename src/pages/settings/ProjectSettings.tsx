@@ -69,22 +69,22 @@ export default function ProjectSettings() {
 
   return (
     <RequireCapability requirement={PROJECT_SETTINGS_CAPABILITY}>
-      <div className="space-y-6">
-        <header className="space-y-3">
+      <div className="w-full max-w-full min-w-0 space-y-6">
+        <header className="min-w-0 space-y-3">
           <nav
             aria-label="Breadcrumb"
-            className="text-muted-foreground flex items-center gap-1.5 text-xs"
+            className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-1.5 text-xs"
           >
             <span>{t('nav.settings')}</span>
             <span aria-hidden="true">/</span>
             <span className="text-foreground font-medium">{t('nav.projectSettings')}</span>
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="bg-primary/10 text-primary grid size-10 place-items-center rounded-xl">
               <Settings2 className="size-5" aria-hidden="true" />
             </span>
-            <div>
+            <div className="min-w-0">
               <h1 className="text-foreground text-xl font-bold tracking-tight">
                 {t('nav.projectSettings')}
               </h1>
@@ -95,11 +95,11 @@ export default function ProjectSettings() {
 
         {/* Tabs — standard pattern, directly under the header. Only the active
             panel is mounted, so only it fetches data. */}
-        <div className="space-y-4">
+        <div className="w-full max-w-full min-w-0 space-y-4">
           <div
             role="tablist"
             aria-label={t('nav.projectSettings')}
-            className="border-border flex overflow-x-auto border-b"
+            className="border-border flex max-w-full min-w-0 flex-wrap gap-x-1 border-b"
           >
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id;
@@ -114,7 +114,7 @@ export default function ProjectSettings() {
                   tabIndex={isActive ? 0 : -1}
                   onClick={() => setActiveTab(tab.id)}
                   className={[
-                    'relative shrink-0 border-b-2 px-4 py-3 text-sm font-medium whitespace-nowrap transition-colors',
+                    'relative inline-flex max-w-full min-w-0 border-b-2 px-3 py-3 text-start text-sm font-medium transition-colors sm:px-4',
                     'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
                     isActive
                       ? 'border-primary text-foreground'
@@ -131,7 +131,7 @@ export default function ProjectSettings() {
             role="tabpanel"
             id={`project-settings-tabpanel-${activeConfig.id}`}
             aria-labelledby={`project-settings-tab-${activeConfig.id}`}
-            className="bg-card border-border rounded-2xl border p-6 shadow-sm"
+            className="bg-card border-border w-full max-w-full min-w-0 overflow-hidden rounded-2xl border p-4 shadow-sm sm:p-6"
           >
             {activeConfig.id === 'stations' ? (
               <StationsWarehouses />

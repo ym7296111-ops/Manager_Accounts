@@ -152,15 +152,15 @@ export default function FiscalPeriodsSettings() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="w-full max-w-full min-w-0 space-y-4">
       {banner !== null ? (
         <FiscalBanner tone={banner.tone} onDismiss={() => setBanner(null)}>
           {t(banner.key)}
         </FiscalBanner>
       ) : null}
 
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
           <h3 className="text-foreground font-semibold">
             {t('settings.project.fiscal.periods.heading')}
           </h3>
@@ -175,10 +175,10 @@ export default function FiscalPeriodsSettings() {
         ) : null}
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.2fr)]">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.2fr)]">
         <nav
           aria-label={t('settings.project.fiscal.periods.monthList')}
-          className="grid content-start gap-2 sm:grid-cols-2 lg:grid-cols-1"
+          className="grid min-w-0 content-start gap-2 sm:grid-cols-2 lg:grid-cols-1"
         >
           {months.map((month) => {
             const selected = month.id === selectedMonth.id;

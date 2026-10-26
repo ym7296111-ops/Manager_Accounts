@@ -11,7 +11,11 @@ import {
   type OpeningBalance,
   type OpeningBalanceWrite,
 } from '@/hooks/useFiscalSettings';
-import { classifyClassificationsError, useClassifications } from '@/hooks/useClassifications';
+import {
+  classifyClassificationsError,
+  useActiveLeafClassifications,
+} from '@/hooks/useClassifications';
+import type { ActiveLeafClassification } from '@/hooks/useClassifications';
 import {
   classifyStationsError,
   useStationsDirectory,
@@ -20,12 +24,7 @@ import {
 } from '@/hooks/useStationsDirectory';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import { FiscalBanner, FiscalLoading } from './FiscalSettingsFeedback';
-import {
-  amountToCents,
-  flattenClassifications,
-  formatCents,
-  normalizeAmountText,
-} from './fiscalSettingsUtils';
+import { amountToCents, formatCents, normalizeAmountText } from './fiscalSettingsUtils';
 
 const READ_ERROR_KEYS: Record<
   ReturnType<typeof classifyFiscalSettingsReadError>,
@@ -120,13 +119,13 @@ function amountForTotal(
 function warehouseTotal(
   fiscalYearId: string,
   warehouse: StationWarehouse,
-  classifications: ReturnType<typeof flattenClassifications>,
+  classifications: readonly ActiveLeafClassification[],
   drafts: Readonly<Record<string, string>>,
   balancesByKey: ReadonlyMap<string, OpeningBalance>,
 ): bigint {
   return classifications.reduce(
-    (total, entry) =>
-      total + amountForTotal(fiscalYearId, warehouse.id, entry.node.id, drafts, balancesByKey),
+    (total, classification) =>
+      total + amountForTotal(fiscalYearId, warehouse.id, classification.id, drafts, balancesByKey),
     0n,
   );
 }
@@ -134,7 +133,7 @@ function warehouseTotal(
 function stationTotal(
   fiscalYearId: string,
   station: StationWithWarehouses,
-  classifications: ReturnType<typeof flattenClassifications>,
+  classifications: readonly ActiveLeafClassification[],
   drafts: Readonly<Record<string, string>>,
   balancesByKey: ReadonlyMap<string, OpeningBalance>,
 ): bigint {
@@ -150,7 +149,7 @@ export default function OpeningBalancesSettings() {
   const yearsQuery = useFiscalYears();
   const activeYear = yearsQuery.data?.find((year) => year.is_active) ?? null;
   const stationsQuery = useStationsDirectory({ enabled: activeYear !== null });
-  const classificationsQuery = useClassifications({ enabled: activeYear !== null });
+  const classificationsQuery = useActiveLeafClassifications({ enabled: activeYear !== null });
   const balancesQuery = useOpeningBalances(activeYear?.id ?? null);
   const saveBalances = useSaveOpeningBalances();
   const [expandedStations, setExpandedStations] = useState<ReadonlySet<string>>(() => new Set());
@@ -162,11 +161,7 @@ export default function OpeningBalancesSettings() {
     readonly tone: 'error' | 'success';
     readonly key: TranslationKey;
   } | null>(null);
-
-  const flatClassifications = useMemo(
-    () => flattenClassifications(classificationsQuery.data ?? []),
-    [classificationsQuery.data],
-  );
+  const activeLeafClassifications = classificationsQuery.data ?? [];
   const balancesByKey = useMemo(() => {
     const result = new Map<string, OpeningBalance>();
     for (const balance of balancesQuery.data ?? []) {
@@ -264,15 +259,20 @@ export default function OpeningBalancesSettings() {
   };
 
   const handleSaveWarehouse = async (warehouse: StationWarehouse) => {
-    const changedClassifications = flatClassifications.filter((entry) =>
-      hasChanged(activeYear.id, warehouse.id, entry.node.id, drafts, balancesByKey),
+    const changedClassifications = activeLeafClassifications.filter((classification) =>
+      hasChanged(activeYear.id, warehouse.id, classification.id, drafts, balancesByKey),
     );
     const rows: OpeningBalanceWrite[] = [];
 
-    for (const entry of changedClassifications) {
-      const key = balanceKey(activeYear.id, warehouse.id, entry.node.id);
+    for (const classification of changedClassifications) {
+      const key = balanceKey(activeYear.id, warehouse.id, classification.id);
       const raw = drafts[key] ?? '';
-      const existing = originalBalance(balancesByKey, activeYear.id, warehouse.id, entry.node.id);
+      const existing = originalBalance(
+        balancesByKey,
+        activeYear.id,
+        warehouse.id,
+        classification.id,
+      );
       if (raw.trim() === '' && existing === undefined) {
         continue;
       }
@@ -284,7 +284,7 @@ export default function OpeningBalancesSettings() {
       rows.push({
         fiscal_year_id: activeYear.id,
         warehouse_id: warehouse.id,
-        classification_id: entry.node.id,
+        classification_id: classification.id,
         amount: normalized,
       });
     }
@@ -313,24 +313,21 @@ export default function OpeningBalancesSettings() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="w-full max-w-full min-w-0 space-y-4">
       {banner !== null ? (
         <FiscalBanner tone={banner.tone} onDismiss={() => setBanner(null)}>
           {t(banner.key)}
         </FiscalBanner>
       ) : null}
 
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
           <h3 className="text-foreground font-semibold">
             {t('settings.project.fiscal.openingBalances.heading')}
           </h3>
           <p className="text-muted-foreground text-sm">
             {t('settings.project.fiscal.openingBalances.activeYear', { name: activeYear.name })}
           </p>
-        </div>
-        <div className="bg-muted/30 text-muted-foreground rounded-lg px-3 py-2 text-xs leading-relaxed">
-          {t('settings.project.fiscal.openingBalances.totalHint')}
         </div>
       </header>
 
@@ -343,7 +340,7 @@ export default function OpeningBalancesSettings() {
             const total = stationTotal(
               activeYear.id,
               station,
-              flatClassifications,
+              activeLeafClassifications,
               drafts,
               balancesByKey,
             );
@@ -351,7 +348,7 @@ export default function OpeningBalancesSettings() {
             return (
               <section
                 key={station.id}
-                className="bg-card border-border overflow-hidden rounded-2xl border"
+                className="bg-card border-border w-full max-w-full min-w-0 overflow-hidden rounded-2xl border"
               >
                 <button
                   type="button"
@@ -362,9 +359,9 @@ export default function OpeningBalancesSettings() {
                     name: station.name,
                   })}
                   onClick={() => toggleStation(station.id)}
-                  className="hover:bg-muted/25 flex w-full items-center justify-between gap-4 px-4 py-4 text-start transition-colors"
+                  className="hover:bg-muted/25 flex w-full min-w-0 flex-wrap items-start justify-between gap-3 px-3 py-3 text-start transition-colors sm:gap-4 sm:px-4 sm:py-4"
                 >
-                  <span className="flex min-w-0 items-center gap-3">
+                  <span className="flex min-w-0 flex-1 items-center gap-3">
                     {stationOpen ? (
                       <ChevronDown
                         className="text-muted-foreground size-4 shrink-0"
@@ -377,13 +374,13 @@ export default function OpeningBalancesSettings() {
                       />
                     )}
                     <span className="min-w-0">
-                      <span className="text-foreground block truncate font-semibold">
+                      <span className="text-foreground block font-semibold break-words">
                         {station.name}
                       </span>
                       <span className="text-muted-foreground block text-xs">{station.code}</span>
                     </span>
                   </span>
-                  <span className="text-end">
+                  <span className="shrink-0 text-end">
                     <span className="text-muted-foreground block text-xs">
                       {t('settings.project.fiscal.openingBalances.stationTotal')}
                     </span>
@@ -410,31 +407,32 @@ export default function OpeningBalancesSettings() {
                         const warehouseBalanceTotal = warehouseTotal(
                           activeYear.id,
                           warehouse,
-                          flatClassifications,
+                          activeLeafClassifications,
                           drafts,
                           balancesByKey,
                         );
-                        const changedRows = flatClassifications.filter((entry) =>
+                        const changedRows = activeLeafClassifications.filter((classification) =>
                           hasChanged(
                             activeYear.id,
                             warehouse.id,
-                            entry.node.id,
+                            classification.id,
                             drafts,
                             balancesByKey,
                           ),
                         );
-                        const invalidDraft = changedRows.some((entry) => {
+                        const invalidDraft = changedRows.some((classification) => {
                           const raw =
-                            drafts[balanceKey(activeYear.id, warehouse.id, entry.node.id)] ?? '';
+                            drafts[balanceKey(activeYear.id, warehouse.id, classification.id)] ??
+                            '';
                           return raw.trim() !== '' && normalizeAmountText(raw) === null;
                         });
 
                         return (
                           <section
                             key={warehouse.id}
-                            className="bg-background border-border rounded-xl border"
+                            className="bg-background border-border w-full max-w-full min-w-0 rounded-xl border"
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 sm:p-3">
+                            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 p-2.5 sm:p-3">
                               <button
                                 type="button"
                                 id={warehouseToggleId}
@@ -447,9 +445,9 @@ export default function OpeningBalancesSettings() {
                                   },
                                 )}
                                 onClick={() => toggleWarehouse(warehouseKey)}
-                                className="focus-visible:ring-ring flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg px-1.5 py-1 text-start focus-visible:ring-2 focus-visible:outline-none"
+                                className="focus-visible:ring-ring flex max-w-full min-w-0 flex-1 basis-full items-center justify-between gap-3 rounded-lg px-1.5 py-1 text-start focus-visible:ring-2 focus-visible:outline-none sm:basis-auto"
                               >
-                                <span className="flex min-w-0 items-center gap-2.5">
+                                <span className="flex min-w-0 flex-1 items-center gap-2.5">
                                   {warehouseOpen ? (
                                     <ChevronDown
                                       className="text-muted-foreground size-4 shrink-0"
@@ -462,7 +460,7 @@ export default function OpeningBalancesSettings() {
                                     />
                                   )}
                                   <span className="min-w-0">
-                                    <span className="text-foreground block truncate text-sm font-semibold">
+                                    <span className="text-foreground block text-sm font-semibold break-words">
                                       {warehouse.name}
                                     </span>
                                     <span className="text-muted-foreground block text-xs">
@@ -505,15 +503,19 @@ export default function OpeningBalancesSettings() {
                               hidden={!warehouseOpen}
                               className="border-border border-t px-3 py-3 sm:px-4"
                             >
-                              {flatClassifications.length > 0 ? (
+                              {activeLeafClassifications.length > 0 ? (
                                 <div className="space-y-2">
-                                  {flatClassifications.map(({ node, depth, path }) => {
-                                    const key = balanceKey(activeYear.id, warehouse.id, node.id);
+                                  {activeLeafClassifications.map((classification) => {
+                                    const key = balanceKey(
+                                      activeYear.id,
+                                      warehouse.id,
+                                      classification.id,
+                                    );
                                     const existing = originalBalance(
                                       balancesByKey,
                                       activeYear.id,
                                       warehouse.id,
-                                      node.id,
+                                      classification.id,
                                     );
                                     const inputValue =
                                       drafts[key] ??
@@ -526,25 +528,22 @@ export default function OpeningBalancesSettings() {
 
                                     return (
                                       <div
-                                        key={node.id}
+                                        key={classification.id}
                                         className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b py-2 last:border-b-0"
-                                        style={{ paddingInlineStart: `${depth * 1.25}rem` }}
                                       >
-                                        <div className="min-w-44 flex-1">
+                                        <div className="min-w-0 flex-1 basis-40">
                                           <p className="text-foreground text-sm font-medium">
-                                            {node.name}
+                                            {classification.name}
                                           </p>
                                           <p className="text-muted-foreground text-xs">
-                                            {node.code}
+                                            {classification.code}
                                           </p>
                                         </div>
-                                        <label className="w-full max-w-56">
+                                        <label className="w-full max-w-56 min-w-0">
                                           <span className="sr-only">
                                             {t(
                                               'settings.project.fiscal.openingBalances.amountLabel',
-                                              {
-                                                path: path.join(' / '),
-                                              },
+                                              { classification: classification.name },
                                             )}
                                           </span>
                                           <input
@@ -556,7 +555,7 @@ export default function OpeningBalancesSettings() {
                                             value={inputValue}
                                             aria-label={t(
                                               'settings.project.fiscal.openingBalances.amountLabel',
-                                              { path: path.join(' / ') },
+                                              { classification: classification.name },
                                             )}
                                             aria-invalid={isInvalid}
                                             onChange={(event) =>
