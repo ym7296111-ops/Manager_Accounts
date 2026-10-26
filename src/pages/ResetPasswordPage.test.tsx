@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@/context/ThemeContext';
@@ -72,8 +72,11 @@ describe('ResetPasswordPage', () => {
     expect(screen.queryByLabelText('كلمة المرور الجديدة')).toBeNull();
   });
 
-  it('offers the new-password form once the recovery session is visible', async () => {
+  it('keeps the new-password form available after the recovery grace period', async () => {
     await renderWithSession();
+    await act(async () => {
+      await new Promise<void>((resolve) => window.setTimeout(() => resolve(), 75));
+    });
 
     expect(screen.getByRole('heading', { level: 1, name: 'إعادة تعيين كلمة المرور' })).toBeTruthy();
     expect(screen.getByLabelText('كلمة المرور الجديدة')).toBeTruthy();

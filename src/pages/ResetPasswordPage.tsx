@@ -66,35 +66,50 @@ export default function ResetPasswordPage({
     }
 
     let cancelled = false;
+    let recoverySessionFound = false;
+    let timer: number | null = null;
+
+    const markRecoveryReady = () => {
+      if (cancelled || recoverySessionFound) {
+        return;
+      }
+      recoverySessionFound = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      setRecovery('ready');
+    };
+
+    timer = window.setTimeout(() => {
+      timer = null;
+      if (!cancelled && !recoverySessionFound) {
+        setRecovery('invalid');
+      }
+    }, graceMs);
+
     const {
       data: { subscription },
     } = client.auth.onAuthStateChange((event, nextSession) => {
-      if (cancelled) {
-        return;
-      }
       if (event === 'PASSWORD_RECOVERY' || (nextSession !== null && event === 'SIGNED_IN')) {
-        setRecovery('ready');
+        markRecoveryReady();
       }
     });
 
     void client.auth
       .getSession()
       .then(({ data }) => {
-        if (!cancelled && data.session !== null) {
-          setRecovery('ready');
+        if (data.session !== null) {
+          markRecoveryReady();
         }
       })
       .catch(() => undefined);
 
-    const timer = window.setTimeout(() => {
-      if (!cancelled) {
-        setRecovery('invalid');
-      }
-    }, graceMs);
-
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
       subscription.unsubscribe();
     };
   }, [graceMs]);
