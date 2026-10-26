@@ -58,7 +58,7 @@ test('owner creates a fiscal year, changes its period, saves opening balances an
   await yearRow.getByRole('button', { name: `Activate ${YEAR_NAME}` }).click();
   await expect(yearRow.getByText('Current', { exact: true })).toBeVisible();
 
-  await yearRow.getByRole('button', { name: `Show months for ${YEAR_NAME}` }).click();
+  // Creation expands the new year automatically so its generated months are immediately visible.
   const monthRows = main.getByTestId('fiscal-month-row');
   await expect(monthRows).toHaveCount(12);
   await expect(monthRows.first()).toContainText('July 2035');
