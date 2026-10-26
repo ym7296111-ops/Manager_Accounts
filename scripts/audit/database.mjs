@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 48);
+    assert.equal(migrations.length, 49);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2797,17 +2797,39 @@ try {
 
       // 8) The newest migration replays cleanly while live rows exist (a fresh
       //    parent is inserted first so there is something to replay over).
+      //    The parties two-root migration deliberately leaves sister_companies
+      //    alone, so replaying it must be a no-op for this tree — which is
+      //    exactly what this assertion pins down.
       const replayParent = (
         await db.query(
           "insert into public.sister_companies (name) values ('شقيقة إعادة التشغيل') returning id",
         )
       ).rows[0];
       createdIds.push(replayParent.id);
+      const sistersBefore = Number(
+        (await db.query('select count(*)::int as n from public.sister_companies')).rows[0].n,
+      );
       await db.query(
         await readFile(
-          `${ROOT}supabase/migrations/20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
+          `${ROOT}supabase/migrations/20261109000000_parties_two_root_tree.sql`,
           'utf8',
         ),
+      );
+      const sistersAfterReplay = await db.query(
+        'select id, name, code, level from public.sister_companies where id = $1',
+        [replayParent.id],
+      );
+      assert.equal(sistersAfterReplay.rowCount, 1, 'replay must not delete sister companies');
+      assert.equal(sistersAfterReplay.rows[0].name, 'شقيقة إعادة التشغيل');
+      assert.match(sistersAfterReplay.rows[0].code, /^SIS-\d{3,}$/);
+      assert.equal(Number(sistersAfterReplay.rows[0].level), 1);
+      // Replaying must not mint a second code for the same row either.
+      assert.equal(
+        Number(
+          (await db.query('select count(*)::int as n from public.sister_companies')).rows[0].n,
+        ),
+        sistersBefore,
+        'replay must not duplicate sister companies',
       );
     } finally {
       // Branches first: the parent FK is ON DELETE RESTRICT.
