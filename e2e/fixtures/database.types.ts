@@ -58,42 +58,29 @@ export interface E2EDatabase {
         },
         { id?: string; parent_id?: string | null; name: string; is_active?: boolean }
       >;
-      /* `code` is deliberately absent from Insert: `parties_before_write` mints
-         it from a per-type sequence (LOC-001 / FRN-001 / CUS-001) and
-         overwrites anything a client sends. `type` stays writable in Update
-         only so the immutability spec can prove the database refuses to
-         change it (22023); the application client never sends it. The retired
-         `supplier` / `sister_company` / `internal` types are not modelled. */
+      /* A party is identity only: branch, name, code, is_active. `code` is
+         deliberately absent from Insert — `parties_before_write` mints IN-###
+         for an inbound party and OUT-### for an outbound one and overwrites
+         anything a client sends. `branch` stays writable in Update only so the
+         immutability spec can prove the database refuses to change it (22023);
+         the application client never sends it. The retired profile columns
+         (tax number, commercial register, address, contact person, phone,
+         email, credit limit, payment terms) are not modelled because they no
+         longer exist — a payload naming one is rejected by PostgREST. */
       parties: Table<
         {
           id: string;
-          type: string;
+          branch: string;
           name: string;
           code: string;
-          tax_number: string | null;
-          commercial_register: string | null;
-          address: string | null;
-          contact_person: string | null;
-          phone: string | null;
-          email: string | null;
-          credit_limit: number | null;
-          payment_terms: number | null;
           is_active: boolean;
           created_at: string;
           updated_at: string;
         },
         {
           id?: string;
-          type: string;
+          branch: string;
           name: string;
-          tax_number?: string | null;
-          commercial_register?: string | null;
-          address?: string | null;
-          contact_person?: string | null;
-          phone?: string | null;
-          email?: string | null;
-          credit_limit?: number | null;
-          payment_terms?: number | null;
           is_active?: boolean;
         }
       >;

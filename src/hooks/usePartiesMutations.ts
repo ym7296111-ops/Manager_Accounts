@@ -1,51 +1,45 @@
 import { useMutation, useQueryClient, type UseMutationResult } from '@tanstack/react-query';
 import { PARTIES_QUERY_KEY, PARTIES_SELECT } from '@/hooks/useParties';
-import type { PartyPaymentTerms, PartyType } from '@/lib/database.types';
+import type { PartyBranch } from '@/lib/database.types';
 import { validateName } from '@/lib/nameValidation';
-import {
-  isPartyPaymentTerms,
-  isPartyType,
-  isValidPartyEmail,
-  roundCreditLimit,
-} from '@/lib/partyValidation';
+import { isPartyBranch, validatePartyForm } from '@/lib/partyValidation';
 import { getSupabase } from '@/lib/supabase';
 
 /**
- * Write operations for the parties directory.
+ * Write operations for the parties tree.
  *
  * Shape of the contract, in one place:
  *
- *   create   `{ type, name, …optionals }`  → the server mints the code
- *   update   `{ id, name, …optionals }`    → the editable columns, nothing else
- *   toggle   `{ id, is_active }`           → the flag and nothing else
- *   delete   `{ id }`                      → free today; refuses once referenced
+ *   create   `{ branch, name }`   → the server mints the code
+ *   rename   `{ id, name }`       → the only editable column
+ *   toggle   `{ id, isActive }`   → the flag and nothing else
+ *   delete   `{ id }`             → free today; refuses once referenced
  *
  * `code` is never sent, on any verb: the `parties_before_write` trigger mints
- * it from the per-type sequence (`LOC-001` / `FRN-001` / `CUS-001`)
- * and overwrites anything a client tries to supply. `type` is sent exactly
+ * `IN-###` (inbound) or `OUT-###` (outbound) from that branch's own sequence
+ * and overwrites anything a client tries to supply. `branch` is sent exactly
  * once — on INSERT, where it selects the sequence — and never on UPDATE: the
- * trigger refuses a changed `type` or `code` with SQLSTATE 22023, and
- * `buildUpdatePayload` receives the type *beside* the fields (as rule context)
- * rather than among them, so it has no branch that could emit it. The
+ * trigger refuses a changed `branch` or `code` with SQLSTATE 22023, and the
+ * payload builders below have no branch that could emit either. The
  * `assertKeysAbsent` checks make both invariants hard failures instead of
  * comments, so a future edit that spreads caller input into a payload breaks
  * loudly before the request leaves the client.
  *
- * Credit terms (`credit_limit`, `payment_terms`) are carried by every party
- * type the table can hold — both supplier kinds and customers — so both keys
- * are always part of the payload, mirroring
- * `parties_credit_terms_external_only`. Sister companies live in their own
- * table (`useSisterCompaniesMutations`) and have no credit columns at all.
+ * There is no commercial profile: a party is a name under a root. Tax number,
+ * commercial register, address, contact person, phone, email, credit limit and
+ * payment terms were retired with the columns themselves in 20261109000000, so
+ * no payload here can carry them. Sister companies stay in their own table
+ * (`useSisterCompaniesMutations`) and are untouched by this module.
  *
  * Authorization is the database's. The screen sits behind `RequireCapability`,
  * but that gate reads a capability snapshot and can disagree with a live grant
  * revoked or delegated away mid-session, so every failure is classified and
  * surfaced instead of silently succeeding or silently doing nothing.
  *
- * Deleting is unrestricted in this phase — no table references a party yet.
- * The 23503 branch is still classified (`hasReferences`) so the day the
- * letters module adds its foreign key, a refused delete already reads as a
- * sentence instead of a generic failure.
+ * Deleting is unrestricted in this phase — no table references a party yet
+ * (`letters.party_id … on delete restrict` arrives with the letters phase).
+ * The 23503 branch is already classified (`hasReferences`) so the day that
+ * foreign key lands, a refused delete reads as a sentence, not a generic error.
  */
 
 export type PartyWriteErrorCode =
@@ -53,7 +47,7 @@ export type PartyWriteErrorCode =
   | 'forbidden'
   | 'network'
   | 'validation'
-  /** 22023: the trigger refused a `type`/`code` change (unreachable from the UI). */
+  /** 22023: the trigger refused a `branch`/`code` change (unreachable from the UI). */
   | 'immutable'
   /** 23503 on delete: documents already reference this party (letters phase). */
   | 'hasReferences'
@@ -62,7 +56,7 @@ export type PartyWriteErrorCode =
   | 'unknown';
 
 /** The same SQLSTATE does not mean the same thing on every verb. */
-export type PartyWriteOperation = 'create' | 'update' | 'toggle' | 'delete';
+export type PartyWriteOperation = 'create' | 'rename' | 'toggle' | 'delete';
 
 export class PartyWriteError extends Error {
   readonly code: PartyWriteErrorCode;
@@ -74,11 +68,11 @@ export class PartyWriteError extends Error {
   }
 }
 
-/** Minted by the trigger from a per-type sequence; no payload may carry it. */
+/** Minted by the trigger from a per-branch sequence; no payload may carry it. */
 export const SERVER_MINTED_COLUMNS = ['code'] as const;
 
-/** Written once on INSERT (`type`) or never (`code`); an UPDATE carries neither. */
-export const IMMUTABLE_UPDATE_COLUMNS = ['code', 'type'] as const;
+/** Written once on INSERT (`branch`) or never (`code`); an UPDATE carries neither. */
+export const IMMUTABLE_UPDATE_COLUMNS = ['code', 'branch'] as const;
 
 /** What a write may echo back: the stored row, read-only. */
 const WRITTEN_COLUMNS = PARTIES_SELECT;
@@ -95,124 +89,52 @@ function assertKeysAbsent(payload: Record<string, unknown>, keys: readonly strin
   }
 }
 
-/** The columns the edit dialog may change. Deliberately no `type`, no `code`. */
-export interface EditablePartyFields {
-  readonly name: string;
-  readonly taxNumber?: string | null;
-  readonly commercialRegister?: string | null;
-  readonly address?: string | null;
-  readonly contactPerson?: string | null;
-  readonly phone?: string | null;
-  readonly email?: string | null;
-  readonly creditLimit?: number | null;
-  readonly paymentTerms?: PartyPaymentTerms | null;
-}
-
-export interface CreatePartyInput extends EditablePartyFields {
+export interface CreatePartyInput {
   /** Chooses the code sequence; immutable from the moment the row exists. */
-  readonly type: PartyType;
+  readonly branch: PartyBranch;
+  readonly name: string;
 }
 
-/**
- * An update carries the editable columns and the row id. `type` is not part of
- * the contract at all: the trigger refuses a changed type with 22023, so the
- * client has no reason to hold an opinion about it.
- */
-export interface UpdatePartyInput extends EditablePartyFields {
+export interface RenamePartyInput {
   readonly id: string;
+  readonly name: string;
 }
 
-function validateNameOrThrow(raw: string): string {
-  const result = validateName(raw);
+function validateNameOrThrow(name: string): string {
+  const result = validateName(name);
   if (!result.ok) {
     throw new PartyWriteError('validation');
   }
   return result.value;
 }
 
-function normalizeOptionalText(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
-}
-
-/** The dialog checks the address first; this is the same rule at the wire. */
-function normalizeEmail(value: string | null | undefined): string | null {
-  const email = normalizeOptionalText(value);
-  if (email !== null && !isValidPartyEmail(email)) {
-    throw new PartyWriteError('validation');
-  }
-  return email;
-}
-
-interface CreditColumns {
-  readonly credit_limit: number | null;
-  readonly payment_terms: PartyPaymentTerms | null;
-}
-
-/** Validate both credit values for a type that carries them (23514, pre-empted). */
-function validatedCreditColumns(fields: EditablePartyFields): CreditColumns {
-  const creditLimit = fields.creditLimit ?? null;
-  if (creditLimit !== null && (!Number.isFinite(creditLimit) || creditLimit < 0)) {
-    throw new PartyWriteError('validation');
-  }
-  const paymentTerms = fields.paymentTerms ?? null;
-  if (paymentTerms !== null && !isPartyPaymentTerms(paymentTerms)) {
-    throw new PartyWriteError('validation');
-  }
-  return {
-    credit_limit: creditLimit === null ? null : roundCreditLimit(creditLimit),
-    payment_terms: paymentTerms,
-  };
-}
-
-/** The editable allowlist, shared by create and update. */
-function editableColumns(fields: EditablePartyFields): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    name: validateNameOrThrow(fields.name),
-    tax_number: normalizeOptionalText(fields.taxNumber),
-    commercial_register: normalizeOptionalText(fields.commercialRegister),
-    address: normalizeOptionalText(fields.address),
-    contact_person: normalizeOptionalText(fields.contactPerson),
-    phone: normalizeOptionalText(fields.phone),
-    email: normalizeEmail(fields.email),
-  };
-
-  /* Every remaining type is a commercial counterparty, so both credit keys are
-     always written — including explicit NULLs, which is what lets the user
-     clear a limit they no longer extend. */
-  const credit = validatedCreditColumns(fields);
-  payload.credit_limit = credit.credit_limit;
-  payload.payment_terms = credit.payment_terms;
-
-  return payload;
-}
-
 /**
- * INSERT payload: the type (it selects the sequence), the editable columns,
- * and never a code — the trigger mints it and would overwrite a sent one.
+ * INSERT payload: the branch (it selects the sequence) and the name, and never
+ * a code — the trigger mints it and would overwrite a sent one.
  */
 export function buildCreatePayload(input: CreatePartyInput): Record<string, unknown> {
-  if (!isPartyType(input.type)) {
+  if (!isPartyBranch(input.branch)) {
+    throw new PartyWriteError('validation');
+  }
+  const result = validatePartyForm({ name: input.name }, input.branch);
+  if (!result.ok) {
     throw new PartyWriteError('validation');
   }
   const payload: Record<string, unknown> = {
-    type: input.type,
-    ...editableColumns(input),
+    branch: input.branch,
+    name: result.value.name,
   };
   assertKeysAbsent(payload, SERVER_MINTED_COLUMNS);
   return payload;
 }
 
 /**
- * UPDATE payload. It is built from the editable allowlist alone, so it
- * structurally cannot contain `type` or `code`: changing either is refused by
- * the trigger with 22023, and the UI offers no way to ask.
+ * UPDATE payload. It is built from the editable allowlist alone — the name —
+ * so it structurally cannot contain `branch` or `code`: changing either is
+ * refused by the trigger with 22023, and the UI offers no way to ask.
  */
-export function buildUpdatePayload(fields: EditablePartyFields): Record<string, unknown> {
-  const payload = editableColumns(fields);
+export function buildRenamePayload(name: string): Record<string, unknown> {
+  const payload: Record<string, unknown> = { name: validateNameOrThrow(name) };
   assertKeysAbsent(payload, IMMUTABLE_UPDATE_COLUMNS);
   return payload;
 }
@@ -247,7 +169,7 @@ export function classifyPartyWriteError(
     return 'forbidden';
   }
 
-  // 22023: parties_before_write refused a type/code change. The payload
+  // 22023: parties_before_write refused a branch/code change. The payload
   // builders make this unreachable from the UI; if it ever surfaces, it is a
   // client bug and deserves its own message rather than "invalid input".
   if (code === '22023') {
@@ -260,8 +182,7 @@ export function classifyPartyWriteError(
     return 'hasReferences';
   }
 
-  // 23514: the CHECK family — blank name, email shape, negative credit limit,
-  // payment terms outside the set, a type outside the new vocabulary.
+  // 23514: the CHECK family — blank name, a branch outside the two roots.
   if (code === '23514') {
     return 'validation';
   }
@@ -303,17 +224,9 @@ function useInvalidate() {
 
 export interface WrittenPartyRow {
   readonly id: string;
-  readonly type: PartyType;
+  readonly branch: PartyBranch;
   readonly code: string;
   readonly name: string;
-  readonly tax_number: string | null;
-  readonly commercial_register: string | null;
-  readonly address: string | null;
-  readonly contact_person: string | null;
-  readonly phone: string | null;
-  readonly email: string | null;
-  readonly credit_limit: number | null;
-  readonly payment_terms: PartyPaymentTerms | null;
   readonly is_active: boolean;
 }
 
@@ -360,16 +273,16 @@ export function useCreateParty(): UseMutationResult<
   });
 }
 
-export function useUpdateParty(): UseMutationResult<
+export function useRenameParty(): UseMutationResult<
   WrittenPartyRow,
   PartyWriteError,
-  UpdatePartyInput
+  RenamePartyInput
 > {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: async (input) => {
-      /* The payload is asserted free of both `type` and `code`. */
-      const payload = buildUpdatePayload(input);
+      /* The payload is asserted free of both `branch` and `code`. */
+      const payload = buildRenamePayload(input.name);
       const supabase = requireClient();
       const { data, error } = await supabase
         .from('parties')
@@ -377,7 +290,7 @@ export function useUpdateParty(): UseMutationResult<
         .eq('id', input.id)
         .select(WRITTEN_COLUMNS)
         .single();
-      return unwrapSingle<WrittenPartyRow>(data, error, 'update');
+      return unwrapSingle<WrittenPartyRow>(data, error, 'rename');
     },
     onSuccess: invalidate,
   });

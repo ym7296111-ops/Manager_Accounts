@@ -1,26 +1,25 @@
 import { useQuery } from '@tanstack/react-query';
 import { classifyPostgrestReadError } from '@/hooks/postgrestReadError';
-import type { PartyPaymentTerms, PartyType } from '@/lib/database.types';
-import { isPartyPaymentTerms, isPartyType } from '@/lib/partyValidation';
+import type { PartyBranch } from '@/lib/database.types';
+import { isPartyBranch } from '@/lib/partyValidation';
 import { getSupabase } from '@/lib/supabase';
 
 /**
  * Parties directory (`['project-settings', 'parties']`).
  *
- * One flat read returns every party. The expected volume is a few dozen
- * counterparties — local suppliers, foreign suppliers and customers — so there
- * is no pagination and no server-side filtering; the screen's two sub-tabs
- * split this list by type on the client, exactly as the schema was designed
- * for (see `20261108000000_inbound_outbound_parties_and_sister_companies.sql`).
- * Sister companies are *not* parties any more: they are a tree of their own
- * (`useSisterCompanies`).
+ * One flat read returns every party; the screen groups them under the tree's
+ * two fixed roots — `inbound` («جهات الوارد») and `outbound` («أغراض الصرف»).
+ * The expected volume is a few dozen rows, so there is no pagination and no
+ * server-side filtering.
  *
- * Codes are minted by the `parties_before_write` trigger from a per-type
- * sequence (`LOC-001` / `FRN-001` / `CUS-001`) and every row is
- * RLS-gated by `can_manage_project_settings()` (`project.settings:manage`).
- * The UI sends `type` once, on insert, and never sends `code`; both are
- * immutable afterwards (the trigger raises 22023), and `usePartiesMutations`
- * is built so no update payload can carry either.
+ * A party is identity only: `branch`, `name`, `code`, `is_active`. The
+ * commercial profile columns (tax number, commercial register, address,
+ * contact person, phone, email, credit limit, payment terms) were retired in
+ * 20261109000000 — there is no field to read them from, and no hook carries
+ * them. Codes are minted by the `parties_before_write` trigger from one
+ * sequence per branch (`IN-001` / `OUT-001`); the UI never sends a code.
+ * Sister companies are *not* parties: they are their own tree
+ * (`useSisterCompanies`), mounted by their own tab.
  *
  * Authorization: the route is wrapped in `RequireCapability`, but that gate
  * reads a capability snapshot and can disagree with a live grant that was
@@ -29,20 +28,12 @@ import { getSupabase } from '@/lib/supabase';
  * directory (which would read as "no parties yet").
  */
 
-/** One party, as rendered. Optional columns stay `null` when unset. */
+/** One party, as rendered. Identity only: branch, name, code, active flag. */
 export interface Party {
   readonly id: string;
-  readonly type: PartyType;
+  readonly branch: PartyBranch;
   readonly code: string;
   readonly name: string;
-  readonly taxNumber: string | null;
-  readonly commercialRegister: string | null;
-  readonly address: string | null;
-  readonly contactPerson: string | null;
-  readonly phone: string | null;
-  readonly email: string | null;
-  readonly creditLimit: number | null;
-  readonly paymentTerms: PartyPaymentTerms | null;
   readonly isActive: boolean;
 }
 
@@ -60,9 +51,8 @@ export class PartiesError extends Error {
 
 export const PARTIES_QUERY_KEY = ['project-settings', 'parties'] as const;
 
-/** Every column the directory renders or the edit dialog prefills — no more. */
-export const PARTIES_SELECT =
-  'id, type, code, name, tax_number, commercial_register, address, contact_person, phone, email, credit_limit, payment_terms, is_active';
+/** Every column a party has — no more. */
+export const PARTIES_SELECT = 'id, branch, code, name, is_active';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -72,64 +62,28 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? value : null;
 }
 
-/** An optional text column: a non-blank string, or `null` for anything else. */
-function readOptionalString(value: unknown): string | null {
-  return readString(value);
-}
-
 /**
- * `numeric(18, 2)` arrives as a JSON number from PostgREST, but tolerate a
- * numeric string rather than dropping the value (or the row) if some proxy
- * stringifies it. A negative or non-finite value cannot exist behind the
- * CHECK, so it reads as unset instead of being trusted.
- */
-function readCreditLimit(value: unknown): number | null {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) && value >= 0 ? value : null;
-  }
-  if (typeof value === 'string' && value.trim() !== '') {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
-  }
-  return null;
-}
-
-/** Only the CHECK set is a term; anything else reads as "unspecified". */
-function readPaymentTerms(value: unknown): PartyPaymentTerms | null {
-  return typeof value === 'number' && isPartyPaymentTerms(value) ? value : null;
-}
-
-/**
- * Codes are zero-padded to three digits (`LOC-001`), so an ordinal comparison
- * is right up to 999 — but `LOC-1000` sorts before `LOC-101` in plain string
+ * Codes are zero-padded to three digits (`IN-001`), so an ordinal comparison
+ * is right up to 999 — but `IN-1000` sorts before `IN-101` in plain string
  * order. The numeric-aware collator keeps creation order intact past the
  * padding width.
  */
 const CODE_COLLATOR = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 
-/**
- * The directory reads type by type in the order the screen presents them
- * (local suppliers, foreign suppliers, customers), each block in code order.
- * Applied here rather than trusted from the server, so the render order is
- * deterministic regardless of the wire order.
- */
-const TYPE_ORDER: Record<PartyType, number> = {
-  local_supplier: 0,
-  foreign_supplier: 1,
-  customer: 2,
-};
+/** Branch order is fixed by the tree: inbound first, outbound second. */
+const BRANCH_ORDER: Record<PartyBranch, number> = { inbound: 0, outbound: 1 };
 
-function byTypeThenCode(a: Party, b: Party): number {
-  const byType = TYPE_ORDER[a.type] - TYPE_ORDER[b.type];
-  return byType !== 0 ? byType : CODE_COLLATOR.compare(a.code, b.code);
+function byBranchThenCode(a: Party, b: Party): number {
+  const byBranch = BRANCH_ORDER[a.branch] - BRANCH_ORDER[b.branch];
+  return byBranch !== 0 ? byBranch : CODE_COLLATOR.compare(a.code, b.code);
 }
 
 /**
  * Normalize the flat response into the render list.
  *
  * Malformed rows are dropped rather than throwing: one bad row must not blank
- * the screen. That includes a `type` outside the CHECK set — the screen has
- * no badge to render for it, and the database cannot produce one anyway.
+ * the screen. That includes a `branch` outside the two roots — the tree has no
+ * root to hang it under, and the database cannot produce one anyway.
  */
 export function parseParties(raw: unknown): readonly Party[] {
   if (!Array.isArray(raw)) {
@@ -146,7 +100,7 @@ export function parseParties(raw: unknown): readonly Party[] {
     const id = readString(row.id);
     const code = readString(row.code);
     const name = readString(row.name);
-    if (id === null || code === null || name === null || !isPartyType(row.type)) {
+    if (id === null || code === null || name === null || !isPartyBranch(row.branch)) {
       continue;
     }
     /* A duplicate id cannot exist in the table (primary key); first one wins. */
@@ -157,22 +111,14 @@ export function parseParties(raw: unknown): readonly Party[] {
 
     parties.push({
       id,
-      type: row.type,
+      branch: row.branch,
       code,
       name,
-      taxNumber: readOptionalString(row.tax_number),
-      commercialRegister: readOptionalString(row.commercial_register),
-      address: readOptionalString(row.address),
-      contactPerson: readOptionalString(row.contact_person),
-      phone: readOptionalString(row.phone),
-      email: readOptionalString(row.email),
-      creditLimit: readCreditLimit(row.credit_limit),
-      paymentTerms: readPaymentTerms(row.payment_terms),
       isActive: row.is_active === true,
     });
   }
 
-  return parties.sort(byTypeThenCode);
+  return parties.sort(byBranchThenCode);
 }
 
 export function classifyPartiesError(error: unknown): PartiesErrorCode {

@@ -6,20 +6,30 @@ import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
 import Classifications from '@/pages/settings/Classifications';
 import Parties from '@/pages/settings/Parties';
+import SisterCompanies from '@/pages/settings/SisterCompanies';
 import StationsWarehouses from '@/pages/settings/StationsWarehouses';
 
 /**
  * Project-settings screen (`/settings/project`).
  *
  * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes four tabs under the header. Three tabs are live — Stations &
- * Warehouses (nested single read), Classifications (flat single read assembled
- * into a tree) and Parties (flat single read, filtered by type on the client) —
- * and each fetches only while its own tab is mounted, so switching tabs costs
- * no background traffic. General is still a placeholder and issues no queries
- * of its own.
+ * exposes five tabs under the header, in this order:
+ *
+ *   1. المحطات والمخازن        stations + warehouses (nested single read)
+ *   2. التصنيفات               classifications (flat read assembled into a tree)
+ *   3. جهات الوارد وأغراض الصرف  parties (a two-root tree: inbound / outbound)
+ *   4. الشركات الشقيقة          sister companies (a two-level parent → branch tree)
+ *   5. عام                     a placeholder
+ *
+ * Every tab fetches only while its own panel is mounted, so switching tabs
+ * costs no background traffic. Sister companies sits at the top level rather
+ * than inside the parties tab: its shape is a tree while the parties
+ * directories are flat lists, and its purpose (intercompany transfers) is
+ * distinct, so it reads better as a peer tab with no sub-tabs of its own.
+ * General is still a placeholder and issues no queries.
  */
-type ProjectSettingsTab = 'stations' | 'classifications' | 'parties' | 'general';
+type ProjectSettingsTab =
+  'stations' | 'classifications' | 'parties' | 'sisterCompanies' | 'general';
 
 interface ProjectSettingsTabConfig {
   id: ProjectSettingsTab;
@@ -40,6 +50,10 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'parties',
     labelKey: 'settings.project.tabs.parties',
+  },
+  {
+    id: 'sisterCompanies',
+    labelKey: 'settings.project.tabs.sisterCompanies',
   },
   {
     id: 'general',
@@ -126,6 +140,9 @@ export default function ProjectSettings() {
               <Classifications />
             ) : activeConfig.id === 'parties' ? (
               <Parties />
+            ) : activeConfig.id === 'sisterCompanies' ? (
+              /* The tree opens straight away — no sub-tabs of its own. */
+              <SisterCompanies />
             ) : (
               <p className="text-muted-foreground text-sm leading-relaxed">
                 {activeConfig.placeholderKey !== undefined ? t(activeConfig.placeholderKey) : null}

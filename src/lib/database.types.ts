@@ -10,7 +10,8 @@
  * (`20261104030000_stations_and_warehouses.sql`,
  * `20261104040000_classifications_schema.sql`,
  * `20261106000000_parties_schema.sql`,
- * `20261108000000_inbound_outbound_parties_and_sister_companies.sql`). This
+ * `20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
+ * `20261109000000_parties_two_root_tree.sql`). This
  * file does NOT describe
  * the rest of the schema (profiles, RBAC, backups, support, workspaces,
  * localization); regenerate the complete file against the linked project when
@@ -34,14 +35,12 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 /**
- * The counterparty types the directory holds (20261108000000). Inbound tabs
- * hold `local_supplier` / `foreign_supplier`; the outbound tab holds
- * `customer`. `internal` and the flat `sister_company` type are retired —
- * sister companies are a tree of their own, see `sister_companies`.
+ * The two roots of the parties tree (20261109000000): «جهات الوارد» and
+ * «أغراض الصرف». It is the only classification a party carries — the retired
+ * `type`, `local_supplier` / `foreign_supplier` / `customer`, is gone, and so
+ * are every commercial profile column (tax number, credit limit, …).
  */
-export type PartyType = 'local_supplier' | 'foreign_supplier' | 'customer';
-
-export type PartyPaymentTerms = 0 | 15 | 30 | 60 | 90;
+export type PartyBranch = 'inbound' | 'outbound';
 
 export type Database = {
   public: {
@@ -527,58 +526,35 @@ export type Database = {
       };
       parties: {
         Row: {
-          address: string | null;
+          /** The root this party sits under. Immutable after creation. */
+          branch: PartyBranch;
           code: string;
-          commercial_register: string | null;
-          contact_person: string | null;
           created_at: string;
-          credit_limit: number | null;
-          email: string | null;
           id: string;
           is_active: boolean;
           name: string;
-          payment_terms: PartyPaymentTerms | null;
-          phone: string | null;
-          tax_number: string | null;
-          type: PartyType;
           updated_at: string;
         };
         Insert: {
-          address?: string | null;
-          /** Minted server-side by `parties_before_write` (LOC-001 / FRN-001 / CUS-001); ignored if sent. */
+          /** Selects the code sequence: `inbound` -> IN-###, `outbound` -> OUT-###. */
+          branch: PartyBranch;
+          /** Minted server-side by `parties_before_write`; ignored if sent. */
           code?: string;
-          commercial_register?: string | null;
-          contact_person?: string | null;
           created_at?: string;
-          /** Allowed on every remaining type (both supplier kinds and customers), see `parties_credit_terms_external_only`. */
-          credit_limit?: number | null;
-          email?: string | null;
           id?: string;
           is_active?: boolean;
           name: string;
-          payment_terms?: PartyPaymentTerms | null;
-          phone?: string | null;
-          tax_number?: string | null;
-          type: PartyType;
           updated_at?: string;
         };
         Update: {
-          address?: string | null;
+          /** Immutable after creation; updating raises 22023. */
+          branch?: PartyBranch;
           /** Immutable after creation; updating raises 22023. */
           code?: string;
-          commercial_register?: string | null;
-          contact_person?: string | null;
           created_at?: string;
-          credit_limit?: number | null;
-          email?: string | null;
           id?: string;
           is_active?: boolean;
           name?: string;
-          payment_terms?: PartyPaymentTerms | null;
-          phone?: string | null;
-          tax_number?: string | null;
-          /** Immutable after creation; updating raises 22023. */
-          type?: PartyType;
           updated_at?: string;
         };
         Relationships: [];

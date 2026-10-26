@@ -1,9 +1,10 @@
 /**
  * Screenshot pass for the review (not part of the suite).
  *
- * Drives the preview harness on :4173 and captures the classifications tree and
- * the three «جهات الوارد والمنصرف» sub-tabs in Arabic (default), plus English,
- * dark and mobile frames. It also exercises the two rules the review asks
+ * Drives the preview harness on :4173 and captures the classifications tree,
+ * the two «جهات الوارد والمنصرف» sub-tabs and the «الشركات الشقيقة» tab (a
+ * top-level tab of its own) in Arabic (default), plus English, dark and mobile
+ * frames. It also exercises the two rules the review asks
  * about: the outbound tab offers no type control, and a parent company with
  * branches cannot be deleted.
  */
@@ -35,18 +36,17 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
-/* The Parties screen nests its own tablist inside the Project Settings tablist,
-   so `getByRole('tab')` is ambiguous: pin the ids instead. */
+/* Top-level project-settings tabs are pinned by id: their labels are localized
+   and the sister tree also uses headings with similar names. */
 async function openSettingsTab(tabId, heading) {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.locator(`#project-settings-tab-${tabId}`).click();
   await page.getByRole('heading', { name: heading }).first().waitFor();
 }
 
-/* The sub-tab labels are buttons, not headings: wait for the panel itself. */
-async function openPartiesSubTab(subTab) {
-  await page.locator(`#parties-subtab-${subTab}`).click();
-  await page.locator(`#parties-subtabpanel-${subTab}`).waitFor();
+/* Both roots render their panel: wait for it before shooting. */
+async function openPartiesRoot(branch) {
+  await page.locator(`#parties-root-panel-${branch}`).waitFor();
 }
 
 /* Review scratch state must not depend on a previous run: the harness keeps
@@ -75,64 +75,72 @@ await page.screenshot({ path: `${OUT}/classifications-deep-path.png` });
 await page.getByRole('button', { name: 'إغلاق' }).click();
 
 // ---------------------------------------------------------------------------
-// Parties — inbound tab: the two supplier kinds, green, down-arrow.
+// Parties — the two-root tree: inbound (green, down-arrow) and outbound
+// (orange, up-arrow), one flat level of parties under each.
 // ---------------------------------------------------------------------------
-await openSettingsTab('parties', 'جهات الوارد والمنصرف');
-await openPartiesSubTab('inbound');
+await openSettingsTab('parties', 'جهات الوارد وأغراض الصرف');
+await openPartiesRoot('inbound');
 await page.getByText('شركة النيل للتوريدات الصناعية').waitFor();
 await page.getByText('Nile Trading GmbH').waitFor();
-const customerInInbound = await page.getByText('مؤسسة الأفق للتجارة والتوزيع').count();
-expect(customerInInbound === 0, 'the inbound tab must not list customers');
-console.log('inbound shows LOC-001 + FRN-001 and no customer rows');
+const customersUnderInbound = await page
+  .locator('#parties-root-panel-inbound')
+  .getByText('مؤسسة الأفق للتجارة والتوزيع')
+  .count();
+expect(customersUnderInbound === 0, 'the inbound root must not list outbound parties');
+console.log('inbound shows IN-001 + IN-002 and no outbound rows');
 await page.screenshot({ path: `${OUT}/parties-inbound.png` });
 
-// 1b. The create dialog offers exactly the two inbound types.
-await page.getByRole('button', { name: 'إضافة جهة' }).click();
+/* 1b. A party is a name: the create dialog has one field and no selects. */
+await page.getByRole('button', { name: 'إضافة جهة داخل «جهات الوارد»' }).click();
 await page.getByRole('dialog').waitFor();
-const typeOptions = await page.getByLabel('نوع الجهة').locator('option').allTextContents();
-console.log('inbound type options:', typeOptions);
-expect(
-  typeOptions.some((label) => label.includes('مورّد محلي')) &&
-    typeOptions.some((label) => label.includes('مورّد أجنبي')) &&
-    !typeOptions.some((label) => label.includes('عميل')) &&
-    !typeOptions.some((label) => label.includes('داخلي')),
-  'the inbound dialog must offer local + foreign suppliers only',
-);
+const dialogFields = await page.getByRole('dialog').locator('input, select, textarea').count();
+expect(dialogFields === 1, 'the party dialog must hold exactly one field');
+await page.getByText('IN-###').waitFor();
 await page.screenshot({ path: `${OUT}/parties-add-inbound.png` });
 
-/* 1c. Create a foreign supplier: the code comes from the FRN sequence on the
-   server, so the form never shows a code field and the new row is FRN-002. */
-await page.getByLabel('نوع الجهة').selectOption('foreign_supplier');
-await page.getByLabel('اسم الجهة').fill('Delta Freight GmbH');
-await page.getByLabel('الحد الائتماني').fill('120000');
-await page.getByLabel('شروط الدفع').selectOption('60');
+/* 1c. Create one: the code comes from the IN sequence on the server. */
+await page.getByLabel('اسم الجهة').fill('مورّد الدلتا للتوريدات');
 await page.getByRole('dialog').getByRole('button', { name: 'حفظ' }).click();
 await page.getByText('تم الحفظ.').waitFor();
-await page.getByText('FRN-002').waitFor();
+await page.getByText('IN-003', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-inbound-created.png` });
 await page.getByRole('button', { name: 'إغلاق التنبيه' }).click();
 
 // ---------------------------------------------------------------------------
-// Parties — outbound tab: customers only, orange, up-arrow, no type control.
+// Parties — outbound root: orange, up-arrow, its own OUT sequence.
 // ---------------------------------------------------------------------------
-await openPartiesSubTab('outbound');
 await page.getByText('مؤسسة الأفق للتجارة والتوزيع').waitFor();
-const supplierInOutbound = await page.getByText('شركة النيل للتوريدات الصناعية').count();
-expect(supplierInOutbound === 0, 'the outbound tab must not list suppliers');
+const inboundRowsUnderOutbound = await page
+  .locator('#parties-root-panel-outbound')
+  .getByText('شركة النيل للتوريدات الصناعية')
+  .count();
+expect(inboundRowsUnderOutbound === 0, 'the outbound root must not list inbound parties');
 await page.screenshot({ path: `${OUT}/parties-outbound.png` });
 
-await page.getByRole('button', { name: 'إضافة جهة' }).click();
+await page.getByRole('button', { name: 'إضافة جهة داخل «أغراض الصرف»' }).click();
 await page.getByRole('dialog').waitFor();
-const outboundTypeSelects = await page.getByLabel('نوع الجهة').count();
-expect(outboundTypeSelects === 0, 'the outbound dialog must not offer a type control');
-await page.getByText('هذا التبويب يُنشئ عملاء فقط', { exact: false }).waitFor();
+await page.getByText('OUT-###').waitFor();
 await page.screenshot({ path: `${OUT}/parties-add-outbound.png` });
-await page.getByRole('dialog').getByRole('button', { name: 'إغلاق' }).click();
+await page.getByLabel('اسم الجهة').fill('جهة صرف الدلتا');
+await page.getByRole('dialog').getByRole('button', { name: 'حفظ' }).click();
+await page.getByText('OUT-002', { exact: true }).waitFor();
+await page.screenshot({ path: `${OUT}/parties-outbound-created.png` });
+await page.getByRole('button', { name: 'إغلاق التنبيه' }).click();
+
+/* 2b. Collapsing a root leaves the other exactly where it was. */
+await page.locator('#parties-root-inbound').click();
+await page.locator('#parties-root-panel-inbound').waitFor({ state: 'detached' });
+await page.screenshot({ path: `${OUT}/parties-collapsed-inbound.png` });
+await page.locator('#parties-root-inbound').click();
+await openPartiesRoot('inbound');
 
 // ---------------------------------------------------------------------------
-// Parties — sister companies: parent → branches tree, violet, building icon.
+// Sister companies — a top-level tab now: the parent → branches tree opens
+// directly, with no sub-tabs of its own.
 // ---------------------------------------------------------------------------
-await openPartiesSubTab('sister');
+await openSettingsTab('sisterCompanies', 'شجرة الشركات الشقيقة');
+const partyRootsOnSisterTab = await page.locator('[id^="parties-root-"]').count();
+expect(partyRootsOnSisterTab === 0, 'the sister-companies tab must not mount the parties tree');
 await page.getByText('الشركة المتحدة للخدمات اللوجستية').waitFor();
 await page.screenshot({ path: `${OUT}/parties-sister.png` });
 
@@ -192,8 +200,9 @@ console.log('23503 surfaced as the has-branches message');
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.evaluate(() => window.localStorage.setItem('admin-system:locale', 'en'));
 await page.reload({ waitUntil: 'networkidle' });
-await page.locator('#parties-subtab-inbound').click();
-await page.getByRole('heading', { name: 'Inbound & outbound parties' }).first().waitFor();
+await page.locator('#project-settings-tab-parties').click();
+await openPartiesRoot('inbound');
+await page.getByRole('heading', { name: 'Inbound parties & outbound purposes' }).first().waitFor();
 await page.screenshot({ path: `${OUT}/parties-inbound-en.png` });
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -203,26 +212,17 @@ await page.evaluate(() => {
 });
 await page.reload({ waitUntil: 'networkidle' });
 await page.evaluate(() => document.documentElement.classList.add('dark'));
-await page.locator('#parties-subtab-sister').click();
+await page.locator('#project-settings-tab-sisterCompanies').click();
 await toggleNamed('الشركة المتحدة للخدمات اللوجستية').click();
 await page.getByText('SIS-001-01', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-sister-dark.png` });
 
 await page.evaluate(() => document.documentElement.classList.remove('dark'));
 await page.setViewportSize({ width: 390, height: 844 });
-await page.locator('#parties-subtab-inbound').click();
-await page.getByText('LOC-001', { exact: true }).waitFor();
+await page.locator('#project-settings-tab-parties').click();
+await openPartiesRoot('inbound');
+await page.getByText('IN-001', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-inbound-mobile.png`, fullPage: true });
-
-/* The table is wider than a phone on purpose (a badge cut in half would be
-   worse than a scroll): the second frame scrolls it to the actions column. */
-const scroller = page.locator('div.overflow-x-auto').first();
-await scroller.evaluate((node) => {
-  /* RTL scroll offsets run from 0 (natural start) down to -max: the actions
-     column sits at the far end. */
-  node.scrollLeft = -node.scrollWidth;
-});
-await page.screenshot({ path: `${OUT}/parties-inbound-mobile-actions.png` });
 
 await browser.close();
 console.log('screenshots written');

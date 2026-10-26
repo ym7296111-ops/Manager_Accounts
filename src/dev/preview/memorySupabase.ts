@@ -18,9 +18,10 @@
  * * deleting a node that still has children raises 23503 (ON DELETE RESTRICT);
  * * a payload carrying `code`, `level` or `is_leaf` is rejected outright, so a
  *   regression in the client shows up in the preview instead of hiding;
- * * party codes are minted per type (`LOC-001` / `FRN-001` / `CUS-001`), a
- *   payload carrying `code` — or `type` on update — is rejected, and the
- *   retired `internal` / `sister_company` types are refused with 23514;
+ * * a party is a name under one of two roots (`inbound` / `outbound`): its code
+ *   is minted per branch (`IN-001` / `OUT-001`), a payload carrying `code` — or
+ *   `branch` on update — is rejected, and a branch outside the two roots is
+ *   refused with 23514;
  * * sister companies form a two-level tree: `SIS-001` for a parent company and
  *   `SIS-001-01` for its first branch, `parent_id`/`code`/`level` are refused
  *   on update, and deleting a company that still has branches raises 23503.
@@ -168,95 +169,61 @@ const warehouses: SimpleRow[] = [
 
 interface PartyPreviewRow {
   id: string;
-  type: string;
+  branch: string;
   code: string;
   name: string;
-  tax_number: string | null;
-  commercial_register: string | null;
-  address: string | null;
-  contact_person: string | null;
-  phone: string | null;
-  email: string | null;
-  credit_limit: number | null;
-  payment_terms: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
 const PARTY_PREFIX: Record<string, string> = {
-  local_supplier: 'LOC',
-  foreign_supplier: 'FRN',
-  customer: 'CUS',
+  inbound: 'IN',
+  outbound: 'OUT',
 };
 
-/** Mirrors the parties block of `supabase/seed.sql` row for row (one per type). */
+/** Mirrors the parties block of `supabase/seed.sql` row for row. */
 const parties: PartyPreviewRow[] = [
   {
-    id: 'p-loc',
-    type: 'local_supplier',
-    code: 'LOC-001',
+    id: 'p-in-1',
+    branch: 'inbound',
+    code: 'IN-001',
     name: 'شركة النيل للتوريدات الصناعية',
-    tax_number: '123456789',
-    commercial_register: '101010',
-    address: 'المنطقة الصناعية، مدينة السادس من أكتوبر',
-    contact_person: 'أحمد سامي',
-    phone: '+20238200000',
-    email: 'sales@nile-supplies.example.com',
-    credit_limit: 250000,
-    payment_terms: 30,
     is_active: true,
     created_at: nowIso(),
     updated_at: nowIso(),
   },
   {
-    id: 'p-cus',
-    type: 'customer',
-    code: 'CUS-001',
-    name: 'مؤسسة الأفق للتجارة والتوزيع',
-    tax_number: '987654321',
-    commercial_register: '202020',
-    address: 'شارع الجمهورية، القاهرة',
-    contact_person: 'منى خليل',
-    phone: '+20225700000',
-    email: 'purchases@horizon-trade.example.com',
-    credit_limit: 150000,
-    payment_terms: 60,
-    is_active: true,
-    created_at: nowIso(),
-    updated_at: nowIso(),
-  },
-  {
-    id: 'p-frn',
-    type: 'foreign_supplier',
-    code: 'FRN-001',
+    id: 'p-in-2',
+    branch: 'inbound',
+    code: 'IN-002',
     name: 'Nile Trading GmbH',
-    tax_number: 'DE-556677',
-    commercial_register: 'HRB-99881',
-    address: 'Hafenstraße 12, Hamburg',
-    contact_person: 'Lena Fischer',
-    phone: '+494012345678',
-    email: 'orders@nile-trading.example.com',
-    credit_limit: 500000,
-    payment_terms: 15,
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'p-out-1',
+    branch: 'outbound',
+    code: 'OUT-001',
+    name: 'مؤسسة الأفق للتجارة والتوزيع',
     is_active: true,
     created_at: nowIso(),
     updated_at: nowIso(),
   },
 ];
 
-/** Every per-type sequence has already issued its `001` to the seed above. */
+/** Each branch sequence has already issued the codes the seed holds. */
 const partySequences: Record<string, number> = {
-  local_supplier: 1,
-  foreign_supplier: 1,
-  customer: 1,
+  inbound: 2,
+  outbound: 1,
 };
 
-/** Mirrors `parties_before_write`: prefix by type, padded to three digits. */
-function mintPartyCode(type: string): string {
-  const next = (partySequences[type] ?? 0) + 1;
-  partySequences[type] = next;
-  return `${PARTY_PREFIX[type]}-${next < 1000 ? String(next).padStart(3, '0') : String(next)}`;
+/** Mirrors `parties_before_write`: prefix by branch, padded to three digits. */
+function mintPartyCode(branch: string): string {
+  const next = (partySequences[branch] ?? 0) + 1;
+  partySequences[branch] = next;
+  return `${PARTY_PREFIX[branch]}-${next < 1000 ? String(next).padStart(3, '0') : String(next)}`;
 }
 
 function writeName(value: unknown): string {
@@ -337,30 +304,10 @@ function deleteClassification(filters: readonly (readonly [string, unknown])[]):
   return [{ ...row }];
 }
 
-const PARTY_EMAIL = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/i;
-
-function partyOptionalText(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
-}
-
 /** The parties CHECK family, so the preview refuses what the database refuses. */
-function checkPartyConstraints(row: {
-  type: string;
-  email: string | null;
-  credit_limit: number | null;
-  payment_terms: number | null;
-}) {
-  if (row.email !== null && !PARTY_EMAIL.test(row.email)) {
-    throw new DbError('23514', 'parties_email_check');
-  }
-  if (row.credit_limit !== null && row.credit_limit < 0) {
-    throw new DbError('23514', 'parties_credit_limit_non_negative');
-  }
-  if (row.payment_terms !== null && ![0, 15, 30, 60, 90].includes(row.payment_terms)) {
-    throw new DbError('23514', 'parties_payment_terms_check');
-  }
-  if (!(row.type in PARTY_PREFIX)) {
-    throw new DbError('23514', 'parties_type_check');
+function checkPartyConstraints(row: { branch: string }) {
+  if (!(row.branch in PARTY_PREFIX)) {
+    throw new DbError('23514', 'parties_branch_check');
   }
 }
 
@@ -370,26 +317,18 @@ function insertParty(payload: Record<string, unknown>): PartyPreviewRow {
   if ('code' in payload) {
     throw new DbError('42501', 'preview: the client must not write "code"');
   }
-  const type = typeof payload.type === 'string' ? payload.type : '';
-  if (!(type in PARTY_PREFIX)) {
-    throw new DbError('23514', 'parties_type_check');
+  const branch = typeof payload.branch === 'string' ? payload.branch : '';
+  if (!(branch in PARTY_PREFIX)) {
+    throw new DbError('23514', 'parties_branch_check');
   }
 
   const row: PartyPreviewRow = {
     id: id('party'),
-    type,
+    branch,
     /* Minted before the CHECKs run, like the trigger: a refused insert still
        burns a sequence number, exactly as in the database. */
-    code: mintPartyCode(type),
+    code: mintPartyCode(branch),
     name: writeName(payload.name),
-    tax_number: partyOptionalText(payload.tax_number),
-    commercial_register: partyOptionalText(payload.commercial_register),
-    address: partyOptionalText(payload.address),
-    contact_person: partyOptionalText(payload.contact_person),
-    phone: partyOptionalText(payload.phone),
-    email: partyOptionalText(payload.email),
-    credit_limit: typeof payload.credit_limit === 'number' ? payload.credit_limit : null,
-    payment_terms: typeof payload.payment_terms === 'number' ? payload.payment_terms : null,
     is_active: payload.is_active === undefined ? true : payload.is_active === true,
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -403,10 +342,10 @@ function updateParty(
   payload: Record<string, unknown>,
   filters: readonly (readonly [string, unknown])[],
 ): PartyPreviewRow {
-  /* The database refuses a CHANGED type/code with 22023; the preview refuses
+  /* The database refuses a CHANGED branch/code with 22023; the preview refuses
      their mere presence, so a client that starts sending either fails here. */
-  if ('code' in payload || 'type' in payload) {
-    throw new DbError('42501', 'preview: type and code are write-once (insert only)');
+  if ('code' in payload || 'branch' in payload) {
+    throw new DbError('42501', 'preview: branch and code are write-once (insert only)');
   }
   const row = matchOne(parties, filters);
   if (row === null) {
@@ -415,30 +354,6 @@ function updateParty(
 
   if ('name' in payload) {
     row.name = writeName(payload.name);
-  }
-  if ('tax_number' in payload) {
-    row.tax_number = partyOptionalText(payload.tax_number);
-  }
-  if ('commercial_register' in payload) {
-    row.commercial_register = partyOptionalText(payload.commercial_register);
-  }
-  if ('address' in payload) {
-    row.address = partyOptionalText(payload.address);
-  }
-  if ('contact_person' in payload) {
-    row.contact_person = partyOptionalText(payload.contact_person);
-  }
-  if ('phone' in payload) {
-    row.phone = partyOptionalText(payload.phone);
-  }
-  if ('email' in payload) {
-    row.email = partyOptionalText(payload.email);
-  }
-  if ('credit_limit' in payload) {
-    row.credit_limit = typeof payload.credit_limit === 'number' ? payload.credit_limit : null;
-  }
-  if ('payment_terms' in payload) {
-    row.payment_terms = typeof payload.payment_terms === 'number' ? payload.payment_terms : null;
   }
   if ('is_active' in payload) {
     row.is_active = payload.is_active === true;

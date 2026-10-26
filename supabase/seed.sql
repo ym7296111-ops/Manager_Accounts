@@ -224,18 +224,20 @@ $seed_classifications$;
 
 
 -- ---------------------------------------------------------------------------
--- Demo parties (Project Settings → جهات الوارد والمنصرف): two inbound
--- counterparties (one local supplier, one foreign supplier) and one outbound
--- customer, plus a sister-company tree with two branches.
+-- Demo parties (Project Settings → جهات الوارد وأغراض الصرف): two inbound
+-- parties and one outbound party, plus a sister-company tree with two branches.
 --
 -- Local/e2e only, exactly like the stations and classifications seeds:
 -- `supabase db push --linked` never applies this file, so production stays
--- empty until real counterparties are entered through the UI.
+-- empty until real parties are entered through the UI.
 --
 -- `code` is deliberately NOT supplied. `parties_before_write` mints it from the
--- per-type sequence, so the rows land as LOC-001 / FRN-001 / CUS-001 and each
+-- branch's own sequence, so the rows land as IN-001 / IN-002 / OUT-001 and each
 -- sequence stays in step with the rows it numbered — writing explicit codes
 -- here would make the first UI-created party mint a code that already exists.
+-- A party is a name and a branch: there is no tax number, address, phone,
+-- email, credit limit or payment term to seed (those columns were retired in
+-- 20261109000000).
 -- The sister-company codes (SIS-001, SIS-001-01, SIS-001-02) are minted the
 -- same way by `sister_companies_before_write`.
 -- ---------------------------------------------------------------------------
@@ -246,35 +248,11 @@ declare
 begin
   select count(*)::integer into v_existing from public.parties;
   if v_existing = 0 then
-    insert into public.parties (
-      type, name, tax_number, commercial_register, address,
-      contact_person, phone, email, credit_limit, payment_terms, is_active
-    )
-    values (
-      'local_supplier', 'شركة النيل للتوريدات الصناعية', '123456789', '101010',
-      'المنطقة الصناعية، مدينة السادس من أكتوبر', 'أحمد سامي', '+20238200000',
-      'sales@nile-supplies.example.com', 250000.00, 30, true
-    );
-
-    insert into public.parties (
-      type, name, tax_number, commercial_register, address,
-      contact_person, phone, email, credit_limit, payment_terms, is_active
-    )
-    values (
-      'foreign_supplier', 'Nile Trading GmbH', 'DE-556677', 'HRB-99881',
-      'Hafenstraße 12, Hamburg', 'Lena Fischer', '+494012345678',
-      'orders@nile-trading.example.com', 500000.00, 15, true
-    );
-
-    insert into public.parties (
-      type, name, tax_number, commercial_register, address,
-      contact_person, phone, email, credit_limit, payment_terms, is_active
-    )
-    values (
-      'customer', 'مؤسسة الأفق للتجارة والتوزيع', '987654321', '202020',
-      'شارع الجمهورية، القاهرة', 'منى خليل', '+20225700000',
-      'purchases@horizon-trade.example.com', 150000.00, 60, true
-    );
+    insert into public.parties (branch, name, is_active)
+    values
+      ('inbound', 'شركة النيل للتوريدات الصناعية', true),
+      ('inbound', 'Nile Trading GmbH', true),
+      ('outbound', 'مؤسسة الأفق للتجارة والتوزيع', true);
   end if;
 
   select count(*)::integer into v_existing from public.sister_companies;

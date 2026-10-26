@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 48);
+    assert.equal(migrations.length, 49);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1853,6 +1853,7 @@ try {
     assert.ok(
       migrations.includes('20261108000000_inbound_outbound_parties_and_sister_companies.sql'),
     );
+    assert.ok(migrations.includes('20261109000000_parties_two_root_tree.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2168,63 +2169,59 @@ try {
       await db.query("select set_config('classifications.deriving_level', 'off', false)");
     }
   });
-  await test('parties: inbound/outbound types, per-type codes, immutable identity, CHECKs, and RLS gate', async () => {
+  await test('parties: two-root tree, per-branch codes, immutable identity, CHECKs, and RLS gate', async () => {
     const columns = await db.query(
       "select column_name from information_schema.columns where table_schema='public' and table_name='parties' order by ordinal_position",
     );
+    // Identity only: the commercial profile columns were retired in
+    // 20261109000000. `branch` is appended by the ALTER, hence its position.
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      [
-        'id',
-        'type',
-        'name',
-        'code',
-        'tax_number',
-        'commercial_register',
-        'address',
-        'contact_person',
-        'phone',
-        'email',
-        'credit_limit',
-        'payment_terms',
-        'is_active',
-        'created_at',
-        'updated_at',
-      ],
+      ['id', 'name', 'code', 'is_active', 'created_at', 'updated_at', 'branch'],
     );
 
     // The retired vocabulary is gone from the schema entirely.
-    const typeCheck = await db.query(
-      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_type_check'",
-    );
-    assert.ok(typeCheck.rows[0]?.def.includes('local_supplier'));
-    assert.ok(typeCheck.rows[0]?.def.includes('foreign_supplier'));
-    assert.ok(typeCheck.rows[0]?.def.includes('customer'));
-    assert.equal(typeCheck.rows[0]?.def.includes('internal'), false);
-    assert.equal(typeCheck.rows[0]?.def.includes("'supplier'"), false);
-    assert.equal(typeCheck.rows[0]?.def.includes('sister_company'), false);
-
-    const codeCheck = await db.query(
-      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_code_matches_type'",
-    );
-    for (const prefix of ['LOC-', 'FRN-', 'CUS-']) {
-      assert.ok(
-        codeCheck.rows[0]?.def.includes(prefix),
-        `parties_code_matches_type must name ${prefix}`,
+    for (const retired of [
+      'parties_type_check',
+      'parties_code_matches_type',
+      'parties_credit_terms_external_only',
+      'parties_email_check',
+      'parties_credit_limit_non_negative',
+      'parties_payment_terms_check',
+    ]) {
+      assert.equal(
+        (
+          await db.query(
+            "select 1 from pg_constraint where conrelid='public.parties'::regclass and conname=$1",
+            [retired],
+          )
+        ).rowCount,
+        0,
+        `${retired} must not exist any more`,
       );
     }
-    assert.equal(codeCheck.rows[0]?.def.includes('SUP-'), false);
-    assert.equal(codeCheck.rows[0]?.def.includes('SIS-'), false);
-    assert.equal(codeCheck.rows[0]?.def.includes('INT-'), false);
 
-    assert.ok(
-      (
-        await db.query(
-          "select 1 from pg_constraint where conrelid='public.parties'::regclass and conname='parties_credit_terms_external_only'",
-        )
-      ).rowCount,
-      'parties_credit_terms_external_only must exist',
+    const branchCheck = await db.query(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_branch_check'",
     );
+    assert.ok(branchCheck.rows[0]?.def.includes('inbound'));
+    assert.ok(branchCheck.rows[0]?.def.includes('outbound'));
+    for (const retired of ['local_supplier', 'foreign_supplier', 'customer', 'internal']) {
+      assert.equal(branchCheck.rows[0]?.def.includes(retired), false);
+    }
+
+    const codeCheck = await db.query(
+      "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid='public.parties'::regclass and conname='parties_code_matches_branch'",
+    );
+    for (const prefix of ['IN-', 'OUT-']) {
+      assert.ok(
+        codeCheck.rows[0]?.def.includes(prefix),
+        `parties_code_matches_branch must name ${prefix}`,
+      );
+    }
+    for (const retired of ['LOC-', 'FRN-', 'CUS-', 'SUP-', 'SIS-', 'INT-']) {
+      assert.equal(codeCheck.rows[0]?.def.includes(retired), false, `${retired} must be retired`);
+    }
 
     // Forced RLS + the four permissive project.settings:manage policies.
     const rlsFlags = await db.query(
@@ -2268,14 +2265,10 @@ try {
       );
     }
 
-    // API roles cannot call nextval() directly on any live sequence, nor
-    // invoke the SECURITY DEFINER trigger function directly. The three
-    // sequences of the retired vocabulary must be gone.
-    for (const seq of [
-      'public.party_local_supplier_code_seq',
-      'public.party_foreign_supplier_code_seq',
-      'public.party_customer_code_seq',
-    ]) {
+    // API roles cannot call nextval() directly on either branch sequence, nor
+    // invoke the SECURITY DEFINER trigger function directly. The per-type
+    // sequences of the retired model must be gone.
+    for (const seq of ['public.party_inbound_code_seq', 'public.party_outbound_code_seq']) {
       for (const role of ['anon', 'authenticated']) {
         assert.equal(
           (await db.query('select has_sequence_privilege($1, $2, $3) as ok', [role, seq, 'USAGE']))
@@ -2286,6 +2279,9 @@ try {
       }
     }
     for (const retired of [
+      'party_local_supplier_code_seq',
+      'party_foreign_supplier_code_seq',
+      'party_customer_code_seq',
       'party_supplier_code_seq',
       'party_sister_company_code_seq',
       'party_internal_code_seq',
@@ -2318,279 +2314,213 @@ try {
 
     const createdIds = [];
     try {
-      // 1) Retired and unknown types are rejected with 23514 without burning a
-      //    sequence value, and NULL `type` fails NOT NULL with 23502.
-      const locNextBeforeBadType = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
-      for (const badType of [
+      // 1) A branch outside the two roots is rejected with 23514 without
+      //    burning a sequence value, and NULL `branch` fails NOT NULL with
+      //    23502. The retired vocabulary is simply not a value any more.
+      const inboundNextBeforeBadBranch = await nextPartyCode('party_inbound_code_seq', 'IN');
+      for (const badBranch of [
+        'local_supplier',
+        'foreign_supplier',
+        'customer',
         'supplier',
         'internal',
         'sister_company',
         'vendor',
-        'partner',
         '',
-        'LOCAL_SUPPLIER',
-        ' local_supplier ',
+        'INBOUND',
+        ' inbound ',
       ]) {
         await expectCode('23514', () =>
-          db.query('insert into public.parties (type, name) values ($1, $2)', [
-            badType,
+          db.query('insert into public.parties (branch, name) values ($1, $2)', [
+            badBranch,
             'جهة مرفوضة',
           ]),
         );
       }
       await expectCode('23502', () =>
-        db.query('insert into public.parties (type, name) values (null, $1)', ['جهة بلا نوع']),
+        db.query('insert into public.parties (branch, name) values (null, $1)', ['جهة بلا فرع']),
       );
       assert.equal(
-        await nextPartyCode('party_local_supplier_code_seq', 'LOC'),
-        locNextBeforeBadType,
-        'rejected party types must not advance any sequence',
+        await nextPartyCode('party_inbound_code_seq', 'IN'),
+        inboundNextBeforeBadBranch,
+        'a rejected branch must not advance any sequence',
       );
 
-      // 2) Each live type mints from its own sequence, and a client-supplied
-      //    code is overwritten server-side.
-      const expectedLoc1 = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
-      const loc1 = (
+      // 2) Each branch mints from its own sequence, and a client-supplied code
+      //    is overwritten server-side.
+      const expectedIn1 = await nextPartyCode('party_inbound_code_seq', 'IN');
+      const in1 = (
         await asRole('authenticated', A, (c) =>
-          c.query(
-            `insert into public.parties (
-               type, name, tax_number, commercial_register, address,
-               contact_person, phone, email, credit_limit, payment_terms
-             )
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             returning *`,
-            [
-              'local_supplier',
-              'شركة النيل للتوريدات',
-              '300-111-222',
-              'CR-10293',
-              'القاهرة - المنطقة الصناعية',
-              'أحمد محمود',
-              '+201001234567',
-              'sales@nile-supplies.example.com',
-              250000.5,
-              30,
-            ],
-          ),
+          c.query('insert into public.parties (branch, name) values ($1, $2) returning *', [
+            'inbound',
+            'شركة النيل للتوريدات',
+          ]),
         )
       ).rows[0];
-      createdIds.push(loc1.id);
-      assert.equal(loc1.code, expectedLoc1);
-      assert.match(loc1.code, /^LOC-\d{3,}$/);
-      assert.equal(loc1.is_active, true);
-      assert.equal(Number(loc1.credit_limit), 250000.5);
-      assert.equal(loc1.payment_terms, 30);
+      createdIds.push(in1.id);
+      assert.equal(in1.code, expectedIn1);
+      assert.match(in1.code, /^IN-\d{3,}$/);
+      assert.equal(in1.branch, 'inbound');
+      assert.equal(in1.is_active, true);
 
-      const expectedLoc2 = await nextPartyCode('party_local_supplier_code_seq', 'LOC');
-      const loc2 = (
-        await asRole('authenticated', A, (c) =>
-          c.query(
-            'insert into public.parties (type, name, code) values ($1, $2, $3) returning id, code',
-            ['local_supplier', 'مورد محلي ثانٍ للاختبار', 'CUS-999'],
-          ),
-        )
-      ).rows[0];
-      createdIds.push(loc2.id);
-      assert.equal(loc2.code, expectedLoc2);
-      assert.notEqual(loc2.code, 'CUS-999');
-
-      for (const [partyType, seqName, prefix, label] of [
-        ['foreign_supplier', 'party_foreign_supplier_code_seq', 'FRN', 'Nile Trading GmbH'],
-        ['customer', 'party_customer_code_seq', 'CUS', 'عميل جملة للاختبار'],
+      /* The row is identity only: no retired column exists to read. */
+      for (const retired of [
+        'type',
+        'tax_number',
+        'commercial_register',
+        'address',
+        'contact_person',
+        'phone',
+        'email',
+        'credit_limit',
+        'payment_terms',
       ]) {
-        const expected = await nextPartyCode(seqName, prefix);
-        const row = (
-          await asRole('authenticated', A, (c) =>
-            c.query(
-              'insert into public.parties (type, name) values ($1, $2) returning id, code, type',
-              [partyType, label],
-            ),
-          )
-        ).rows[0];
-        createdIds.push(row.id);
-        assert.equal(row.type, partyType);
-        assert.equal(row.code, expected);
-        assert.match(row.code, new RegExp(`^${prefix}-\\d{3,}$`));
+        assert.equal(in1[retired], undefined, `parties must not expose ${retired}`);
       }
 
-      // Padding width guard: 999 -> FRN-999, 1000 -> FRN-1000 (never FRN-100).
-      const savedFrnSeq = (
-        await db.query('select last_value, is_called from public.party_foreign_supplier_code_seq')
+      const expectedIn2 = await nextPartyCode('party_inbound_code_seq', 'IN');
+      const in2 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'insert into public.parties (branch, name, code) values ($1, $2, $3) returning id, code',
+            ['inbound', 'مورد وارد ثانٍ للاختبار', 'OUT-999'],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(in2.id);
+      assert.equal(in2.code, expectedIn2);
+      assert.notEqual(in2.code, 'OUT-999');
+
+      const expectedOut1 = await nextPartyCode('party_outbound_code_seq', 'OUT');
+      const out1 = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            'insert into public.parties (branch, name) values ($1, $2) returning id, code, branch',
+            ['outbound', 'جهة صرف للاختبار'],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(out1.id);
+      assert.equal(out1.branch, 'outbound');
+      assert.equal(out1.code, expectedOut1);
+      assert.match(out1.code, /^OUT-\d{3,}$/);
+
+      /* The two sequences are independent: minting outbound did not move the
+         inbound counter. */
+      const nextInbound = Number(expectedIn2.split('-')[1]) + 1;
+      assert.equal(
+        await nextPartyCode('party_inbound_code_seq', 'IN'),
+        `IN-${String(nextInbound).padStart(3, '0')}`,
+        'the outbound insert must not advance the inbound sequence',
+      );
+
+      // Padding width guard: 999 -> OUT-999, 1000 -> OUT-1000 (never OUT-100).
+      const savedOutSeq = (
+        await db.query('select last_value, is_called from public.party_outbound_code_seq')
       ).rows[0];
       try {
-        await db.query('select setval($1, 998, true)', ['public.party_foreign_supplier_code_seq']);
+        await db.query('select setval($1, 998, true)', ['public.party_outbound_code_seq']);
         const row999 = (
           await db.query(
-            "insert into public.parties (type, name) values ('foreign_supplier', 'أجنبي 999') returning id, code",
+            "insert into public.parties (branch, name) values ('outbound', 'صرف 999') returning id, code",
           )
         ).rows[0];
         const row1000 = (
           await db.query(
-            "insert into public.parties (type, name) values ('foreign_supplier', 'أجنبي 1000') returning id, code",
+            "insert into public.parties (branch, name) values ('outbound', 'صرف 1000') returning id, code",
           )
         ).rows[0];
-        assert.equal(row999.code, 'FRN-999');
-        assert.equal(row1000.code, 'FRN-1000');
+        assert.equal(row999.code, 'OUT-999');
+        assert.equal(row1000.code, 'OUT-1000');
         await db.query('delete from public.parties where id = any($1::uuid[])', [
           [row999.id, row1000.id],
         ]);
       } finally {
         await db.query('select setval($1, $2, $3)', [
-          'public.party_foreign_supplier_code_seq',
-          savedFrnSeq.last_value,
-          savedFrnSeq.is_called,
+          'public.party_outbound_code_seq',
+          savedOutSeq.last_value,
+          savedOutSeq.is_called,
         ]);
       }
 
-      // 3) Immutability on UPDATE: changing `type` or `code` is refused with 22023
-      //    both for direct SQL and for an authorized API caller.
+      // 3) Immutability on UPDATE: changing `branch` or `code` is refused with
+      //    22023 both for direct SQL and for an authorized API caller.
       await expectCode('22023', () =>
-        db.query("update public.parties set type = 'customer' where id = $1", [loc1.id]),
+        db.query("update public.parties set branch = 'outbound' where id = $1", [in1.id]),
       );
       await expectCode('22023', () =>
-        db.query('update public.parties set type = null where id = $1', [loc1.id]),
+        db.query('update public.parties set branch = null where id = $1', [in1.id]),
       );
       await expectCode('22023', () =>
-        db.query("update public.parties set code = 'LOC-999' where id = $1", [loc1.id]),
+        db.query("update public.parties set code = 'IN-999' where id = $1", [in1.id]),
       );
       await expectCode('22023', () =>
-        db.query('update public.parties set code = null where id = $1', [loc1.id]),
+        db.query('update public.parties set code = null where id = $1', [in1.id]),
       );
       await expectCode('22023', () =>
         asRole('authenticated', A, (c) =>
-          c.query("update public.parties set type = 'foreign_supplier' where id = $1", [loc1.id]),
+          c.query("update public.parties set branch = 'outbound' where id = $1", [in1.id]),
         ),
       );
       await expectCode('22023', () =>
         asRole('authenticated', A, (c) =>
-          c.query("update public.parties set code = 'CUS-001' where id = $1", [loc1.id]),
+          c.query("update public.parties set code = 'OUT-001' where id = $1", [in1.id]),
         ),
       );
 
       // Mutable fields update cleanly and advance `updated_at` via set_updated_at().
       await db.query(
         "update public.parties set updated_at = now() - interval '5 minutes' where id = $1",
-        [loc1.id],
+        [in1.id],
       );
       const beforeStamp = (
-        await db.query('select updated_at from public.parties where id = $1', [loc1.id])
+        await db.query('select updated_at from public.parties where id = $1', [in1.id])
       ).rows[0].updated_at;
-      const updatedLoc = (
+      const updatedIn = (
         await asRole('authenticated', A, (c) =>
           c.query(
-            'update public.parties set name = $1, is_active = false where id = $2 returning name, is_active, updated_at, type, code',
-            ['شركة النيل للتوريدات المحدّثة', loc1.id],
+            'update public.parties set name = $1, is_active = false where id = $2 returning name, is_active, updated_at, branch, code',
+            ['شركة النيل للتوريدات المحدّثة', in1.id],
           ),
         )
       ).rows[0];
-      assert.equal(updatedLoc.name, 'شركة النيل للتوريدات المحدّثة');
-      assert.equal(updatedLoc.is_active, false);
-      assert.equal(updatedLoc.type, 'local_supplier');
-      assert.equal(updatedLoc.code, loc1.code);
-      assert.ok(updatedLoc.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
+      assert.equal(updatedIn.name, 'شركة النيل للتوريدات المحدّثة');
+      assert.equal(updatedIn.is_active, false);
+      assert.equal(updatedIn.branch, 'inbound');
+      assert.equal(updatedIn.code, in1.code);
+      assert.ok(updatedIn.updated_at > beforeStamp, 'updated_at must advance on UPDATE');
 
-      // 4) payment_terms: NULL and 0/15/30/60/90 succeed; everything else fails with 23514.
-      for (const validTerms of [null, 0, 15, 30, 60, 90]) {
-        const res = await db.query(
-          'update public.parties set payment_terms = $1 where id = $2 returning payment_terms',
-          [validTerms, loc1.id],
-        );
-        assert.equal(res.rows[0].payment_terms, validTerms);
-      }
-      for (const badTerms of [-30, -1, 1, 7, 10, 45, 75, 120]) {
-        await expectCode('23514', () =>
-          db.query('update public.parties set payment_terms = $1 where id = $2', [
-            badTerms,
-            loc1.id,
-          ]),
-        );
-        await expectCode('23514', () =>
-          db.query(
-            "insert into public.parties (type, name, payment_terms) values ('customer', 'عميل شروط خاطئة', $1)",
-            [badTerms],
-          ),
-        );
-      }
-
-      // 5) credit_limit: NULL, 0 and positive decimals succeed; negative values fail with 23514.
-      for (const validLimit of [null, 0, '0.00', '999999999999.99']) {
-        await db.query('update public.parties set credit_limit = $1 where id = $2', [
-          validLimit,
-          loc1.id,
-        ]);
-      }
-      for (const badLimit of [-0.01, -1, -50000]) {
-        await expectCode('23514', () =>
-          db.query('update public.parties set credit_limit = $1 where id = $2', [
-            badLimit,
-            loc1.id,
-          ]),
-        );
-        await expectCode('23514', () =>
-          db.query(
-            "insert into public.parties (type, name, credit_limit) values ('customer', 'عميل ائتمان سالب', $1)",
-            [badLimit],
-          ),
-        );
-      }
-
-      // 5b) Credit terms are allowed on every remaining type — both supplier
-      // kinds and customers — because all three are commercial counterparties.
-      for (const [creditType, creditLabel] of [
-        ['local_supplier', 'مورد محلي بائتمان'],
-        ['foreign_supplier', 'أجنبي بائتمان'],
-        ['customer', 'عميل بائتمان'],
-      ]) {
-        const probe = (
-          await db.query(
-            'insert into public.parties (type, name, credit_limit, payment_terms) values ($1, $2, $3, $4) returning id, credit_limit, payment_terms',
-            [creditType, creditLabel, 100, 15],
-          )
-        ).rows[0];
-        createdIds.push(probe.id);
-        assert.equal(Number(probe.credit_limit), 100);
-        assert.equal(probe.payment_terms, 15);
-      }
-
-      // 6) email: NULL and well-formed addresses succeed; malformed addresses fail with 23514.
-      for (const validEmail of [null, 'info@company.com', 'Billing.Dept+eg@sub.domain-eg.co.uk']) {
-        const res = await db.query(
-          'update public.parties set email = $1 where id = $2 returning email',
-          [validEmail, loc1.id],
-        );
-        assert.equal(res.rows[0].email, validEmail);
-      }
-      for (const badEmail of [
-        '',
-        '   ',
-        'not-an-email',
-        'missing-at.example.com',
-        '@missing-local.com',
-        'missing-domain@',
-        'user@localhost',
-        'user@domain.c',
-        'has space@domain.com',
-        'sales@company.com\n',
-      ]) {
-        await expectCode('23514', () =>
-          db.query('update public.parties set email = $1 where id = $2', [badEmail, loc1.id]),
-        );
-        await expectCode('23514', () =>
-          db.query(
-            "insert into public.parties (type, name, email) values ('customer', 'عميل بريد خاطئ', $1)",
-            [badEmail],
-          ),
-        );
-      }
-
-      // 7) Blank `name` is rejected with 23514.
+      // 4) Blank `name` is rejected with 23514.
       for (const blankName of ['', '   ', '\t\n']) {
         await expectCode('23514', () =>
-          db.query('update public.parties set name = $1 where id = $2', [blankName, loc1.id]),
+          db.query('update public.parties set name = $1 where id = $2', [blankName, in1.id]),
+        );
+        await expectCode('23514', () =>
+          db.query('insert into public.parties (branch, name) values ($1, $2)', [
+            'inbound',
+            blankName,
+          ]),
         );
       }
 
-      // 8) Runtime RLS isolation: anon and non-privileged authenticated users are blocked.
+      // 5) The retired profile columns are not even addressable.
+      for (const retired of [
+        'type',
+        'tax_number',
+        'commercial_register',
+        'address',
+        'contact_person',
+        'phone',
+        'email',
+        'credit_limit',
+        'payment_terms',
+      ]) {
+        await expectCode('42703', () =>
+          db.query(`update public.parties set ${retired} = null where id = $1`, [in1.id]),
+        );
+      }
+
+      // 6) Runtime RLS isolation: anon and non-privileged authenticated users are blocked.
       await expectDenied(() =>
         asRole('anon', null, (c) => c.query('select id from public.parties')),
       );
@@ -2600,25 +2530,36 @@ try {
       assert.equal(viewerRows.rowCount, 0, 'viewer without project.settings:manage sees 0 rows');
       await expectCode('42501', () =>
         asRole('authenticated', V, (c) =>
-          c.query("insert into public.parties (type, name) values ('local_supplier', 'ممنوع')"),
+          c.query("insert into public.parties (branch, name) values ('inbound', 'ممنوع')"),
         ),
       );
       const viewerUpdate = await asRole('authenticated', V, (c) =>
-        c.query("update public.parties set name = 'ممنوع' where id = $1", [loc1.id]),
+        c.query("update public.parties set name = 'ممنوع' where id = $1", [in1.id]),
       );
       assert.equal(viewerUpdate.rowCount, 0);
       const viewerDelete = await asRole('authenticated', V, (c) =>
-        c.query('delete from public.parties where id = $1', [loc1.id]),
+        c.query('delete from public.parties where id = $1', [in1.id]),
       );
       assert.equal(viewerDelete.rowCount, 0);
 
-      // 9) The newest migration replays cleanly while live rows exist.
+      // 7) The newest migration replays cleanly while live rows exist.
       await db.query(
         await readFile(
-          `${ROOT}supabase/migrations/20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
+          `${ROOT}supabase/migrations/20261109000000_parties_two_root_tree.sql`,
           'utf8',
         ),
       );
+      const afterReplay = await db.query(
+        'select id, code, branch from public.parties order by code',
+      );
+      assert.ok(afterReplay.rowCount >= 3, 'replay must not lose live rows');
+      for (const row of afterReplay.rows) {
+        assert.match(
+          row.code,
+          row.branch === 'inbound' ? /^IN-\d{3,}$/ : /^OUT-\d{3,}$/,
+          'replay must not re-key a row onto the wrong prefix',
+        );
+      }
     } finally {
       if (createdIds.length > 0) {
         await db.query('delete from public.parties where id = any($1::uuid[])', [createdIds]);
@@ -2856,17 +2797,39 @@ try {
 
       // 8) The newest migration replays cleanly while live rows exist (a fresh
       //    parent is inserted first so there is something to replay over).
+      //    The parties two-root migration deliberately leaves sister_companies
+      //    alone, so replaying it must be a no-op for this tree — which is
+      //    exactly what this assertion pins down.
       const replayParent = (
         await db.query(
           "insert into public.sister_companies (name) values ('شقيقة إعادة التشغيل') returning id",
         )
       ).rows[0];
       createdIds.push(replayParent.id);
+      const sistersBefore = Number(
+        (await db.query('select count(*)::int as n from public.sister_companies')).rows[0].n,
+      );
       await db.query(
         await readFile(
-          `${ROOT}supabase/migrations/20261108000000_inbound_outbound_parties_and_sister_companies.sql`,
+          `${ROOT}supabase/migrations/20261109000000_parties_two_root_tree.sql`,
           'utf8',
         ),
+      );
+      const sistersAfterReplay = await db.query(
+        'select id, name, code, level from public.sister_companies where id = $1',
+        [replayParent.id],
+      );
+      assert.equal(sistersAfterReplay.rowCount, 1, 'replay must not delete sister companies');
+      assert.equal(sistersAfterReplay.rows[0].name, 'شقيقة إعادة التشغيل');
+      assert.match(sistersAfterReplay.rows[0].code, /^SIS-\d{3,}$/);
+      assert.equal(Number(sistersAfterReplay.rows[0].level), 1);
+      // Replaying must not mint a second code for the same row either.
+      assert.equal(
+        Number(
+          (await db.query('select count(*)::int as n from public.sister_companies')).rows[0].n,
+        ),
+        sistersBefore,
+        'replay must not duplicate sister companies',
       );
     } finally {
       // Branches first: the parent FK is ON DELETE RESTRICT.

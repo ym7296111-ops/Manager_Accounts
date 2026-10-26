@@ -77,17 +77,9 @@ beforeEach(() => {
 
 const row = (patch: Record<string, unknown> = {}) => ({
   id: 'p1',
-  type: 'local_supplier',
-  code: 'LOC-001',
+  branch: 'inbound',
+  code: 'IN-001',
   name: 'شركة النيل',
-  tax_number: null,
-  commercial_register: null,
-  address: null,
-  contact_person: null,
-  phone: null,
-  email: null,
-  credit_limit: null,
-  payment_terms: null,
   is_active: true,
   ...patch,
 });
@@ -99,80 +91,45 @@ describe('parseParties', () => {
     expect(parseParties({})).toEqual([]);
   });
 
-  it('orders by type (local supplier, foreign supplier, customer), then numeric code', () => {
+  it('orders by branch (inbound, then outbound), then numeric code', () => {
     const parsed = parseParties([
-      row({ id: 'c1', type: 'customer', code: 'CUS-001', name: 'عميل' }),
-      row({ id: 'l10', type: 'local_supplier', code: 'LOC-010', name: 'عاشر' }),
-      row({ id: 'f1', type: 'foreign_supplier', code: 'FRN-001', name: 'أجنبي' }),
-      row({ id: 'l2', type: 'local_supplier', code: 'LOC-002', name: 'ثانٍ' }),
+      row({ id: 'o1', branch: 'outbound', code: 'OUT-001', name: 'صرف' }),
+      row({ id: 'i10', branch: 'inbound', code: 'IN-010', name: 'عاشر' }),
+      row({ id: 'i2', branch: 'inbound', code: 'IN-002', name: 'ثانٍ' }),
     ]);
 
-    expect(parsed.map((party) => party.code)).toEqual(['LOC-002', 'LOC-010', 'FRN-001', 'CUS-001']);
+    expect(parsed.map((party) => party.code)).toEqual(['IN-002', 'IN-010', 'OUT-001']);
   });
 
-  it('maps the wire columns onto the render model', () => {
-    const [party] = parseParties([
-      row({
-        tax_number: '123456789',
-        commercial_register: '101010',
-        address: 'المنطقة الصناعية',
-        contact_person: 'أحمد سامي',
-        phone: '+20238200000',
-        email: 'sales@nile-supplies.example.com',
-        credit_limit: 250000,
-        payment_terms: 30,
-        is_active: false,
-      }),
-    ]);
+  it('maps the wire row onto the render model — identity only', () => {
+    const [party] = parseParties([row({ is_active: false })]);
 
     expect(party).toEqual({
       id: 'p1',
-      type: 'local_supplier',
-      code: 'LOC-001',
+      branch: 'inbound',
+      code: 'IN-001',
       name: 'شركة النيل',
-      taxNumber: '123456789',
-      commercialRegister: '101010',
-      address: 'المنطقة الصناعية',
-      contactPerson: 'أحمد سامي',
-      phone: '+20238200000',
-      email: 'sales@nile-supplies.example.com',
-      creditLimit: 250000,
-      paymentTerms: 30,
       isActive: false,
     });
+    /* No other column survives: the commercial profile was retired. */
+    expect(Object.keys(party ?? {}).sort()).toEqual(['branch', 'code', 'id', 'isActive', 'name']);
   });
 
-  it('tolerates a stringified credit limit and collapses blank optionals to null', () => {
-    const [party] = parseParties([row({ tax_number: '   ', credit_limit: '250.5' })]);
-    expect(party?.taxNumber).toBeNull();
-    expect(party?.creditLimit).toBe(250.5);
-  });
-
-  it('reads impossible credit values as unset instead of trusting them', () => {
-    const [party] = parseParties([row({ credit_limit: -3, payment_terms: 45 })]);
-    expect(party?.creditLimit).toBeNull();
-    expect(party?.paymentTerms).toBeNull();
-
-    const [immediate] = parseParties([row({ credit_limit: 0, payment_terms: 0 })]);
-    expect(immediate?.creditLimit).toBe(0);
-    expect(immediate?.paymentTerms).toBe(0);
-  });
-
-  it('drops malformed rows instead of blanking the directory', () => {
+  it('drops malformed rows instead of blanking the tree', () => {
     const parsed = parseParties([
       row(),
-      row({ id: 'p2', code: 'LOC-002', name: '' }),
-      row({ id: 'p3', code: 'LOC-003', type: 'vendor', name: 'نوع مجهول' }),
-      /* Retired types have no badge and no place in the table. */
-      row({ id: 'p4', code: 'SIS-001', type: 'sister_company', name: 'شقيقة' }),
-      row({ id: 'p5', code: 'INT-001', type: 'internal', name: 'داخلية' }),
-      row({ id: 'p1', code: 'LOC-099', name: 'مكررة' }),
+      row({ id: 'p2', code: 'IN-002', name: '' }),
+      row({ id: 'p3', code: 'IN-003', branch: 'vendor', name: 'فرع مجهول' }),
+      /* The retired vocabulary is a dropped row, not a rendered one. */
+      row({ id: 'p4', code: 'LOC-001', branch: 'local_supplier', name: 'قديم' }),
+      row({ id: 'p5', code: 'SIS-001', branch: 'sister_company', name: 'شقيقة' }),
+      row({ id: 'p1', code: 'IN-099', name: 'مكررة' }),
       'not a row',
       null,
     ]);
 
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]?.code).toBe('LOC-001');
+    expect(parsed[0]?.code).toBe('IN-001');
   });
 });
 
@@ -198,7 +155,7 @@ describe('classifyPartiesError', () => {
 });
 
 describe('useParties', () => {
-  it('reads the whole directory in one request, ordered by code', async () => {
+  it('reads the whole tree in one request, ordered by code', async () => {
     respondWith([row()]);
     const { result } = mountHook();
 
