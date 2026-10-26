@@ -113,4 +113,70 @@ describe('fiscal settings with the preview-only Supabase stand-in', () => {
       },
     ]);
   });
+
+  /*
+   * The stand-in reproduces the freeze as well, so the preview cannot show an
+   * editable tree for a year the real RLS policy would refuse. This runs
+   * against `memorySupabase`, not mocks: the switch, the hook and the fake
+   * PostgREST handler are all the same code the review build runs.
+   */
+  it('freezes the active year through the switch and refuses writes in the stand-in', async () => {
+    const client = getPreviewSupabase();
+    const { data: yearRows, error: yearError } = await client
+      .from('fiscal_years')
+      .select('id, name, is_active, opening_balances_locked')
+      .eq('is_active', true);
+    expect(yearError).toBeNull();
+    const activeYear = (
+      yearRows as { id: string; name: string; opening_balances_locked: boolean }[]
+    )[0];
+    expect(activeYear?.opening_balances_locked).toBe(false);
+
+    renderPreviewFiscalSettings();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Opening balances' }));
+    const lockSwitch = await screen.findByRole('switch');
+    expect(lockSwitch.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(lockSwitch);
+    fireEvent.click(screen.getByRole('button', { name: 'Lock balances' }));
+
+    await screen.findByText('Opening balances are now locked.');
+    expect(
+      screen.getByRole('switch').getAttribute('aria-checked'),
+      'The switch follows the row the database returned.',
+    ).toBe('true');
+
+    const { data: lockedRows, error: lockedError } = await client
+      .from('fiscal_years')
+      .select('opening_balances_locked')
+      .eq('id', activeYear!.id);
+    expect(lockedError).toBeNull();
+    expect(lockedRows).toMatchObject([{ opening_balances_locked: true }]);
+
+    /* A write that bypassed the disabled UI would still be refused. */
+    const { error: frozenWriteError } = await client.from('opening_balances').upsert([
+      {
+        fiscal_year_id: activeYear!.id,
+        warehouse_id: 'w-1',
+        classification_id: 'i-wood',
+        amount: '9.99',
+      },
+    ]);
+    expect(frozenWriteError).toEqual(expect.objectContaining({ code: '42501' }));
+
+    /* The other direction: reopen, and the same write succeeds. */
+    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock balances' }));
+    await screen.findByText('Opening balances are open for editing again.');
+
+    const { error: reopenedWriteError } = await client.from('opening_balances').upsert([
+      {
+        fiscal_year_id: activeYear!.id,
+        warehouse_id: 'w-1',
+        classification_id: 'i-wood',
+        amount: '9.99',
+      },
+    ]);
+    expect(reopenedWriteError).toBeNull();
+  });
 });

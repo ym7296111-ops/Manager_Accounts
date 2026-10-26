@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Landmark } from 'lucide-react';
+import { ChevronDown, ChevronRight, Landmark, Lock, Unlock } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
@@ -12,6 +12,7 @@ import {
   useFiscalYears,
   useOpeningBalances,
   useSaveOpeningBalances,
+  useSetOpeningBalancesLock,
   type FiscalSettingsWriteErrorCode,
   type OpeningBalanceWrite,
 } from '@/hooks/useFiscalSettings';
@@ -23,6 +24,10 @@ import {
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import type { DeleteOpeningBalanceTarget } from './DeleteOpeningBalanceDialog';
 import { FiscalBanner, FiscalLoading } from './FiscalSettingsFeedback';
+import {
+  OpeningBalancesLockDialog,
+  type OpeningBalancesLockTarget,
+} from './OpeningBalancesLockDialog';
 import { OpeningBalancesWarehouse } from './OpeningBalancesWarehouse';
 import { formatCents } from './fiscalSettingsUtils';
 import { useOpeningBalanceDrafts } from './useOpeningBalanceDrafts';
@@ -66,7 +71,11 @@ const GUARD_KEY = 'opening-balances';
  * * deleting is an explicit, confirmed action against the saved row, audited in
  *   the database; a line added in this session is just discarded;
  * * switching tabs with unsaved drafts asks first, and a reload warns through
- *   `beforeunload`.
+ *   `beforeunload`;
+ * * a year can be frozen («قفل أرصدة أول المدة»). While it is, every input,
+ *   the add-picker, delete and save are disabled, a warning banner says why,
+ *   and the database refuses the writes regardless — see
+ *   `20261112000000_opening_balances_freeze.sql`.
  */
 export default function OpeningBalancesSettings() {
   const { t, locale } = useI18n();
@@ -77,14 +86,16 @@ export default function OpeningBalancesSettings() {
   const balancesQuery = useOpeningBalances(activeYear?.id ?? null);
   const saveBalances = useSaveOpeningBalances();
   const deleteBalance = useDeleteOpeningBalance();
+  const setLock = useSetOpeningBalancesLock();
 
   const [expandedStations, setExpandedStations] = useState<ReadonlySet<string>>(() => new Set());
   const [expandedWarehouses, setExpandedWarehouses] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   const [savingWarehouseId, setSavingWarehouseId] = useState<string | null>(null);
+  const [lockTarget, setLockTarget] = useState<OpeningBalancesLockTarget | null>(null);
   const [banner, setBanner] = useState<{
-    readonly tone: 'error' | 'success';
+    readonly tone: 'error' | 'success' | 'warning';
     readonly key: TranslationKey;
   } | null>(null);
 
@@ -97,6 +108,12 @@ export default function OpeningBalancesSettings() {
     activeLeafClassifications,
     activeYear?.id ?? null,
   );
+
+  /* The freeze state of the active year, read from `fiscal_years` — never from
+     local state. A second tab can lock the year between two renders, and the
+     database refuses the write anyway; this flag is what makes the screen say
+     so before the operator types into a dead field. */
+  const locked = activeYear?.opening_balances_locked === true;
 
   /* A year switch invalidates every draft: they were typed against the previous
      year's balances, and carrying them over would write them to the wrong one. */
@@ -217,7 +234,24 @@ export default function OpeningBalancesSettings() {
       0n,
     );
 
+  /* A refusal the year's freeze explains (forbidden on INSERT, notFound on a
+     filtered DELETE) means this tab's cached `fiscal_years` row is stale —
+     another tab locked the year. Re-reading it turns the reason into the
+     banner and disables the controls, instead of leaving the operator with an
+     error they cannot act on. */
+  const refreshIfFrozenElsewhere = async (code: FiscalSettingsWriteErrorCode) => {
+    if (code === 'forbidden' || code === 'notFound') {
+      await yearsQuery.refetch();
+    }
+  };
+
   const handleSave = async (warehouseId: string) => {
+    /* The database is the authority (see useSetOpeningBalancesLock), but a
+       frozen screen must not even try: the fields are disabled, so a queued
+       click or a stale render is the only way here. */
+    if (locked) {
+      return;
+    }
     const model = drafts.modelFor(warehouseId);
     const rows: OpeningBalanceWrite[] = model.dirtyRows.filter((row) => row.amount !== '');
     if (rows.length === 0) {
@@ -232,16 +266,18 @@ export default function OpeningBalancesSettings() {
       drafts.clearSaved(rows);
       setBanner({ tone: 'success', key: 'settings.project.fiscal.openingBalances.success.saved' });
     } catch (error) {
-      setBanner({
-        tone: 'error',
-        key: WRITE_ERROR_KEYS[classifyFiscalSettingsWriteError(error, 'saveOpeningBalances')],
-      });
+      const code = classifyFiscalSettingsWriteError(error, 'saveOpeningBalances');
+      setBanner({ tone: 'error', key: WRITE_ERROR_KEYS[code] });
+      void refreshIfFrozenElsewhere(code);
     } finally {
       setSavingWarehouseId(null);
     }
   };
 
   const handleDelete = async (target: DeleteOpeningBalanceTarget) => {
+    if (locked) {
+      return;
+    }
     setBanner(null);
     try {
       await deleteBalance.mutateAsync({
@@ -262,9 +298,42 @@ export default function OpeningBalancesSettings() {
           key: 'settings.project.fiscal.openingBalances.notice.alreadyDeleted',
         });
         void balancesQuery.refetch();
+        void refreshIfFrozenElsewhere(code);
         return;
       }
       setBanner({ tone: 'error', key: WRITE_ERROR_KEYS[code] });
+      void refreshIfFrozenElsewhere(code);
+    }
+  };
+
+  const handleLockChange = async () => {
+    if (lockTarget === null) {
+      return;
+    }
+    const target = lockTarget;
+    setBanner(null);
+    try {
+      await setLock.mutateAsync({ fiscalYearId: activeYear.id, locked: target.locked });
+      /* Locking makes every draft unsaveable — the write it would issue is
+         exactly what RLS now refuses — so the drafts are dropped on purpose,
+         after the dialog has warned about it. Unlocking leaves them alone. */
+      if (target.locked) {
+        drafts.reset();
+      }
+      setBanner({
+        tone: 'success',
+        key: target.locked
+          ? 'settings.project.fiscal.openingBalances.lock.success.locked'
+          : 'settings.project.fiscal.openingBalances.lock.success.unlocked',
+      });
+    } catch (error) {
+      const code = classifyFiscalSettingsWriteError(error, 'setOpeningBalancesLock');
+      setBanner({ tone: 'error', key: WRITE_ERROR_KEYS[code] });
+      /* `notFound` here means the update was filtered (lost capability or a
+         deleted year): re-read so the switch shows the state the database has. */
+      void refreshIfFrozenElsewhere(code);
+    } finally {
+      setLockTarget(null);
     }
   };
 
@@ -273,6 +342,12 @@ export default function OpeningBalancesSettings() {
       {banner !== null ? (
         <FiscalBanner tone={banner.tone} onDismiss={() => setBanner(null)}>
           {t(banner.key)}
+        </FiscalBanner>
+      ) : null}
+
+      {locked ? (
+        <FiscalBanner tone="warning">
+          {t('settings.project.fiscal.openingBalances.lock.banner', { name: activeYear.name })}
         </FiscalBanner>
       ) : null}
 
@@ -285,6 +360,55 @@ export default function OpeningBalancesSettings() {
             {t('settings.project.fiscal.openingBalances.activeYear', { name: activeYear.name })}
           </p>
         </div>
+
+        {/*
+         * The freeze switch. Visible to whoever reached this screen, which is
+         * already gated by `project.settings:manage` on the route
+         * (`ProjectSettings` → `RequireCapability`) *and* by the RLS policy on
+         * `fiscal_years`; hiding it here would only hide the explanation.
+         *
+         * `role="switch"` with `aria-checked` = "the balances are locked", and
+         * the visible label is the accessible name — no separate aria-label
+         * that could drift from what the operator reads.
+         */}
+        <button
+          type="button"
+          role="switch"
+          id="opening-balances-lock-toggle"
+          aria-checked={locked}
+          disabled={setLock.isPending}
+          onClick={() =>
+            setLockTarget({
+              locked: !locked,
+              yearName: activeYear.name,
+              hasUnsavedDrafts: drafts.isDirty,
+            })
+          }
+          className={[
+            /* `basis-full` on a phone, its own inline pill from `sm` up: the
+               label is a full sentence, and shrinking it next to the heading
+               squeezed both to three lines at 390px. */
+            'inline-flex max-w-full basis-full items-center justify-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors sm:basis-auto sm:justify-start',
+            'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
+            'disabled:cursor-not-allowed disabled:opacity-60',
+            locked
+              ? 'border-destructive/30 bg-destructive/10 text-destructive'
+              : 'border-success/30 bg-success/10 text-success',
+          ].join(' ')}
+        >
+          {locked ? (
+            <Lock className="size-4 shrink-0" aria-hidden="true" />
+          ) : (
+            <Unlock className="size-4 shrink-0" aria-hidden="true" />
+          )}
+          <span className="min-w-0 break-words">
+            {t(
+              locked
+                ? 'settings.project.fiscal.openingBalances.lock.lockedLabel'
+                : 'settings.project.fiscal.openingBalances.lock.unlockedLabel',
+            )}
+          </span>
+        </button>
       </header>
 
       {stations.length > 0 ? (
@@ -360,6 +484,7 @@ export default function OpeningBalancesSettings() {
                               eligibleCount={activeLeafClassifications.length}
                               options={activeLeafClassifications}
                               open={expandedWarehouses.has(warehouseKey)}
+                              locked={locked}
                               onToggle={() => toggleWarehouse(warehouseKey)}
                               saving={savingWarehouseId === warehouse.id}
                               deleting={deleteBalance.isPending}
@@ -396,6 +521,13 @@ export default function OpeningBalancesSettings() {
           description={t('settings.project.fiscal.openingBalances.noStations.description')}
         />
       )}
+
+      <OpeningBalancesLockDialog
+        target={lockTarget}
+        busy={setLock.isPending}
+        onConfirm={() => void handleLockChange()}
+        onClose={() => setLockTarget(null)}
+      />
     </div>
   );
 }

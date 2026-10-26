@@ -13,8 +13,12 @@ export const OPENING_BALANCES_QUERY_KEY = ['project-settings', 'opening-balances
 export const OPENING_BALANCES_CONFLICT_TARGET =
   'fiscal_year_id,warehouse_id,classification_id' as const;
 
+/* One literal, never a concatenation: the Supabase client infers the response
+   type by parsing this string, and `a + b` degrades every result to
+   `GenericStringError`. Prettier leaves long strings alone, which is why this
+   line is wider than the print width. */
 const FISCAL_YEAR_SELECT =
-  'id, name, start_date, end_date, is_active, is_closed, supplements_open, created_at, updated_at';
+  'id, name, start_date, end_date, is_active, is_closed, supplements_open, opening_balances_locked, created_at, updated_at';
 const FISCAL_MONTH_SELECT =
   'id, fiscal_year_id, month_number, name, start_date, end_date, current_period, is_closed, created_at, updated_at';
 
@@ -49,7 +53,12 @@ export type FiscalSettingsWriteErrorCode =
   'unavailable' | 'forbidden' | 'network' | 'validation' | 'duplicate' | 'notFound' | 'unknown';
 
 export type FiscalSettingsWriteOperation =
-  'createYear' | 'activateYear' | 'updatePeriod' | 'saveOpeningBalances' | 'deleteOpeningBalance';
+  | 'createYear'
+  | 'activateYear'
+  | 'updatePeriod'
+  | 'saveOpeningBalances'
+  | 'deleteOpeningBalance'
+  | 'setOpeningBalancesLock';
 
 /** The classification embedded in an opening-balance response. */
 export interface OpeningBalanceClassification {
@@ -253,6 +262,16 @@ export interface SaveOpeningBalancesInput {
 export interface DeleteOpeningBalanceInput {
   readonly fiscalYearId: string;
   readonly balanceId: string;
+}
+
+/**
+ * The freeze switch. `locked: true` closes the year's opening balances to every
+ * write (RLS on `opening_balances`), `false` reopens them; the transition is
+ * audited by the database, not by the client.
+ */
+export interface SetOpeningBalancesLockInput {
+  readonly fiscalYearId: string;
+  readonly locked: boolean;
 }
 
 function isIsoDate(value: string): boolean {
@@ -666,6 +685,57 @@ export function useDeleteOpeningBalance() {
         (current) => current?.filter((row) => row.id !== balanceId),
       );
       invalidation.invalidateBalances(input.fiscalYearId);
+    },
+  });
+}
+
+/**
+ * Switch «قفل أرصدة أول المدة» for one fiscal year.
+ *
+ * Only `opening_balances_locked` is sent. `fiscal_years` has a BEFORE trigger
+ * that derives `name` and rotates `is_active`, so a client that also sent those
+ * columns would fight the trigger; the column-scoped payload keeps the write
+ * exactly as wide as the intent.
+ *
+ * The database enforces the consequence — the RLS policies on
+ * `opening_balances` compare the target year against this same column — and it
+ * audits the transition (`fiscal_year.opening_balances_locked` /
+ * `..._unlocked`) inside the same statement. The client's job is only to flip
+ * the switch and refresh what it caches.
+ *
+ * Zero rows is `notFound`, never success: `.single()` turns that into
+ * PGRST116, which is what an operator who lost `project.settings:manage`
+ * mid-session (or a year that was deleted elsewhere) sees.
+ */
+export function useSetOpeningBalancesLock() {
+  const queryClient = useQueryClient();
+  const invalidation = useInvalidateFiscalSettings();
+
+  return useMutation({
+    mutationFn: async (input: SetOpeningBalancesLockInput): Promise<FiscalYear> => {
+      if (input.fiscalYearId.trim() === '' || typeof input.locked !== 'boolean') {
+        throw new FiscalSettingsWriteError('validation');
+      }
+
+      const supabase = requireSupabase();
+      const { data, error } = await supabase
+        .from('fiscal_years')
+        .update({ opening_balances_locked: input.locked })
+        .eq('id', input.fiscalYearId)
+        .select(FISCAL_YEAR_SELECT)
+        .single();
+
+      return unwrapWrite(data, error, 'setOpeningBalancesLock');
+    },
+    onSuccess: (year) => {
+      queryClient.setQueryData<readonly FiscalYear[]>(FISCAL_YEARS_QUERY_KEY, (current) =>
+        current?.map((candidate) => (candidate.id === year.id ? year : candidate)),
+      );
+      invalidation.invalidateYears();
+      /* The editor derives every disabled state from the year row, but a lock
+         also changes what the balance queries may do; invalidating them keeps
+         a second tab from saving into a year that just closed. */
+      invalidation.invalidateBalances(year.id);
     },
   });
 }

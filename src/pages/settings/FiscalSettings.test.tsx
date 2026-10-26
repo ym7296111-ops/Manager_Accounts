@@ -112,6 +112,7 @@ function createYear(isActive = false): FiscalYear {
     is_active: isActive,
     is_closed: false,
     supplements_open: false,
+    opening_balances_locked: false,
     created_at: '2035-07-01T00:00:00.000Z',
     updated_at: '2035-07-01T00:00:00.000Z',
   };

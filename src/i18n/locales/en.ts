@@ -779,6 +779,24 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.openingBalances.success.addedRows': '{count} row(s) added.',
   'settings.project.fiscal.openingBalances.notice.alreadyDeleted':
     'Balances were already updated — the list has been reloaded.',
+  'settings.project.fiscal.openingBalances.lock.lockedLabel':
+    'Balances are locked — no edits allowed',
+  'settings.project.fiscal.openingBalances.lock.unlockedLabel': 'Balances are open for editing',
+  'settings.project.fiscal.openingBalances.lock.banner':
+    'Opening balances for {name} are locked. No balance can be added, edited or deleted until they are reopened.',
+  'settings.project.fiscal.openingBalances.lock.title': 'Lock opening balances',
+  'settings.project.fiscal.openingBalances.lock.body':
+    'Are you sure you want to lock the opening balances of {name}? Nobody — you included — will be able to add, edit or delete them until they are reopened, and the lock is recorded in the audit log.',
+  'settings.project.fiscal.openingBalances.lock.unsavedDrafts':
+    'You have rows that were entered but not saved; they will be discarded when the year is locked.',
+  'settings.project.fiscal.openingBalances.lock.confirm': 'Lock balances',
+  'settings.project.fiscal.openingBalances.lock.success.locked': 'Opening balances are now locked.',
+  'settings.project.fiscal.openingBalances.unlock.title': 'Unlock opening balances',
+  'settings.project.fiscal.openingBalances.unlock.body':
+    'Are you sure you want to unlock the opening balances of {name}? They become editable again, and the unlock is recorded in the audit log.',
+  'settings.project.fiscal.openingBalances.unlock.confirm': 'Unlock balances',
+  'settings.project.fiscal.openingBalances.lock.success.unlocked':
+    'Opening balances are open for editing again.',
   'settings.project.fiscal.openingBalances.guard.title': 'You have unsaved changes',
   'settings.project.fiscal.openingBalances.guard.body':
     'Leaving this screen will discard the balances you entered and did not save.',

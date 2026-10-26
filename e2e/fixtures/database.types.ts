@@ -93,6 +93,8 @@ export interface E2EDatabase {
           is_active: boolean;
           is_closed: boolean;
           supplements_open: boolean;
+          /** Freeze flag for «أرصدة أول المدة» (20261112000000). */
+          opening_balances_locked: boolean;
           created_at: string;
           updated_at: string;
         },
@@ -104,6 +106,7 @@ export interface E2EDatabase {
           is_active?: boolean;
           is_closed?: boolean;
           supplements_open?: boolean;
+          opening_balances_locked?: boolean;
         }
       >;
       fiscal_months: Table<

@@ -751,6 +751,22 @@ export const ar = {
   'settings.project.fiscal.openingBalances.success.addedRows': 'أُضيف {count} سطراً.',
   'settings.project.fiscal.openingBalances.notice.alreadyDeleted':
     'حُدِّثت الأرصدة مسبقاً — أُعيد التحميل.',
+  'settings.project.fiscal.openingBalances.lock.lockedLabel': 'الأرصدة مقفلة - لا يمكن التعديل',
+  'settings.project.fiscal.openingBalances.lock.unlockedLabel': 'الأرصدة مفتوحة للتعديل',
+  'settings.project.fiscal.openingBalances.lock.banner':
+    'أرصدة أول المدة لسنة {name} مقفلة. لا يمكن إضافة أو تعديل أو حذف أي رصيد حتى تُفتح من جديد.',
+  'settings.project.fiscal.openingBalances.lock.title': 'قفل أرصدة أول المدة',
+  'settings.project.fiscal.openingBalances.lock.body':
+    'هل أنت متأكد من قفل أرصدة سنة {name}؟ لن يستطيع أحد — بما في ذلك أنت — إضافتها أو تعديلها أو حذفها حتى تُفتح من جديد، وتُسجَّل هذه العملية في سجل التدقيق.',
+  'settings.project.fiscal.openingBalances.lock.unsavedDrafts':
+    'لديك أسطر أُدخلت ولم تُحفظ؛ ستُفقد عند القفل.',
+  'settings.project.fiscal.openingBalances.lock.confirm': 'قفل الأرصدة',
+  'settings.project.fiscal.openingBalances.lock.success.locked': 'تم قفل أرصدة أول المدة.',
+  'settings.project.fiscal.openingBalances.unlock.title': 'فتح أرصدة أول المدة',
+  'settings.project.fiscal.openingBalances.unlock.body':
+    'هل أنت متأكد من فتح أرصدة سنة {name}؟ ستعود قابلة للإضافة والتعديل والحذف، وتُسجَّل هذه العملية في سجل التدقيق.',
+  'settings.project.fiscal.openingBalances.unlock.confirm': 'فتح الأرصدة',
+  'settings.project.fiscal.openingBalances.lock.success.unlocked': 'تم فتح أرصدة أول المدة.',
   'settings.project.fiscal.openingBalances.guard.title': 'لديك تغييرات غير محفوظة',
   'settings.project.fiscal.openingBalances.guard.body':
     'مغادرة الشاشة ستُفقد الأرصدة التي أدخلتها ولم تحفظها.',
