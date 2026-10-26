@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
 import type * as ClassificationsModule from '@/hooks/useClassifications';
+import type * as FiscalSettingsModule from '@/hooks/useFiscalSettings';
 import type * as PartiesModule from '@/hooks/useParties';
 import type * as SisterCompaniesModule from '@/hooks/useSisterCompanies';
 import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
@@ -27,6 +28,33 @@ vi.mock('@/hooks/useAuthCapabilities', async (importOriginal) => {
         capabilityState.capabilities.includes('*') || capabilityState.capabilities.includes(slug),
       refetch: vi.fn(),
     }),
+  };
+});
+
+/* The General tab now mounts the fiscal-settings subtabs. Keep this shell test
+   focused on tab wiring; dedicated fiscal-settings tests cover its workflows. */
+vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
+  const actual = await importOriginal<typeof FiscalSettingsModule>();
+  return {
+    ...actual,
+    useFiscalYears: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [],
+      error: null,
+      refetch: vi.fn(),
+    }),
+    useFiscalMonths: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [],
+      error: null,
+      refetch: vi.fn(),
+    }),
+    useCreateFiscalYear: () => ({ isPending: false, mutateAsync: vi.fn() }),
+    useActivateFiscalYear: () => ({ isPending: false, mutateAsync: vi.fn() }),
   };
 });
 
@@ -250,7 +278,11 @@ describe('ProjectSettings', () => {
     expect(screen.queryByText('IN-001')).toBeNull();
 
     fireEvent.click(tabs[4]!);
-    expect(screen.getByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeTruthy();
+    expect(screen.getByRole('tablist', { name: 'الضبط المالي' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'الضبط السنوي' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'الضبط الدوري' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'أرصدة أول المدة' })).toBeTruthy();
+    expect(screen.queryByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeNull();
 
     fireEvent.click(tabs[0]!);
     expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();

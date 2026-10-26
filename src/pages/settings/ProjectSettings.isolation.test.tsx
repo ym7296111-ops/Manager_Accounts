@@ -116,6 +116,12 @@ describe('ProjectSettings separation from the general / branding screen', () => 
       'PartyDialogs.tsx',
       'SisterCompanies.tsx',
       'SisterCompanyDialogs.tsx',
+      'FiscalSettings.tsx',
+      'AnnualFiscalSettings.tsx',
+      'FiscalPeriodsSettings.tsx',
+      'OpeningBalancesSettings.tsx',
+      'FiscalSettingsFeedback.tsx',
+      'fiscalSettingsUtils.ts',
     ]) {
       expect(readSibling(name)).not.toContain('GeneralSettings');
     }

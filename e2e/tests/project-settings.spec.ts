@@ -165,12 +165,14 @@ test('owner sees the stations accordion over the seeded directory', async ({ pag
   // holds no form controls.
   await expect(main.locator('input, select, textarea, form')).toHaveCount(0);
 
-  // The remaining tab is still a placeholder and issues no queries.
+  // General now hosts the three nested financial settings panels.
 
   await tabs.nth(4).click();
-  await expect(
-    main.getByText('General settings content — coming soon.', { exact: true }),
-  ).toBeVisible();
+  const fiscalTabs = main.getByRole('tablist', { name: 'Fiscal settings' });
+  await expect(fiscalTabs.getByRole('tab')).toHaveCount(3);
+  await expect(fiscalTabs.getByRole('tab', { name: 'Annual settings' })).toBeVisible();
+  await expect(fiscalTabs.getByRole('tab', { name: 'Period settings' })).toBeVisible();
+  await expect(fiscalTabs.getByRole('tab', { name: 'Opening balances' })).toBeVisible();
 
   await tabs.nth(0).click();
   await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
