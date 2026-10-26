@@ -116,8 +116,8 @@ test('owner creates a fiscal year, changes its period, saves opening balances an
   await ordinaryAdmin.auth.signOut();
 
   await fiscalTabs.getByRole('tab', { name: 'Opening balances' }).click();
-  await main.getByRole('button', { name: 'Show balances for المحطة الرئيسية' }).click();
-  await main.getByRole('button', { name: 'Show balances for مخزن المواد الخام' }).click();
+  await main.getByRole('button', { name: 'Show warehouses for المحطة الرئيسية' }).click();
+  await main.getByRole('button', { name: 'Show classifications for مخزن المواد الخام' }).click();
 
   const steelBalance = main.getByRole('spinbutton', {
     name: /Opening balance: .*حديد وصلب/,
