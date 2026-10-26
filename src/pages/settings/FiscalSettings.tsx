@@ -4,6 +4,7 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import AnnualFiscalSettings from './AnnualFiscalSettings';
 import FiscalPeriodsSettings from './FiscalPeriodsSettings';
 import OpeningBalancesSettings from './OpeningBalancesSettings';
+import { useUnsavedChanges } from './unsavedChanges';
 
 type FiscalTab = 'annual' | 'periods' | 'openingBalances';
 
@@ -33,6 +34,7 @@ const TABS: readonly FiscalTabConfig[] = [
 
 export default function FiscalSettings() {
   const { t } = useI18n();
+  const { confirmNavigation } = useUnsavedChanges();
   const [activeTab, setActiveTab] = useState<FiscalTab>('annual');
   const activeConfig = TABS.find((tab) => tab.id === activeTab) ?? TABS[0]!;
 
@@ -67,7 +69,7 @@ export default function FiscalSettings() {
                 aria-selected={selected}
                 aria-controls={`fiscal-settings-tabpanel-${id}`}
                 tabIndex={selected ? 0 : -1}
-                onClick={() => setActiveTab(id)}
+                onClick={() => confirmNavigation(() => setActiveTab(id))}
                 className={[
                   'relative inline-flex max-w-full min-w-0 items-center gap-2 border-b-2 px-3 py-3 text-start text-sm font-medium transition-colors sm:px-4',
                   'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',

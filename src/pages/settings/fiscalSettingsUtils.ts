@@ -51,8 +51,15 @@ export function amountToCents(value: string | number): bigint | null {
   return BigInt(whole) * 100n + BigInt(fraction);
 }
 
+/**
+ * Money uses Latin digits in both languages, like the dashboard and the
+ * identifiers around it (`WH-001`, `CLS-008`): an amount that sits next to a
+ * `type="number"` field must not switch numeral systems between the field and
+ * the total above it. Grouping and the decimal separator still follow the
+ * locale.
+ */
 export function formatCents(cents: bigint, locale: Locale): string {
-  const localeName = locale === 'ar' ? 'ar-EG' : 'en-GB';
+  const localeName = locale === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB';
   const whole = cents / 100n;
   const fraction = (cents % 100n).toString().padStart(2, '0');
   const integerFormatter = new Intl.NumberFormat(localeName, {

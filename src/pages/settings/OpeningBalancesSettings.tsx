@@ -1,30 +1,32 @@
-import { ChevronDown, ChevronRight, Landmark, Save } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Landmark } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { EmptyState } from '@/components/ui/EmptyState';
-import {
-  classifyFiscalSettingsReadError,
-  classifyFiscalSettingsWriteError,
-  useFiscalYears,
-  useOpeningBalances,
-  useSaveOpeningBalances,
-  type FiscalSettingsWriteErrorCode,
-  type OpeningBalance,
-  type OpeningBalanceWrite,
-} from '@/hooks/useFiscalSettings';
 import {
   classifyClassificationsError,
   useActiveLeafClassifications,
 } from '@/hooks/useClassifications';
-import type { ActiveLeafClassification } from '@/hooks/useClassifications';
+import {
+  classifyFiscalSettingsReadError,
+  classifyFiscalSettingsWriteError,
+  useDeleteOpeningBalance,
+  useFiscalYears,
+  useOpeningBalances,
+  useSaveOpeningBalances,
+  type FiscalSettingsWriteErrorCode,
+  type OpeningBalanceWrite,
+} from '@/hooks/useFiscalSettings';
 import {
   classifyStationsError,
   useStationsDirectory,
   type StationWithWarehouses,
-  type StationWarehouse,
 } from '@/hooks/useStationsDirectory';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
+import type { DeleteOpeningBalanceTarget } from './DeleteOpeningBalanceDialog';
 import { FiscalBanner, FiscalLoading } from './FiscalSettingsFeedback';
-import { amountToCents, formatCents, normalizeAmountText } from './fiscalSettingsUtils';
+import { OpeningBalancesWarehouse } from './OpeningBalancesWarehouse';
+import { formatCents } from './fiscalSettingsUtils';
+import { useOpeningBalanceDrafts } from './useOpeningBalanceDrafts';
+import { useUnsavedChangesRegistration } from './unsavedChanges';
 
 const READ_ERROR_KEYS: Record<
   ReturnType<typeof classifyFiscalSettingsReadError>,
@@ -46,104 +48,26 @@ const WRITE_ERROR_KEYS: Record<FiscalSettingsWriteErrorCode, TranslationKey> = {
   unknown: 'settings.project.fiscal.writeError.unknown',
 };
 
-const OUTLINE_BUTTON_CLASS =
-  'border-border text-foreground hover:bg-muted/50 inline-flex items-center justify-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60';
+const GUARD_KEY = 'opening-balances';
 
-function balanceKey(fiscalYearId: string, warehouseId: string, classificationId: string): string {
-  return `${fiscalYearId}:${warehouseId}:${classificationId}`;
-}
-
-function editableAmount(value: string | number): string {
-  const cents = amountToCents(value);
-  if (cents === null) {
-    return String(value);
-  }
-  return `${cents / 100n}.${(cents % 100n).toString().padStart(2, '0')}`;
-}
-
-function originalBalance(
-  balancesByKey: ReadonlyMap<string, OpeningBalance>,
-  fiscalYearId: string,
-  warehouseId: string,
-  classificationId: string,
-): OpeningBalance | undefined {
-  return balancesByKey.get(balanceKey(fiscalYearId, warehouseId, classificationId));
-}
-
-function hasChanged(
-  fiscalYearId: string,
-  warehouseId: string,
-  classificationId: string,
-  drafts: Readonly<Record<string, string>>,
-  balancesByKey: ReadonlyMap<string, OpeningBalance>,
-): boolean {
-  const key = balanceKey(fiscalYearId, warehouseId, classificationId);
-  const draft = drafts[key];
-  if (draft === undefined) {
-    return false;
-  }
-  const existing = originalBalance(balancesByKey, fiscalYearId, warehouseId, classificationId);
-  if (draft.trim() === '' && existing === undefined) {
-    return false;
-  }
-  const newCents = draft.trim() === '' ? 0n : amountToCents(draft);
-  if (newCents === null) {
-    return true;
-  }
-  const oldCents = existing === undefined ? null : amountToCents(existing.amount);
-  return oldCents === null || oldCents !== newCents;
-}
-
-function amountForTotal(
-  fiscalYearId: string,
-  warehouseId: string,
-  classificationId: string,
-  drafts: Readonly<Record<string, string>>,
-  balancesByKey: ReadonlyMap<string, OpeningBalance>,
-): bigint {
-  const key = balanceKey(fiscalYearId, warehouseId, classificationId);
-  const draft = drafts[key];
-  const existing = originalBalance(balancesByKey, fiscalYearId, warehouseId, classificationId);
-  if (draft !== undefined) {
-    if (draft.trim() === '') {
-      return 0n;
-    }
-    const draftCents = amountToCents(draft);
-    if (draftCents !== null) {
-      return draftCents;
-    }
-  }
-  return existing === undefined ? 0n : (amountToCents(existing.amount) ?? 0n);
-}
-
-function warehouseTotal(
-  fiscalYearId: string,
-  warehouse: StationWarehouse,
-  classifications: readonly ActiveLeafClassification[],
-  drafts: Readonly<Record<string, string>>,
-  balancesByKey: ReadonlyMap<string, OpeningBalance>,
-): bigint {
-  return classifications.reduce(
-    (total, classification) =>
-      total + amountForTotal(fiscalYearId, warehouse.id, classification.id, drafts, balancesByKey),
-    0n,
-  );
-}
-
-function stationTotal(
-  fiscalYearId: string,
-  station: StationWithWarehouses,
-  classifications: readonly ActiveLeafClassification[],
-  drafts: Readonly<Record<string, string>>,
-  balancesByKey: ReadonlyMap<string, OpeningBalance>,
-): bigint {
-  return station.warehouses.reduce(
-    (total, warehouse) =>
-      total + warehouseTotal(fiscalYearId, warehouse, classifications, drafts, balancesByKey),
-    0n,
-  );
-}
-
+/**
+ * «أرصدة أول المدة» — a sparse editor.
+ *
+ * What changed, and why (design study §3–§8):
+ *
+ * * the screen renders **entered lines only** — a saved balance, or one added in
+ *   this session. The previous version mounted every active leaf in every
+ *   warehouse, so an untouched project could still put a thousand inputs in the
+ *   DOM;
+ * * balances are read with their classification in the same response, so a row
+ *   whose classification stopped being an active leaf (it gained children, or
+ *   was deactivated) is detected exactly and shown in a read-only «needs
+ *   review» block that still counts towards the totals;
+ * * deleting is an explicit, confirmed action against the saved row, audited in
+ *   the database; a line added in this session is just discarded;
+ * * switching tabs with unsaved drafts asks first, and a reload warns through
+ *   `beforeunload`.
+ */
 export default function OpeningBalancesSettings() {
   const { t, locale } = useI18n();
   const yearsQuery = useFiscalYears();
@@ -152,26 +76,49 @@ export default function OpeningBalancesSettings() {
   const classificationsQuery = useActiveLeafClassifications({ enabled: activeYear !== null });
   const balancesQuery = useOpeningBalances(activeYear?.id ?? null);
   const saveBalances = useSaveOpeningBalances();
+  const deleteBalance = useDeleteOpeningBalance();
+
   const [expandedStations, setExpandedStations] = useState<ReadonlySet<string>>(() => new Set());
   const [expandedWarehouses, setExpandedWarehouses] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [drafts, setDrafts] = useState<Readonly<Record<string, string>>>({});
+  const [savingWarehouseId, setSavingWarehouseId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{
     readonly tone: 'error' | 'success';
     readonly key: TranslationKey;
   } | null>(null);
-  const activeLeafClassifications = classificationsQuery.data ?? [];
-  const balancesByKey = useMemo(() => {
-    const result = new Map<string, OpeningBalance>();
-    for (const balance of balancesQuery.data ?? []) {
-      result.set(
-        balanceKey(balance.fiscal_year_id, balance.warehouse_id, balance.classification_id),
-        balance,
-      );
+
+  const activeLeafClassifications = useMemo(
+    () => classificationsQuery.data ?? [],
+    [classificationsQuery.data],
+  );
+  const drafts = useOpeningBalanceDrafts(
+    balancesQuery.data ?? [],
+    activeLeafClassifications,
+    activeYear?.id ?? null,
+  );
+
+  /* A year switch invalidates every draft: they were typed against the previous
+     year's balances, and carrying them over would write them to the wrong one. */
+  const activeYearId = activeYear?.id ?? null;
+  const { reset } = drafts;
+  useEffect(() => {
+    reset();
+  }, [activeYearId, reset]);
+
+  useUnsavedChangesRegistration(drafts.isDirty, GUARD_KEY);
+
+  useEffect(() => {
+    if (!drafts.isDirty) {
+      return;
     }
-    return result;
-  }, [balancesQuery.data]);
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [drafts.isDirty]);
 
   if (yearsQuery.isLoading) {
     return <FiscalLoading label={t('settings.project.fiscal.openingBalances.loadingYear')} />;
@@ -227,7 +174,11 @@ export default function OpeningBalancesSettings() {
         >
           {t(errorKey)}
         </div>
-        <button type="button" onClick={retry} className={OUTLINE_BUTTON_CLASS}>
+        <button
+          type="button"
+          onClick={retry}
+          className="border-border text-foreground hover:bg-muted/50 inline-flex items-center justify-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-semibold transition-colors"
+        >
           {t('settings.project.fiscal.retry')}
         </button>
       </div>
@@ -235,6 +186,7 @@ export default function OpeningBalancesSettings() {
   }
 
   const stations = stationsQuery.data ?? [];
+
   const toggleStation = (id: string) => {
     setExpandedStations((current) => {
       const next = new Set(current);
@@ -246,6 +198,7 @@ export default function OpeningBalancesSettings() {
       return next;
     });
   };
+
   const toggleWarehouse = (key: string) => {
     setExpandedWarehouses((current) => {
       const next = new Set(current);
@@ -258,57 +211,60 @@ export default function OpeningBalancesSettings() {
     });
   };
 
-  const handleSaveWarehouse = async (warehouse: StationWarehouse) => {
-    const changedClassifications = activeLeafClassifications.filter((classification) =>
-      hasChanged(activeYear.id, warehouse.id, classification.id, drafts, balancesByKey),
+  const stationTotal = (station: StationWithWarehouses): bigint =>
+    station.warehouses.reduce(
+      (total, warehouse) => total + drafts.modelFor(warehouse.id).totalCents,
+      0n,
     );
-    const rows: OpeningBalanceWrite[] = [];
 
-    for (const classification of changedClassifications) {
-      const key = balanceKey(activeYear.id, warehouse.id, classification.id);
-      const raw = drafts[key] ?? '';
-      const existing = originalBalance(
-        balancesByKey,
-        activeYear.id,
-        warehouse.id,
-        classification.id,
-      );
-      if (raw.trim() === '' && existing === undefined) {
-        continue;
-      }
-      const normalized = normalizeAmountText(raw.trim() === '' ? '0' : raw);
-      if (normalized === null) {
-        setBanner({ tone: 'error', key: 'settings.project.fiscal.writeError.validation' });
-        return;
-      }
-      rows.push({
-        fiscal_year_id: activeYear.id,
-        warehouse_id: warehouse.id,
-        classification_id: classification.id,
-        amount: normalized,
-      });
-    }
-
+  const handleSave = async (warehouseId: string) => {
+    const model = drafts.modelFor(warehouseId);
+    const rows: OpeningBalanceWrite[] = model.dirtyRows.filter((row) => row.amount !== '');
     if (rows.length === 0) {
       return;
     }
-
     setBanner(null);
+    setSavingWarehouseId(warehouseId);
     try {
       await saveBalances.mutateAsync({ fiscalYearId: activeYear.id, rows });
-      setDrafts((current) => {
-        const next = { ...current };
-        for (const row of rows) {
-          delete next[balanceKey(row.fiscal_year_id, row.warehouse_id, row.classification_id)];
-        }
-        return next;
-      });
+      /* Only what reached the server is forgotten; lines added while the request
+         was in flight are untouched. */
+      drafts.clearSaved(rows);
       setBanner({ tone: 'success', key: 'settings.project.fiscal.openingBalances.success.saved' });
     } catch (error) {
       setBanner({
         tone: 'error',
         key: WRITE_ERROR_KEYS[classifyFiscalSettingsWriteError(error, 'saveOpeningBalances')],
       });
+    } finally {
+      setSavingWarehouseId(null);
+    }
+  };
+
+  const handleDelete = async (target: DeleteOpeningBalanceTarget) => {
+    setBanner(null);
+    try {
+      await deleteBalance.mutateAsync({
+        fiscalYearId: activeYear.id,
+        balanceId: target.balanceId,
+      });
+      setBanner({
+        tone: 'success',
+        key: 'settings.project.fiscal.openingBalances.success.deleted',
+      });
+    } catch (error) {
+      const code = classifyFiscalSettingsWriteError(error, 'deleteOpeningBalance');
+      if (code === 'notFound') {
+        /* Already gone (another session), or filtered by RLS. Neither is an
+           error the operator can act on — refresh and look again. */
+        setBanner({
+          tone: 'success',
+          key: 'settings.project.fiscal.openingBalances.notice.alreadyDeleted',
+        });
+        void balancesQuery.refetch();
+        return;
+      }
+      setBanner({ tone: 'error', key: WRITE_ERROR_KEYS[code] });
     }
   };
 
@@ -337,13 +293,6 @@ export default function OpeningBalancesSettings() {
             const stationOpen = expandedStations.has(station.id);
             const stationToggleId = `opening-station-toggle-${station.id}`;
             const stationPanelId = `opening-station-panel-${station.id}`;
-            const total = stationTotal(
-              activeYear.id,
-              station,
-              activeLeafClassifications,
-              drafts,
-              balancesByKey,
-            );
 
             return (
               <section
@@ -385,7 +334,7 @@ export default function OpeningBalancesSettings() {
                       {t('settings.project.fiscal.openingBalances.stationTotal')}
                     </span>
                     <span className="text-foreground font-semibold tabular-nums">
-                      {formatCents(total, locale)}
+                      {formatCents(stationTotal(station), locale)}
                     </span>
                   </span>
                 </button>
@@ -397,195 +346,44 @@ export default function OpeningBalancesSettings() {
                   hidden={!stationOpen}
                   className="border-border border-t px-3 py-3 sm:px-4"
                 >
-                  {station.warehouses.length > 0 ? (
-                    <div className="space-y-3">
-                      {station.warehouses.map((warehouse) => {
-                        const warehouseKey = `${station.id}:${warehouse.id}`;
-                        const warehouseOpen = expandedWarehouses.has(warehouseKey);
-                        const warehouseToggleId = `opening-warehouse-toggle-${warehouse.id}`;
-                        const warehousePanelId = `opening-warehouse-panel-${warehouse.id}`;
-                        const warehouseBalanceTotal = warehouseTotal(
-                          activeYear.id,
-                          warehouse,
-                          activeLeafClassifications,
-                          drafts,
-                          balancesByKey,
-                        );
-                        const changedRows = activeLeafClassifications.filter((classification) =>
-                          hasChanged(
-                            activeYear.id,
-                            warehouse.id,
-                            classification.id,
-                            drafts,
-                            balancesByKey,
-                          ),
-                        );
-                        const invalidDraft = changedRows.some((classification) => {
-                          const raw =
-                            drafts[balanceKey(activeYear.id, warehouse.id, classification.id)] ??
-                            '';
-                          return raw.trim() !== '' && normalizeAmountText(raw) === null;
-                        });
-
-                        return (
-                          <section
-                            key={warehouse.id}
-                            className="bg-background border-border w-full max-w-full min-w-0 rounded-xl border"
-                          >
-                            <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 p-2.5 sm:p-3">
-                              <button
-                                type="button"
-                                id={warehouseToggleId}
-                                aria-expanded={warehouseOpen}
-                                aria-controls={warehousePanelId}
-                                aria-label={t(
-                                  'settings.project.fiscal.openingBalances.toggleWarehouse',
-                                  {
-                                    name: warehouse.name,
-                                  },
-                                )}
-                                onClick={() => toggleWarehouse(warehouseKey)}
-                                className="focus-visible:ring-ring flex max-w-full min-w-0 flex-1 basis-full items-center justify-between gap-3 rounded-lg px-1.5 py-1 text-start focus-visible:ring-2 focus-visible:outline-none sm:basis-auto"
-                              >
-                                <span className="flex min-w-0 flex-1 items-center gap-2.5">
-                                  {warehouseOpen ? (
-                                    <ChevronDown
-                                      className="text-muted-foreground size-4 shrink-0"
-                                      aria-hidden="true"
-                                    />
-                                  ) : (
-                                    <ChevronRight
-                                      className="text-muted-foreground size-4 shrink-0"
-                                      aria-hidden="true"
-                                    />
-                                  )}
-                                  <span className="min-w-0">
-                                    <span className="text-foreground block text-sm font-semibold break-words">
-                                      {warehouse.name}
-                                    </span>
-                                    <span className="text-muted-foreground block text-xs">
-                                      {warehouse.code}
-                                    </span>
-                                  </span>
-                                </span>
-                                <span className="text-muted-foreground shrink-0 text-xs">
-                                  {t('settings.project.fiscal.openingBalances.warehouseTotal')}{' '}
-                                  <strong className="text-foreground tabular-nums">
-                                    {formatCents(warehouseBalanceTotal, locale)}
-                                  </strong>
-                                </span>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleSaveWarehouse(warehouse)}
-                                disabled={
-                                  saveBalances.isPending || changedRows.length === 0 || invalidDraft
-                                }
-                                aria-label={t(
-                                  'settings.project.fiscal.openingBalances.saveWarehouse',
-                                  {
-                                    name: warehouse.name,
-                                  },
-                                )}
-                                className={OUTLINE_BUTTON_CLASS}
-                              >
-                                <Save className="size-4" aria-hidden="true" />
-                                {saveBalances.isPending
-                                  ? t('settings.project.fiscal.openingBalances.saving')
-                                  : t('settings.project.fiscal.openingBalances.save')}
-                              </button>
-                            </div>
-
-                            <div
-                              id={warehousePanelId}
-                              role="region"
-                              aria-labelledby={warehouseToggleId}
-                              hidden={!warehouseOpen}
-                              className="border-border border-t px-3 py-3 sm:px-4"
-                            >
-                              {activeLeafClassifications.length > 0 ? (
-                                <div className="space-y-2">
-                                  {activeLeafClassifications.map((classification) => {
-                                    const key = balanceKey(
-                                      activeYear.id,
-                                      warehouse.id,
-                                      classification.id,
-                                    );
-                                    const existing = originalBalance(
-                                      balancesByKey,
-                                      activeYear.id,
-                                      warehouse.id,
-                                      classification.id,
-                                    );
-                                    const inputValue =
-                                      drafts[key] ??
-                                      (existing === undefined
-                                        ? ''
-                                        : editableAmount(existing.amount));
-                                    const isInvalid =
-                                      inputValue.trim() !== '' &&
-                                      normalizeAmountText(inputValue) === null;
-
-                                    return (
-                                      <div
-                                        key={classification.id}
-                                        className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b py-2 last:border-b-0"
-                                      >
-                                        <div className="min-w-0 flex-1 basis-40">
-                                          <p className="text-foreground text-sm font-medium">
-                                            {classification.name}
-                                          </p>
-                                          <p className="text-muted-foreground text-xs">
-                                            {classification.code}
-                                          </p>
-                                        </div>
-                                        <label className="w-full max-w-56 min-w-0">
-                                          <span className="sr-only">
-                                            {t(
-                                              'settings.project.fiscal.openingBalances.amountLabel',
-                                              { classification: classification.name },
-                                            )}
-                                          </span>
-                                          <input
-                                            type="number"
-                                            min={0}
-                                            max="9999999999999999.99"
-                                            step="0.01"
-                                            inputMode="decimal"
-                                            value={inputValue}
-                                            aria-label={t(
-                                              'settings.project.fiscal.openingBalances.amountLabel',
-                                              { classification: classification.name },
-                                            )}
-                                            aria-invalid={isInvalid}
-                                            onChange={(event) =>
-                                              setDrafts((current) => ({
-                                                ...current,
-                                                [key]: event.target.value,
-                                              }))
-                                            }
-                                            className="border-input bg-background text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:ring-primary/25 aria-invalid:border-destructive w-full rounded-lg border px-3 py-2 text-sm tabular-nums outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60"
-                                          />
-                                        </label>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              ) : (
-                                <p className="text-muted-foreground py-3 text-sm">
-                                  {t('settings.project.fiscal.openingBalances.noClassifications')}
-                                </p>
-                              )}
-                            </div>
-                          </section>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p className="text-muted-foreground py-3 text-sm">
-                      {t('settings.project.fiscal.openingBalances.noWarehouses')}
-                    </p>
-                  )}
+                  {stationOpen ? (
+                    station.warehouses.length > 0 ? (
+                      <div className="space-y-3">
+                        {station.warehouses.map((warehouse) => {
+                          const warehouseKey = `${station.id}:${warehouse.id}`;
+                          const model = drafts.modelFor(warehouse.id);
+                          return (
+                            <OpeningBalancesWarehouse
+                              key={warehouse.id}
+                              warehouse={warehouse}
+                              model={model}
+                              eligibleCount={activeLeafClassifications.length}
+                              options={activeLeafClassifications}
+                              open={expandedWarehouses.has(warehouseKey)}
+                              onToggle={() => toggleWarehouse(warehouseKey)}
+                              saving={savingWarehouseId === warehouse.id}
+                              deleting={deleteBalance.isPending}
+                              onAdd={(classificationIds) =>
+                                drafts.addRows(warehouse.id, classificationIds)
+                              }
+                              onChangeAmount={(classificationId, text) =>
+                                drafts.setAmount(warehouse.id, classificationId, text)
+                              }
+                              onDiscardAdded={(classificationId) =>
+                                drafts.discardAdded(warehouse.id, classificationId)
+                              }
+                              onSave={() => void handleSave(warehouse.id)}
+                              onDelete={handleDelete}
+                            />
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground py-3 text-sm">
+                        {t('settings.project.fiscal.openingBalances.noWarehouses')}
+                      </p>
+                    )
+                  ) : null}
                 </div>
               </section>
             );

@@ -60,11 +60,8 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
       error: null,
       refetch: vi.fn(),
     }),
-    useOpeningBalances: (yearId: string | null) => ({
-      data:
-        yearId === null
-          ? []
-          : fiscalState.balances.filter((balance) => balance.fiscal_year_id === yearId),
+    useOpeningBalances: () => ({
+      data: [],
       isLoading: false,
       isError: false,
       error: null,
@@ -74,6 +71,7 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
     useActivateFiscalYear: () => ({ mutateAsync: fiscalState.activateYear, isPending: false }),
     useUpdateFiscalPeriod: () => ({ mutateAsync: fiscalState.updatePeriod, isPending: false }),
     useSaveOpeningBalances: () => ({ mutateAsync: fiscalState.saveBalances, isPending: false }),
+    useDeleteOpeningBalance: () => ({ mutateAsync: vi.fn(), isPending: false }),
   };
 });
 
@@ -274,60 +272,5 @@ describe('FiscalSettings', () => {
       }),
     );
     expect(await screen.findByText('نحن الآن في الفترة 3 من شهر يوليو 2035.')).toBeTruthy();
-  });
-
-  it('saves a decimal opening balance for a classification in its warehouse', async () => {
-    const year = createYear(true);
-    fiscalState.years = [year];
-    fiscalState.stations = [
-      {
-        id: 'station-1',
-        code: 'ST-01',
-        name: 'المحطة الرئيسية',
-        isActive: true,
-        warehouses: [
-          {
-            id: 'warehouse-1',
-            code: 'WH-001',
-            name: 'مخزن المواد الخام',
-            isActive: true,
-          },
-        ],
-      },
-    ];
-    fiscalState.classifications = [
-      {
-        id: 'classification-steel',
-        code: 'CLS-001',
-        name: 'حديد وصلب',
-      },
-    ];
-    renderFiscalSettings();
-
-    fireEvent.click(screen.getByRole('tab', { name: 'أرصدة أول المدة' }));
-    expect(screen.queryByText(/تجنب تكراره/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'عرض مخازن محطة المحطة الرئيسية' }));
-    fireEvent.click(screen.getByRole('button', { name: 'عرض تصنيفات مخزن مخزن المواد الخام' }));
-
-    const balanceInput = screen.getByRole('spinbutton', {
-      name: 'رصيد أول المدة: حديد وصلب',
-    });
-    fireEvent.change(balanceInput, { target: { value: '125.50' } });
-    fireEvent.click(screen.getByRole('button', { name: 'حفظ أرصدة مخزن مخزن المواد الخام' }));
-
-    await waitFor(() => expect(fiscalState.saveBalances).toHaveBeenCalledTimes(1));
-    expect(fiscalState.saveBalances).toHaveBeenCalledWith({
-      fiscalYearId: year.id,
-      rows: [
-        {
-          fiscal_year_id: year.id,
-          warehouse_id: 'warehouse-1',
-          classification_id: 'classification-steel',
-          amount: '125.50',
-        },
-      ],
-    });
-    await waitFor(() => expect((balanceInput as HTMLInputElement).value).toBe('125.50'));
-    expect(screen.getByText('تم حفظ أرصدة المخزن بنجاح.')).toBeTruthy();
   });
 });

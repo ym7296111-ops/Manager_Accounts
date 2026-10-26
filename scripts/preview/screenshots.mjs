@@ -278,9 +278,9 @@ await openPartiesRoot('inbound');
 await page.getByText('IN-001', { exact: true }).waitFor();
 await page.screenshot({ path: `${OUT}/parties-inbound-mobile.png`, fullPage: true });
 
-// General → opening balances on a real 390px RTL viewport. The cards are
-// expanded so the mobile capture includes the numeric fields, not just the
-// empty accordion headers.
+// General → opening balances on a real 390px RTL viewport. The sparse editor
+// only mounts a field per row that exists, so the capture shows two saved rows
+// plus the read-only «أرصدة تحتاج مراجعة» section the seed now includes.
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.setViewportSize({ width: 390, height: 844 });
 await page.locator('#project-settings-tab-general').click();
@@ -292,6 +292,7 @@ const periodViewport = await assertMobileViewport();
 console.log('period settings mobile layout:', periodViewport);
 const periodFields = await assertFieldsFit('#current-fiscal-period', 'current period');
 console.log('period field bounds:', periodFields);
+
 await page.locator('#fiscal-settings-tab-openingBalances').click();
 await page.locator('#opening-station-toggle-s-1').click();
 await page.locator('#opening-warehouse-toggle-w-1').click();
@@ -301,7 +302,10 @@ const openingFields = await assertFieldsFit(
   '#opening-warehouse-panel-w-1 input',
   'opening-balance inputs',
 );
-expect(openingFields.length === 7, `expected 7 active leaves, got ${openingFields.length}`);
+expect(
+  openingFields.length === 2,
+  `the sparse editor should mount only the two saved rows, got ${openingFields.length}`,
+);
 const openingLabels = await page
   .locator('#opening-warehouse-panel-w-1 input')
   .evaluateAll((fields) => fields.map((field) => field.getAttribute('aria-label') ?? ''));
@@ -309,16 +313,37 @@ expect(
   !openingLabels.some((label) =>
     ['المواد الخام', 'وقود', 'سولار', 'بلاستيك ومطاط'].some((name) => label.includes(name)),
   ),
-  'parent and inactive classifications must not appear in the opening-balance list',
+  'parent and inactive classifications must never get an amount field',
 );
 expect(
   (await page.getByText(/تجنب تكراره/).count()) === 0,
   'the duplicate-entry warning should be removed',
 );
-console.log('opening-balance active-leaf input count:', openingFields.length);
+const counter = await page
+  .locator('#opening-warehouse-panel-w-1')
+  .getByText(/من \d+ تصنيفاً مُدخلاً/)
+  .first()
+  .textContent();
+console.log('opening-balance counter:', counter);
 await page.screenshot({ path: `${OUT}/fiscal-opening-balances-mobile-390.png`, fullPage: true });
 
-// Capture the same flat list at desktop width for the review.
+// The review section is the new read-only surface: two seeded balances whose
+// classification is now a parent or inactive, both still counted in the total.
+const reviewSection = page.locator('#opening-warehouse-panel-w-1 section').last();
+await reviewSection.getByText('أرصدة تحتاج مراجعة').waitFor();
+const reviewRows = await reviewSection.locator('[data-testid^="opening-review-row-"]').count();
+console.log('review rows:', reviewRows);
+expect(reviewRows === 2, `expected two review rows, got ${reviewRows}`);
+await reviewSection.scrollIntoViewIfNeeded();
+await page.screenshot({ path: `${OUT}/fiscal-opening-balances-review-390.png` });
+
+// The picker itself, opened from the add button on the same panel.
+await page.getByRole('button', { name: 'إضافة تصنيف' }).first().click();
+await page.getByTestId('classification-picker').waitFor();
+await page.screenshot({ path: `${OUT}/fiscal-opening-balances-picker-390.png`, fullPage: true });
+await page.keyboard.press('Escape');
+
+// Capture the same screen at desktop width for the review.
 await page.setViewportSize({ width: 1280, height: 900 });
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.locator('#project-settings-tab-general').click();
@@ -332,8 +357,17 @@ const desktopFields = await assertFieldsFit(
   'desktop opening-balance inputs',
   1280,
 );
-expect(desktopFields.length === 7, `expected 7 active leaves, got ${desktopFields.length}`);
+expect(
+  desktopFields.length === 2,
+  `the sparse editor should mount only the two saved rows, got ${desktopFields.length}`,
+);
 await page.screenshot({ path: `${OUT}/fiscal-opening-balances-desktop-1280.png`, fullPage: true });
+
+const desktopPickerShot = page.getByRole('button', { name: 'إضافة تصنيف' }).first();
+await desktopPickerShot.click();
+await page.getByTestId('classification-picker').waitFor();
+await page.screenshot({ path: `${OUT}/fiscal-opening-balances-picker-1280.png`, fullPage: true });
+await page.keyboard.press('Escape');
 
 // The shared date inputs also remain inside the modal at phone width.
 await page.setViewportSize({ width: 390, height: 844 });

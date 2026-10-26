@@ -66,7 +66,15 @@ describe('fiscal settings with the preview-only Supabase stand-in', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Show classifications for مخزن المواد الخام' }),
     );
-    const balanceInput = screen.getByRole('spinbutton', {
+    /* The new year starts empty, so the editor renders no amount inputs at all
+       until a classification is explicitly added. */
+    expect(screen.queryAllByRole('spinbutton')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Add classification' }));
+    const picker = screen.getByTestId('classification-picker');
+    fireEvent.click(within(picker).getByRole('option', { name: /حديد وصلب/ }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Add (1)' }));
+
+    const balanceInput = await screen.findByRole('spinbutton', {
       name: /Opening balance: .*حديد وصلب/,
     });
     fireEvent.change(balanceInput, { target: { value: '125.50' } });
