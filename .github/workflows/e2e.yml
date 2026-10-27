@@ -74,6 +74,33 @@ jobs:
           echo "::error::Playwright Chromium could not be installed after 3 attempts."
           exit 1
 
+      # Skip Docker Hub authentication for fork PRs. Repository settings must
+      # also withhold secrets from untrusted forks. Missing secrets stay anonymous.
+      - name: Check Docker Hub credentials
+        id: dockerhub_credentials
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          elif [[ -n "$DOCKERHUB_USERNAME" || -n "$DOCKERHUB_TOKEN" ]]; then
+            echo '::error::Both DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be configured together.'
+            exit 1
+          else
+            echo '::notice::Docker Hub credentials unavailable; continuing with anonymous pulls.'
+          fi
+
+      - name: Login to Docker Hub
+        if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && steps.dockerhub_credentials.outputs.available == 'true' }}
+        shell: bash
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$DH_TOKEN" | docker login docker.io -u "$DH_USER" --password-stdin
+
       - name: Start local Supabase stack
         run: supabase start
 
@@ -199,3 +226,7 @@ jobs:
       - name: Stop local Supabase stack
         if: always()
         run: supabase stop --no-backup
+
+      - name: Log out from Docker Hub
+        if: ${{ always() && steps.dockerhub_credentials.outputs.available == 'true' }}
+        run: docker logout docker.io
