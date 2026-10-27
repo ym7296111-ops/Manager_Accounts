@@ -756,10 +756,7 @@ begin
       using errcode = '42501';
   end if;
 
-  if v_move is not null and v_move < 0 then
-    raise exception 'aps_record_reconciliation_item: a movement is never negative'
-      using errcode = '22023';
-  end if;
+  -- Net movement is signed: more outgoing than incoming is a negative value.
   if v_closing is not null and v_closing < 0 then
     raise exception 'aps_record_reconciliation_item: a closing balance is never negative'
       using errcode = '22023';

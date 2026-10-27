@@ -3541,6 +3541,85 @@ try {
     return letter;
   };
 
+  await test('APS reconciliation: a negative net movement matches the accountant and can be approved', async () => {
+    const fixture = await seedApsReconciliation();
+    const letterIds = [];
+    const sessionIds = [];
+    try {
+      // A positive opening keeps the closing balance non-negative; only the
+      // month's net movement is negative because there are no inbound letters.
+      await db.query(
+        `insert into public.opening_balances(fiscal_year_id,warehouse_id,classification_id,amount)
+         values ($1,$2,$3,100000)`,
+        [fixture.firstYear.id, fixture.warehouseId, fixture.leafA],
+      );
+      const outbound = await apsApprovedLetter(fixture, '1', {
+        type: 'outbound',
+        date: '2043-07-06',
+        partyId: fixture.partyOut.id,
+        lines: [
+          {
+            direction: 'out',
+            warehouseId: fixture.warehouseId,
+            classificationId: fixture.leafA,
+            amount: 50000,
+          },
+        ],
+      });
+      letterIds.push(outbound.id);
+
+      const sessionId = await openApsSession(fixture.month1.id, fixture.stationId);
+      sessionIds.push(sessionId);
+      const opened = (await apsSessionItems(sessionId))[fixture.leafA];
+      assert.equal(opened.book_opening, '100000.00');
+      assert.equal(opened.book_move_in, '0.00');
+      assert.equal(opened.book_move_out, '50000.00');
+      assert.equal(opened.book_move, '-50000.00');
+      assert.equal(opened.book_closing, '50000.00');
+      assert.equal(opened.accountant_move, null);
+      assert.equal(opened.movement_difference, null);
+
+      const recorded = await recordApsItem(sessionId, fixture.leafA, -50000, 50000);
+      assert.equal(recorded.accountant_move, -50000);
+      assert.equal(recorded.movement_difference, 0);
+      assert.equal(recorded.closing_difference, 0);
+      const stored = (await apsSessionItems(sessionId))[fixture.leafA];
+      assert.equal(stored.accountant_move, '-50000.00');
+      assert.equal(stored.accountant_closing, '50000.00');
+      assert.equal(stored.movement_difference, '0.00');
+      assert.equal(stored.closing_difference, '0.00');
+
+      // Negative closing balances remain rejected and cannot alter the item.
+      await expectCode('22023', () => recordApsItem(sessionId, fixture.leafA, -50000, -1));
+      assert.deepEqual((await apsSessionItems(sessionId))[fixture.leafA], stored);
+
+      await fillApsZeros(sessionId);
+      await approveApsSession(sessionId);
+      const approved = (
+        await db.query(
+          'select status, approved_by, approved_at from public.aps_reconciliation_sessions where id=$1',
+          [sessionId],
+        )
+      ).rows[0];
+      assert.equal(approved.status, 'approved');
+      assert.equal(approved.approved_by, A);
+      assert.ok(approved.approved_at);
+      assert.deepEqual((await apsSessionItems(sessionId))[fixture.leafA], stored);
+
+      const recordedAudit = (
+        await db.query(
+          "select metadata from public.audit_logs where entity='aps_reconciliation_items' and action='aps.reconciliation_item_recorded' and metadata->>'session_id'=$1 and metadata->>'classification_id'=$2",
+          [sessionId, fixture.leafA],
+        )
+      ).rows[0];
+      assert.equal(recordedAudit.metadata.accountant_move, -50000);
+      assert.equal(recordedAudit.metadata.book_move, -50000);
+      assert.equal(recordedAudit.metadata.movement_difference, 0);
+    } finally {
+      await cleanApsReconciliation(fixture, letterIds, sessionIds);
+    }
+  });
+
   await test('APS reconciliation: book figures from approved letters, dual comparison, frozen on approval', async () => {
     const fixture = await seedApsReconciliation();
     const letterIds = [];
@@ -3855,7 +3934,6 @@ try {
       assert.equal(openedAudit.metadata.month_name, fixture.month1.name);
 
       // ---- The accountant's numbers produce the two differences. -----------
-      await expectCode('22023', () => recordApsItem(sessionId, fixture.leafA, -1, 150));
       await expectCode('22023', () => recordApsItem(sessionId, fixture.leafA, 25, -1));
       await expectCode('P0002', () => recordApsItem(sessionId, randomUUID(), 0, 0));
       const recorded = await recordApsItem(sessionId, fixture.leafA, 25, 150);
