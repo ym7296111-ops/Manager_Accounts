@@ -45,8 +45,9 @@
 -- 1) Permissions
 -- ---------------------------------------------------------------------------
 -- `aps.reconciliation:manage` already exists (it gates reading the letters, and
--- is the entry capability). Approval is what gets split out here: whoever types
--- the accountant's numbers must not be the one who certifies them.
+-- is the entry capability). Approval is a separate capability, but RBAC may
+-- grant both to one person. Any recording by the approver is noted in the audit
+-- entry; the database does not reject self-approval.
 insert into public.permissions (slug, module, name_ar, name_en, description)
 values (
   'aps.reconciliation:approve',
@@ -57,12 +58,26 @@ values (
 )
 on conflict (slug) do nothing;
 
+-- This additional approval permission applies only to settlement letters.
+-- Existing ordinary-letter approval continues to use aps.letters:create.
+insert into public.permissions (slug, module, name_ar, name_en, description)
+values (
+  'aps.letters:approve',
+  'aps',
+  'اعتماد خطابات التسوية',
+  'Approve settlement letters',
+  'اعتماد خطابات تسوية المطابقة بالإضافة إلى صلاحية إنشاء الخطابات'
+)
+on conflict (slug) do nothing;
+
 insert into public.role_permissions (role_id, permission_id)
 select role.id, permission.id
   from public.roles as role
  cross join public.permissions as permission
  where role.slug in ('owner', 'super_admin')
-   and permission.slug in ('aps.reconciliation:manage', 'aps.reconciliation:approve')
+   and permission.slug in (
+     'aps.reconciliation:manage', 'aps.reconciliation:approve', 'aps.letters:approve'
+   )
 on conflict (role_id, permission_id) do nothing;
 
 create or replace function public.aps_can_manage_reconciliation()
@@ -981,9 +996,32 @@ grant execute on function public.aps_cancel_reconciliation(uuid, text) to authen
 -- changes the movement and the closing balance by the same amount, so it can
 -- never close a gap that exists only in the opening figure. That case is
 -- reported precisely instead of being folded into a number that will not add up.
+-- Trim Unicode whitespace and common invisible/bidi controls at the edges so
+-- pasted Arabic text cannot satisfy the reason length with invisible characters.
+create or replace function public.aps_trim_settlement_reason(p_reason text)
+returns text
+language sql
+immutable
+strict
+parallel safe
+set search_path = pg_catalog
+as $$
+  select btrim(
+    p_reason,
+    U&'\0009\000A\000B\000C\000D\0020\0085\00A0\061C\1680\180E\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\200B\200C\200D\200E\200F\2028\2029\202A\202B\202C\202D\202E\202F\205F\2060\2066\2067\2068\2069\3000\FEFF'
+  );
+$$;
+
+revoke all on function public.aps_trim_settlement_reason(text)
+  from public, anon, authenticated, service_role;
+
+-- Remove the old two-argument entry point so it cannot bypass the reason.
+drop function if exists public.aps_create_reconciliation_settlement(uuid, uuid);
+
 create or replace function public.aps_create_reconciliation_settlement(
   p_session_id uuid,
-  p_warehouse_id uuid
+  p_warehouse_id uuid,
+  p_reason text
 )
 returns uuid
 language plpgsql
@@ -999,10 +1037,17 @@ declare
   v_letter_id uuid;
   v_opening_gap integer;
   v_lines integer;
+  v_reason text;
 begin
   if v_actor is null or not public.aps_can_manage_reconciliation() then
     raise exception 'aps_create_reconciliation_settlement: aps.reconciliation:manage is required'
       using errcode = '42501';
+  end if;
+
+  v_reason := public.aps_trim_settlement_reason(coalesce(p_reason, ''));
+  if char_length(v_reason) < 3 or char_length(v_reason) > 500 then
+    raise exception 'aps_create_reconciliation_settlement: a written reason between 3 and 500 characters is required'
+      using errcode = '22023';
   end if;
 
   select * into v_session
@@ -1081,10 +1126,10 @@ begin
 
   insert into public.letters
     (fiscal_year_id, letter_type, letter_number, letter_date, status, created_by,
-     reconciliation_session_id)
+     reconciliation_session_id, settlement_reason)
   values
     (v_session.fiscal_year_id, 'settlement', coalesce(v_number, 1)::text,
-     v_month.end_date, 'draft', v_actor, p_session_id)
+     v_month.end_date, 'draft', v_actor, p_session_id, v_reason)
   returning id into v_letter_id;
 
   insert into public.letter_lines
@@ -1116,7 +1161,8 @@ begin
       'letter_number', coalesce(v_number, 1)::text,
       'warehouse_id', p_warehouse_id,
       'warehouse_code', v_warehouse.code,
-      'line_count', v_lines
+      'line_count', v_lines,
+      'reason', v_reason
     )
   );
 
@@ -1124,8 +1170,9 @@ begin
 end;
 $$;
 
-revoke all on function public.aps_create_reconciliation_settlement(uuid, uuid) from public, anon;
-grant execute on function public.aps_create_reconciliation_settlement(uuid, uuid)
+revoke all on function public.aps_create_reconciliation_settlement(uuid, uuid, text)
+  from public, anon;
+grant execute on function public.aps_create_reconciliation_settlement(uuid, uuid, text)
   to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
@@ -1146,6 +1193,8 @@ declare
   v_movement_differences integer;
   v_closing_differences integer;
   v_items integer;
+  v_approver_current_items integer;
+  v_approver_recorded_any boolean;
 begin
   if v_actor is null or not public.aps_can_approve_reconciliation() then
     raise exception 'aps_approve_reconciliation: aps.reconciliation:approve is required'
@@ -1166,8 +1215,13 @@ begin
   end if;
 
   -- Freeze-time recomputation: the numbers certified are the numbers that exist
-  -- now, not the ones from the last manual refresh.
-  perform public.aps_refresh_reconciliation(p_session_id);
+  -- now, not the ones from the last manual refresh. Check for an empty session
+  -- only after refreshing, which can add rows with new book movements.
+  v_items := public.aps_refresh_reconciliation(p_session_id);
+  if v_items = 0 then
+    raise exception 'aps_approve_reconciliation: a session without items cannot be approved'
+      using errcode = '22023';
+  end if;
 
   select count(*)::integer into v_drafts
     from public.letters as letter
@@ -1201,9 +1255,32 @@ begin
       v_movement_differences, v_closing_differences using errcode = '22023';
   end if;
 
-  select count(*)::integer into v_items
+  -- A session may have several recorders. The flag covers any figures the
+  -- approver entered in this session, including bulk zeroes and values later
+  -- overwritten by someone else. The count describes the current last recorder
+  -- on each item, so the two fields answer different audit questions.
+  select count(*)::integer into v_approver_current_items
     from public.aps_reconciliation_items as item
-   where item.session_id = p_session_id;
+   where item.session_id = p_session_id
+     and item.recorded_by = v_actor;
+
+  select v_approver_current_items > 0 or exists (
+    select 1
+      from public.audit_logs as log
+     where log.actor_id = v_actor
+       and log.action = 'aps.reconciliation_item_recorded'::public.audit_action
+       and log.metadata ->> 'session_id' = p_session_id::text
+       and (
+         (log.entity = 'aps_reconciliation_sessions' and log.metadata ->> 'bulk' = 'true')
+         or (
+           log.entity = 'aps_reconciliation_items'
+           and (
+             log.metadata ->> 'accountant_move' is not null
+             or log.metadata ->> 'accountant_closing' is not null
+           )
+         )
+       )
+  ) into v_approver_recorded_any;
 
   select month.name into v_month
     from public.fiscal_months as month
@@ -1228,7 +1305,9 @@ begin
       'station_id', v_session.station_id,
       'sequence_number', v_session.sequence_number,
       'item_count', v_items,
-      'settlement_warehouse_id', v_session.settlement_warehouse_id
+      'settlement_warehouse_id', v_session.settlement_warehouse_id,
+      'approver_recorded_any_item', v_approver_recorded_any,
+      'current_items_recorded_by_approver', v_approver_current_items
     )
   );
 end;
@@ -1243,6 +1322,11 @@ grant execute on function public.aps_approve_reconciliation(uuid) to authenticat
 alter table public.letters
   add column if not exists reconciliation_session_id uuid
     references public.aps_reconciliation_sessions (id) on delete restrict;
+alter table public.letters
+  add column if not exists settlement_reason text;
+
+comment on column public.letters.settlement_reason is
+  'Written reason for this settlement letter, retained independently for each cancelled or replacement letter.';
 
 alter table public.letters
   drop constraint if exists letters_type_check;
@@ -1275,6 +1359,18 @@ alter table public.letters
     (letter_type = 'settlement') = (reconciliation_session_id is not null)
   );
 
+-- The reason belongs to each letter, not the session: cancelling and replacing
+-- a settlement must preserve the original reason. The write trigger trims it.
+alter table public.letters
+  drop constraint if exists letters_settlement_reason_check;
+alter table public.letters
+  add constraint letters_settlement_reason_check check (
+    (letter_type = 'settlement'
+     and settlement_reason is not null
+     and char_length(settlement_reason) between 3 and 500)
+    or (letter_type <> 'settlement' and settlement_reason is null)
+  );
+
 -- One live settlement per session: a cancelled one may be replaced.
 create unique index if not exists letters_settlement_session_key
   on public.letters (reconciliation_session_id)
@@ -1301,6 +1397,12 @@ declare
   v_expected_branch text;
   v_session public.aps_reconciliation_sessions%rowtype;
 begin
+  -- Apply the same whitespace normalization to RPC and direct writes so the
+  -- length constraint cannot be satisfied with surrounding whitespace alone.
+  if new.settlement_reason is not null then
+    new.settlement_reason := public.aps_trim_settlement_reason(new.settlement_reason);
+  end if;
+
   -- Normalise first: the unique key must see the canonical value, and the raw
   -- text is only kept when the caller actually supplied something new.
   v_typed := new.letter_number;
@@ -1333,6 +1435,12 @@ begin
       raise exception 'aps letters: the author of a letter cannot change'
         using errcode = '23514';
     end if;
+    -- A settlement must not be converted into an ordinary draft to evade the
+    -- settlement-specific approval capability or discard its audit context.
+    if old.letter_type = 'settlement' and new.letter_type <> 'settlement' then
+      raise exception 'aps letters: a settlement cannot change its letter type'
+        using errcode = '23514';
+    end if;
 
     -- A settled letter is frozen. The only permitted change is the one-way
     -- trip from `approved` to `cancelled`, and even that may not touch a
@@ -1357,6 +1465,7 @@ begin
          or new.has_reclassification is distinct from old.has_reclassification
          or new.reclassification_reason is distinct from old.reclassification_reason
          or new.reconciliation_session_id is distinct from old.reconciliation_session_id
+         or new.settlement_reason is distinct from old.settlement_reason
       then
         raise exception 'aps letters: a % letter is immutable', old.status
           using errcode = '23514';
@@ -1367,6 +1476,19 @@ begin
       if new.approved_at is null or new.approved_by is null then
         raise exception 'aps letters: approval must record the approver'
           using errcode = '23514';
+      end if;
+      -- aps_approve_letter() retains its normal author/settings-manager check
+      -- and requires create for every letter. Settlement approval additionally
+      -- needs the dedicated capability, even on any other write path.
+      if new.letter_type = 'settlement'
+         and (
+           auth.uid() is null
+           or not public.aps_can_create_letters()
+           or not coalesce(public.has_permission('aps.letters:approve'), false)
+         )
+      then
+        raise exception 'aps letters: settlement approval requires aps.letters:create and aps.letters:approve'
+          using errcode = '42501';
       end if;
     end if;
   end if;
@@ -1408,6 +1530,16 @@ begin
     new.counterparty_code := v_sister.code;
     new.counterparty_name := v_sister.name;
   elsif new.letter_type = 'settlement' then
+    -- A caller with only letter-creation rights must not bypass the settlement
+    -- RPC by inserting a settlement directly or converting another draft.
+    -- Trusted maintenance without an authenticated actor remains unchanged.
+    if auth.uid() is not null
+       and (tg_op = 'INSERT' or old.letter_type is distinct from 'settlement')
+       and not public.aps_can_manage_reconciliation()
+    then
+      raise exception 'aps letters: creating a settlement requires aps.reconciliation:manage'
+        using errcode = '42501';
+    end if;
     if new.party_id is not null or new.sister_company_id is not null then
       raise exception 'aps letters: a settlement has no counterparty' using errcode = '23514';
     end if;
@@ -1614,6 +1746,25 @@ alter table public.aps_reconciliation_sessions force row level security;
 alter table public.aps_reconciliation_items enable row level security;
 alter table public.aps_reconciliation_items force row level security;
 
+-- A reconciliation manager may read a session-linked settlement draft and its
+-- lines, even without letter-creation rights. Ordinary drafts remain visible
+-- only to their author; the existing INSERT/UPDATE/DELETE policies are unchanged.
+drop policy if exists letters_read on public.letters;
+create policy letters_read
+  on public.letters
+  for select
+  to authenticated
+  using (
+    (status <> 'draft' and public.aps_can_read_letters())
+    or (status = 'draft' and created_by = auth.uid() and public.aps_can_create_letters())
+    or (
+      status = 'draft'
+      and letter_type = 'settlement'
+      and reconciliation_session_id is not null
+      and public.aps_can_manage_reconciliation()
+    )
+  );
+
 -- Read only for API callers. Every write goes through the SECURITY DEFINER
 -- functions above, because the computed numbers and the lifecycle stamps must
 -- not be reachable by a direct table call.
@@ -1654,13 +1805,18 @@ begin
   if not exists (select 1 from public.permissions where slug = 'aps.reconciliation:approve') then
     raise exception 'aps.reconciliation:approve is missing';
   end if;
+  if not exists (select 1 from public.permissions where slug = 'aps.letters:approve') then
+    raise exception 'aps.letters:approve is missing';
+  end if;
   if exists (
     select 1
       from public.permissions
-     where slug in ('aps.reconciliation:manage', 'aps.reconciliation:approve')
+     where slug in (
+       'aps.reconciliation:manage', 'aps.reconciliation:approve', 'aps.letters:approve'
+     )
        and module <> 'aps'
   ) then
-    raise exception 'the reconciliation permissions must live in the aps module';
+    raise exception 'the reconciliation and settlement approval permissions must live in the aps module';
   end if;
 
   if (
@@ -1672,6 +1828,16 @@ begin
        and permission.slug in ('aps.reconciliation:manage', 'aps.reconciliation:approve')
   ) <> 4 then
     raise exception 'owner and super_admin must hold both reconciliation permissions';
+  end if;
+  if (
+    select count(*)
+      from public.role_permissions as grant_row
+      join public.roles as role on role.id = grant_row.role_id
+      join public.permissions as permission on permission.id = grant_row.permission_id
+     where role.slug in ('owner', 'super_admin')
+       and permission.slug = 'aps.letters:approve'
+  ) <> 2 then
+    raise exception 'owner and super_admin must hold settlement-letter approval';
   end if;
 
   if to_regclass('public.aps_reconciliation_sessions') is null
@@ -1691,12 +1857,22 @@ begin
 
   if not exists (
     select 1
+      from information_schema.columns
+     where table_schema = 'public'
+       and table_name = 'letters'
+       and column_name = 'settlement_reason'
+  ) then
+    raise exception 'letters.settlement_reason is missing';
+  end if;
+
+  if (
+    select count(*)
       from pg_catalog.pg_constraint
      where conrelid = 'public.letters'::regclass
-       and conname = 'letters_settlement_session_check'
+       and conname in ('letters_settlement_session_check', 'letters_settlement_reason_check')
        and contype = 'c'
-  ) then
-    raise exception 'letters_settlement_session_check is missing';
+  ) <> 2 then
+    raise exception 'settlement session/reason constraints are missing';
   end if;
 
   if not exists (
@@ -1744,10 +1920,14 @@ begin
      or to_regprocedure('public.aps_refresh_reconciliation(uuid)') is null
      or to_regprocedure('public.aps_record_reconciliation_item(uuid, uuid, numeric, numeric)') is null
      or to_regprocedure('public.aps_fill_reconciliation_zeros(uuid)') is null
-     or to_regprocedure('public.aps_create_reconciliation_settlement(uuid, uuid)') is null
+     or to_regprocedure('public.aps_trim_settlement_reason(text)') is null
+     or to_regprocedure('public.aps_create_reconciliation_settlement(uuid, uuid, text)') is null
      or to_regprocedure('public.aps_approve_reconciliation(uuid)') is null
      or to_regprocedure('public.aps_cancel_reconciliation(uuid, text)') is null then
     raise exception 'the reconciliation functions are incomplete';
+  end if;
+  if to_regprocedure('public.aps_create_reconciliation_settlement(uuid, uuid)') is not null then
+    raise exception 'the settlement function without a reason must not exist';
   end if;
 end
 $verify_aps_reconciliation$;

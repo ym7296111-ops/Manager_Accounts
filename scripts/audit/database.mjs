@@ -2839,6 +2839,7 @@ try {
           )
         ).rows,
         [
+          { slug: 'aps.letters:approve', module: 'aps' },
           { slug: 'aps.letters:cancel', module: 'aps' },
           { slug: 'aps.letters:create', module: 'aps' },
           { slug: 'aps.letters:read', module: 'aps' },
@@ -3503,12 +3504,12 @@ try {
       c.query('select public.aps_cancel_reconciliation($1::uuid,$2)', [sessionId, reason]),
     );
 
-  const createApsSettlement = (sessionId, warehouseId, actor = A) =>
+  const createApsSettlement = (sessionId, warehouseId, reason = 'تسوية فروق الحركة', actor = A) =>
     asRole('authenticated', actor, (c) =>
-      c.query('select public.aps_create_reconciliation_settlement($1::uuid,$2::uuid) as id', [
-        sessionId,
-        warehouseId,
-      ]),
+      c.query(
+        'select public.aps_create_reconciliation_settlement($1::uuid,$2::uuid,$3::text) as id',
+        [sessionId, warehouseId, reason],
+      ),
     ).then((result) => result.rows[0].id);
 
   const approveApsSession = (sessionId, actor = A) =>
@@ -3605,6 +3606,18 @@ try {
       assert.equal(approved.approved_by, A);
       assert.ok(approved.approved_at);
       assert.deepEqual((await apsSessionItems(sessionId))[fixture.leafA], stored);
+      const approvalAudit = (
+        await db.query(
+          "select actor_id, metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and action='aps.reconciliation_approved'",
+          [sessionId],
+        )
+      ).rows[0];
+      assert.equal(approvalAudit.actor_id, A);
+      assert.equal(approvalAudit.metadata.approver_recorded_any_item, true);
+      assert.equal(
+        approvalAudit.metadata.current_items_recorded_by_approver,
+        Object.keys(await apsSessionItems(sessionId)).length,
+      );
 
       const recordedAudit = (
         await db.query(
@@ -3615,6 +3628,658 @@ try {
       assert.equal(recordedAudit.metadata.accountant_move, -50000);
       assert.equal(recordedAudit.metadata.book_move, -50000);
       assert.equal(recordedAudit.metadata.movement_difference, 0);
+    } finally {
+      await cleanApsReconciliation(fixture, letterIds, sessionIds);
+    }
+  });
+
+  await test('APS reconciliation: settlement reasons are bounded, retained, and capability-gated', async () => {
+    const fixture = await seedApsReconciliation();
+    const letterIds = [];
+    const sessionIds = [];
+    const roleIds = [];
+    try {
+      const sessionId = await openApsSession(fixture.month1.id, fixture.stationId);
+      sessionIds.push(sessionId);
+      await recordApsItem(sessionId, fixture.leafA, 1, 1);
+      await fillApsZeros(sessionId);
+
+      // V may manage reconciliation only; E may create letters only. Neither
+      // actor has the other capability or project-settings administration.
+      for (const [actor, slug, permission] of [
+        [V, `audit_aps_reason_manager_${randomUUID().slice(0, 8)}`, 'aps.reconciliation:manage'],
+        [E, `audit_aps_reason_letters_${randomUUID().slice(0, 8)}`, 'aps.letters:create'],
+      ]) {
+        const roleId = randomUUID();
+        roleIds.push(roleId);
+        await db.query('insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$2,$2)', [
+          roleId,
+          slug,
+        ]);
+        await db.query(
+          'insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug=$2',
+          [roleId, permission],
+        );
+        await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+          actor,
+          roleId,
+        ]);
+      }
+      for (const [actor, canManage, canCreate] of [
+        [V, true, false],
+        [E, false, true],
+      ]) {
+        const capabilities = (
+          await asRole('authenticated', actor, (c) =>
+            c.query(
+              'select public.aps_can_manage_reconciliation() as can_manage, public.aps_can_create_letters() as can_create',
+            ),
+          )
+        ).rows[0];
+        assert.deepEqual(capabilities, { can_manage: canManage, can_create: canCreate });
+      }
+      assert.equal(
+        (
+          await db.query(
+            "select to_regprocedure('public.aps_create_reconciliation_settlement(uuid,uuid)') is null as absent",
+          )
+        ).rows[0].absent,
+        true,
+        'the old reason-free RPC must not remain callable',
+      );
+
+      for (const reason of [
+        null,
+        '',
+        '  \t\n  ',
+        '\u00a0\u202f\u2003',
+        '\u200b\u200e\u200f',
+        '\u00a0\u200f  ab  \u202f',
+        'ab',
+        '  ab  ',
+        'x'.repeat(501),
+      ]) {
+        const error = await captureApsError(() =>
+          createApsSettlement(sessionId, fixture.warehouseId, reason, V),
+        );
+        assert.equal(error.code, '22023');
+        assert.match(error.message, /reason between 3 and 500 characters is required/);
+      }
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.letters where reconciliation_session_id=$1',
+            [sessionId],
+          )
+        ).rows[0].n,
+        0,
+      );
+      assert.equal(
+        (
+          await db.query(
+            "select count(*)::int as n from public.audit_logs where entity_id=$1 and action='aps.reconciliation_settlement_created'",
+            [sessionId],
+          )
+        ).rows[0].n,
+        0,
+        'rejected reasons do not create an audit event or a letter',
+      );
+      assert.equal(
+        (
+          await db.query(
+            'select settlement_warehouse_id from public.aps_reconciliation_sessions where id=$1',
+            [sessionId],
+          )
+        ).rows[0].settlement_warehouse_id,
+        null,
+      );
+
+      // The table constraint also rejects invalid reasons on direct writes,
+      // not merely through the three-argument function.
+      const insertDirectSettlement = (actor, reason) =>
+        asRole('authenticated', actor, (c) =>
+          c.query(
+            `insert into public.letters
+               (fiscal_year_id,letter_type,letter_number,letter_date,status,created_by,
+                reconciliation_session_id,settlement_reason)
+             values ($1,'settlement','80',$2::date,'draft',$3,$4,$5)`,
+            [fixture.firstYear.id, fixture.month1.end_date, actor, sessionId, reason],
+          ),
+        );
+      for (const reason of [
+        null,
+        ' \t ',
+        '\u00a0\u202f\u2003',
+        '\u200b\u200e\u200f',
+        'ab',
+        'x'.repeat(501),
+      ]) {
+        await expectCode('23514', () => insertDirectSettlement(A, reason));
+      }
+      await expectCode('23514', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.letters
+               (fiscal_year_id,letter_type,letter_number,letter_date,party_id,settlement_reason)
+             values ($1,'inbound','79',$2::date,$3,'not a settlement')`,
+            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id],
+          ),
+        ),
+      );
+
+      await expectCode('42501', () =>
+        createApsSettlement(sessionId, fixture.warehouseId, 'سبب صحيح', E),
+      );
+      await expectCode('42501', () => insertDirectSettlement(E, 'سبب صحيح'));
+      const ordinaryDraft = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letters
+               (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
+             values ($1,'inbound','81',$2::date,$3) returning id`,
+            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id],
+          ),
+        )
+      ).rows[0].id;
+      letterIds.push(ordinaryDraft);
+      await expectCode('42501', () =>
+        asRole('authenticated', E, (c) =>
+          c.query(
+            `update public.letters
+                set letter_type='settlement', party_id=null,
+                    reconciliation_session_id=$2, settlement_reason='سبب صحيح'
+              where id=$1`,
+            [ordinaryDraft, sessionId],
+          ),
+        ),
+      );
+
+      // Three Unicode characters and 500 Unicode characters are accepted;
+      // surrounding spaces/tabs are not stored. Each replacement keeps its own
+      // reason after cancellation.
+      const first = await createApsSettlement(
+        sessionId,
+        fixture.warehouseId,
+        '\u00a0\u200f  فرق  \u202f',
+        V,
+      );
+      letterIds.push(first);
+      assert.equal(
+        (await db.query('select settlement_reason from public.letters where id=$1', [first]))
+          .rows[0].settlement_reason,
+        'فرق',
+      );
+      const firstAudit = (
+        await db.query(
+          "select actor_id,metadata from public.audit_logs where action='aps.reconciliation_settlement_created' and metadata->>'letter_id'=$1",
+          [first],
+        )
+      ).rows[0];
+      assert.equal(firstAudit.actor_id, V);
+      assert.equal(firstAudit.metadata.reason, 'فرق');
+      for (const [actor, expected] of [
+        [V, 1],
+        [E, 0],
+        [A, 1],
+      ]) {
+        assert.equal(
+          (
+            await asRole('authenticated', actor, (c) =>
+              c.query('select count(*)::int as n from public.letters where id=$1', [first]),
+            )
+          ).rows[0].n,
+          expected,
+          'only reconciliation managers may see another settlement draft',
+        );
+      }
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) => c.query('select public.aps_approve_letter($1)', [first])),
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', E, (c) => c.query('select public.aps_approve_letter($1)', [first])),
+      );
+      await expectCode('23514', () =>
+        db.query('update public.letters set settlement_reason=$2 where id=$1', [first, ' \t ']),
+      );
+      await cancelApsLetter(first, 'استبدال التسوية');
+
+      const longest = 'م'.repeat(500);
+      const replacement = await createApsSettlement(
+        sessionId,
+        fixture.warehouseId,
+        `  ${longest} \t`,
+        V,
+      );
+      letterIds.push(replacement);
+      assert.equal(
+        (await db.query('select settlement_reason from public.letters where id=$1', [replacement]))
+          .rows[0].settlement_reason,
+        longest,
+      );
+      assert.equal(
+        (await db.query('select settlement_reason from public.letters where id=$1', [first]))
+          .rows[0].settlement_reason,
+        'فرق',
+      );
+      const replacementAudit = (
+        await db.query(
+          "select metadata from public.audit_logs where action='aps.reconciliation_settlement_created' and metadata->>'letter_id'=$1",
+          [replacement],
+        )
+      ).rows[0];
+      assert.equal(replacementAudit.metadata.reason, longest);
+
+      // The existing approval path still permits a project-settings manager
+      // with letter-creation permission to finalize someone else's draft.
+      await approveApsLetter(replacement);
+      const approved = (
+        await db.query('select status,approved_by from public.letters where id=$1', [replacement])
+      ).rows[0];
+      assert.deepEqual(approved, { status: 'approved', approved_by: A });
+      await expectCode('23514', () =>
+        db.query('update public.letters set settlement_reason=$2 where id=$1', [
+          replacement,
+          'تغيير السبب',
+        ]),
+      );
+    } finally {
+      await cleanApsReconciliation(fixture, letterIds, sessionIds, roleIds);
+    }
+  });
+
+  await test('APS reconciliation: settlement drafts are readable by managers and approval requires both letter capabilities', async () => {
+    const fixture = await seedApsReconciliation();
+    const letterIds = [];
+    const sessionIds = [];
+    const roleIds = [];
+    const createRole = async (slug, permission) => {
+      const id = randomUUID();
+      roleIds.push(id);
+      await db.query('insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$2,$2)', [
+        id,
+        `${slug}_${id.slice(0, 8)}`,
+      ]);
+      await db.query(
+        'insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug=$2',
+        [id, permission],
+      );
+      return id;
+    };
+    try {
+      const managerRole = await createRole('audit_aps_view_manager', 'aps.reconciliation:manage');
+      const createRoleId = await createRole('audit_aps_view_create', 'aps.letters:create');
+      const approveRoleId = await createRole('audit_aps_view_approve', 'aps.letters:approve');
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2),($3,$4)', [
+        V,
+        managerRole,
+        E,
+        createRoleId,
+      ]);
+      const sessionId = await openApsSession(fixture.month1.id, fixture.stationId);
+      sessionIds.push(sessionId);
+      await recordApsItem(sessionId, fixture.leafA, 1, 1);
+      await fillApsZeros(sessionId);
+
+      // V has manage only and the draft belongs to another user. The existing
+      // line SELECT policy follows the now-visible parent letter.
+      const otherSettlement = await createApsSettlement(
+        sessionId,
+        fixture.warehouseId,
+        'فارق حركة',
+      );
+      letterIds.push(otherSettlement);
+      const settlementLine = (
+        await db.query('select id from public.letter_lines where letter_id=$1', [otherSettlement])
+      ).rows[0].id;
+      const visible = (
+        await asRole('authenticated', V, (c) =>
+          c.query(
+            'select id,created_by,reconciliation_session_id,settlement_reason from public.letters where id=$1',
+            [otherSettlement],
+          ),
+        )
+      ).rows;
+      assert.deepEqual(visible, [
+        {
+          id: otherSettlement,
+          created_by: A,
+          reconciliation_session_id: sessionId,
+          settlement_reason: 'فارق حركة',
+        },
+      ]);
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select count(*)::int as n from public.letter_lines where id=$1', [
+              settlementLine,
+            ]),
+          )
+        ).rows[0].n,
+        1,
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query('select count(*)::int as n from public.letters where id=$1', [otherSettlement]),
+          )
+        ).rows[0].n,
+        0,
+        'letter creation alone does not reveal another person’s settlement draft',
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query('select count(*)::int as n from public.letter_lines where id=$1', [
+              settlementLine,
+            ]),
+          )
+        ).rows[0].n,
+        0,
+      );
+
+      for (const query of [
+        (c) =>
+          c.query("update public.letters set settlement_reason='تغيير' where id=$1", [
+            otherSettlement,
+          ]),
+        (c) => c.query('delete from public.letters where id=$1', [otherSettlement]),
+        (c) => c.query('update public.letter_lines set amount=99 where id=$1', [settlementLine]),
+        (c) => c.query('delete from public.letter_lines where id=$1', [settlementLine]),
+      ]) {
+        const result = await asRole('authenticated', V, query);
+        assert.equal(result.rowCount, 0, 'the SELECT exception must not grant writes');
+      }
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query(
+            `insert into public.letter_lines
+               (letter_id,direction,warehouse_id,classification_id,amount)
+             values ($1,'in',$2,$3,1)`,
+            [otherSettlement, fixture.warehouseId, fixture.leafA],
+          ),
+        ),
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query('select public.aps_approve_letter($1)', [otherSettlement]),
+        ),
+      );
+
+      // Inbound, outbound and transfer drafts created by E stay private.
+      const ordinaryDrafts = [];
+      for (const [type, number, partyId] of [
+        ['inbound', '901', fixture.partyIn.id],
+        ['outbound', '902', fixture.partyOut.id],
+        ['internal_transfer', '903', null],
+      ]) {
+        const draftId = (
+          await asRole('authenticated', E, (c) =>
+            c.query(
+              `insert into public.letters
+                 (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
+               values ($1,$2,$3,$4::date,$5) returning id`,
+              [fixture.firstYear.id, type, number, fixture.month1.end_date, partyId],
+            ),
+          )
+        ).rows[0].id;
+        ordinaryDrafts.push(draftId);
+        letterIds.push(draftId);
+        assert.equal(
+          (
+            await asRole('authenticated', V, (c) =>
+              c.query('select count(*)::int as n from public.letters where id=$1', [draftId]),
+            )
+          ).rows[0].n,
+          0,
+        );
+      }
+      const ordinaryLine = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letter_lines
+               (letter_id,direction,warehouse_id,classification_id,amount)
+             values ($1,'in',$2,$3,2) returning id`,
+            [ordinaryDrafts[0], fixture.warehouseId, fixture.leafA],
+          ),
+        )
+      ).rows[0].id;
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select count(*)::int as n from public.letter_lines where id=$1', [
+              ordinaryLine,
+            ]),
+          )
+        ).rows[0].n,
+        0,
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query('select public.aps_approve_letter($1)', [ordinaryDrafts[0]]),
+        ),
+      );
+      // An ordinary letter's existing create-only approval rule is unchanged.
+      await asRole('authenticated', E, (c) =>
+        c.query('select public.aps_approve_letter($1)', [ordinaryDrafts[0]]),
+      );
+
+      await cancelApsLetter(otherSettlement, 'استبدال مسودة التسوية');
+      const ownSettlement = await createApsSettlement(
+        sessionId,
+        fixture.warehouseId,
+        'فارق صحيح',
+        V,
+      );
+      letterIds.push(ownSettlement);
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query('select public.aps_approve_letter($1)', [ownSettlement]),
+        ),
+      );
+
+      // With create but not approve, V still cannot finalize the settlement.
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+        V,
+        createRoleId,
+      ]);
+      await expectCode('23514', () =>
+        asRole('authenticated', V, (c) =>
+          c.query(
+            `update public.letters
+                set letter_type='inbound', party_id=$2,
+                    reconciliation_session_id=null, settlement_reason=null
+              where id=$1`,
+            [ownSettlement, fixture.partyIn.id],
+          ),
+        ),
+      );
+      const missingApprove = await captureApsError(() =>
+        asRole('authenticated', V, (c) =>
+          c.query('select public.aps_approve_letter($1)', [ownSettlement]),
+        ),
+      );
+      assert.equal(missingApprove.code, '42501');
+      assert.match(missingApprove.message, /aps\.letters:approve/);
+      assert.equal(
+        (await db.query('select status from public.letters where id=$1', [ownSettlement])).rows[0]
+          .status,
+        'draft',
+      );
+
+      // Approval alone is insufficient, and even both capabilities do not let
+      // a non-author bypass the existing author/settings-manager rule.
+      await db.query('delete from public.user_roles where user_id=$1 and role_id=$2', [
+        V,
+        createRoleId,
+      ]);
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2),($3,$2)', [
+        V,
+        approveRoleId,
+        E,
+      ]);
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query('select public.aps_approve_letter($1)', [ownSettlement]),
+        ),
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', E, (c) =>
+          c.query('select public.aps_approve_letter($1)', [ownSettlement]),
+        ),
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+        V,
+        createRoleId,
+      ]);
+      await asRole('authenticated', V, (c) =>
+        c.query('select public.aps_approve_letter($1)', [ownSettlement]),
+      );
+      assert.deepEqual(
+        (
+          await db.query('select status,approved_by from public.letters where id=$1', [
+            ownSettlement,
+          ])
+        ).rows[0],
+        { status: 'approved', approved_by: V },
+      );
+    } finally {
+      await cleanApsReconciliation(fixture, letterIds, sessionIds, roleIds);
+    }
+  });
+
+  await test('APS reconciliation: empty sessions are rejected after refreshing book figures', async () => {
+    const fixture = await seedApsReconciliation();
+    const letterIds = [];
+    const sessionIds = [];
+    const activeLeaves = (
+      await db.query('select id from public.classifications where is_leaf and is_active')
+    ).rows.map((row) => row.id);
+    try {
+      // With no active leaves and no balances or movements, opening a session
+      // legitimately creates zero rows. Restore these fixture states below.
+      await db.query('update public.classifications set is_active=false where id=any($1::uuid[])', [
+        activeLeaves,
+      ]);
+      const sessionId = await openApsSession(fixture.month1.id, fixture.stationId);
+      sessionIds.push(sessionId);
+      assert.equal(Object.keys(await apsSessionItems(sessionId)).length, 0);
+      assert.equal(await refreshApsSession(sessionId), 0);
+      const empty = await captureApsError(() => approveApsSession(sessionId));
+      assert.equal(empty.code, '22023');
+      assert.match(empty.message, /a session without items cannot be approved/);
+      assert.deepEqual(
+        (
+          await db.query(
+            'select status,approved_by,approved_at from public.aps_reconciliation_sessions where id=$1',
+            [sessionId],
+          )
+        ).rows[0],
+        { status: 'open', approved_by: null, approved_at: null },
+      );
+      assert.equal(
+        (
+          await db.query(
+            "select count(*)::int as n from public.audit_logs where entity_id=$1 and action='aps.reconciliation_approved'",
+            [sessionId],
+          )
+        ).rows[0].n,
+        0,
+      );
+
+      // A balance arriving later creates a row during approval's refresh. The
+      // new row is then rejected for missing figures, not as an empty session;
+      // the failed transaction does not persist that refresh.
+      await db.query(
+        `insert into public.opening_balances(fiscal_year_id,warehouse_id,classification_id,amount)
+         values ($1,$2,$3,100)`,
+        [fixture.firstYear.id, fixture.warehouseId, fixture.leafA],
+      );
+      const missing = await captureApsError(() => approveApsSession(sessionId));
+      assert.equal(missing.code, '22023');
+      assert.match(missing.message, /1 item\(s\) have no accountant figures/);
+      assert.equal(Object.keys(await apsSessionItems(sessionId)).length, 0);
+      assert.equal(await refreshApsSession(sessionId), 1);
+      await recordApsItem(sessionId, fixture.leafA, 0, 100);
+      await approveApsSession(sessionId);
+      assert.equal(
+        (
+          await db.query('select status from public.aps_reconciliation_sessions where id=$1', [
+            sessionId,
+          ])
+        ).rows[0].status,
+        'approved',
+      );
+    } finally {
+      await db.query('update public.classifications set is_active=true where id=any($1::uuid[])', [
+        activeLeaves,
+      ]);
+      await cleanApsReconciliation(fixture, letterIds, sessionIds);
+    }
+  });
+
+  await test('APS reconciliation: audit records self-approval even after another recorder overwrites figures', async () => {
+    const fixture = await seedApsReconciliation();
+    const letterIds = [];
+    const sessionIds = [];
+    const approvalAuditFor = async (sessionId) =>
+      (
+        await db.query(
+          "select actor_id,metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and action='aps.reconciliation_approved'",
+          [sessionId],
+        )
+      ).rows[0];
+    try {
+      const overwritten = await openApsSession(fixture.month1.id, fixture.stationId);
+      sessionIds.push(overwritten);
+      await recordApsItem(overwritten, fixture.leafA, 1, 1, A);
+      await recordApsItem(overwritten, fixture.leafA, 0, 0, B);
+      await fillApsZeros(overwritten, B);
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_items where session_id=$1 and recorded_by=$2',
+            [overwritten, A],
+          )
+        ).rows[0].n,
+        0,
+      );
+      await approveApsSession(overwritten, A);
+      const overwrittenAudit = await approvalAuditFor(overwritten);
+      assert.equal(overwrittenAudit.actor_id, A);
+      assert.equal(overwrittenAudit.metadata.approver_recorded_any_item, true);
+      assert.equal(overwrittenAudit.metadata.current_items_recorded_by_approver, 0);
+
+      // A no-op that only submits NULLs is not an entry of accountant figures.
+      const noFigures = await openApsSession(fixture.month2.id, fixture.stationId);
+      sessionIds.push(noFigures);
+      await recordApsItem(noFigures, fixture.leafA, null, null, A);
+      await fillApsZeros(noFigures, B);
+      await approveApsSession(noFigures, A);
+      const noFiguresAudit = await approvalAuditFor(noFigures);
+      assert.equal(noFiguresAudit.actor_id, A);
+      assert.equal(noFiguresAudit.metadata.approver_recorded_any_item, false);
+      assert.equal(noFiguresAudit.metadata.current_items_recorded_by_approver, 0);
+
+      // Bulk zero entries are also attributable even when every current row is
+      // later changed by another person.
+      const month3 = (
+        await db.query(
+          'select id from public.fiscal_months where fiscal_year_id=$1 and month_number=3',
+          [fixture.firstYear.id],
+        )
+      ).rows[0].id;
+      const bulkOverwritten = await openApsSession(month3, fixture.stationId);
+      sessionIds.push(bulkOverwritten);
+      assert.ok((await fillApsZeros(bulkOverwritten, A)) > 0);
+      for (const classificationId of Object.keys(await apsSessionItems(bulkOverwritten))) {
+        await recordApsItem(bulkOverwritten, classificationId, 1, 1, B);
+        await recordApsItem(bulkOverwritten, classificationId, 0, 0, B);
+      }
+      await approveApsSession(bulkOverwritten, A);
+      const bulkAudit = await approvalAuditFor(bulkOverwritten);
+      assert.equal(bulkAudit.actor_id, A);
+      assert.equal(bulkAudit.metadata.approver_recorded_any_item, true);
+      assert.equal(bulkAudit.metadata.current_items_recorded_by_approver, 0);
     } finally {
       await cleanApsReconciliation(fixture, letterIds, sessionIds);
     }
@@ -4267,7 +4932,7 @@ try {
       const settlement = (
         await db.query(
           `select letter_type, status, letter_number, to_char(letter_date,'YYYY-MM-DD') as letter_date,
-                  party_id, sister_company_id, reconciliation_session_id, created_by
+                  party_id, sister_company_id, reconciliation_session_id, settlement_reason, created_by
              from public.letters where id=$1`,
           [firstSettlement],
         )
@@ -4280,6 +4945,7 @@ try {
         party_id: null,
         sister_company_id: null,
         reconciliation_session_id: sessionId,
+        settlement_reason: 'تسوية فروق الحركة',
         created_by: A,
       });
       const settlementLine = (
@@ -4341,12 +5007,15 @@ try {
       assert.equal(approvedSession.settlement_warehouse_id, fixture.warehouseId);
       const approveAudit = (
         await db.query(
-          "select metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and action='aps.reconciliation_approved'",
+          "select actor_id, metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and action='aps.reconciliation_approved'",
           [sessionId],
         )
       ).rows[0];
+      assert.equal(approveAudit.actor_id, E);
       assert.equal(approveAudit.metadata.settlement_warehouse_id, fixture.warehouseId);
       assert.equal(approveAudit.metadata.station_id, fixture.stationId);
+      assert.equal(approveAudit.metadata.approver_recorded_any_item, false);
+      assert.equal(approveAudit.metadata.current_items_recorded_by_approver, 0);
       const settlementAudit = (
         await db.query(
           "select metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and action='aps.reconciliation_settlement_created' and metadata->>'letter_id'=$2",
@@ -4355,6 +5024,7 @@ try {
       ).rows[0];
       assert.equal(settlementAudit.metadata.letter_id, replacement);
       assert.equal(settlementAudit.metadata.warehouse_id, fixture.warehouseId);
+      assert.equal(settlementAudit.metadata.reason, 'تسوية فروق الحركة');
 
       // A settlement cannot be attached to a session that is already final, and
       // no other letter type may point at a session at all.
