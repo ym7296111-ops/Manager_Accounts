@@ -1828,7 +1828,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 52);
+    assert.equal(migrations.length, 53);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1857,6 +1857,7 @@ try {
     assert.ok(migrations.includes('20261110000000_fiscal_years_and_opening_balances.sql'));
     assert.ok(migrations.includes('20261111000000_opening_balances_delete_audit.sql'));
     assert.ok(migrations.includes('20261112000000_opening_balances_freeze.sql'));
+    assert.ok(migrations.includes('20261113000000_aps_letters.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2649,6 +2650,689 @@ try {
       await db.query('delete from public.classifications where id=any($1::uuid[])', [
         classificationIds,
       ]);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // APS letters (20261113000000_aps_letters.sql)
+  // ---------------------------------------------------------------------------
+  const seedApsLetters = async () => {
+    const stationId = randomUUID();
+    const warehouseId = randomUUID();
+    const leafA = randomUUID();
+    const leafB = randomUUID();
+    await db.query('insert into public.stations(id,name) values ($1,$2)', [
+      stationId,
+      `APS audit station ${randomUUID()}`,
+    ]);
+    await db.query('insert into public.warehouses(id,station_id,name) values ($1,$2,$3)', [
+      warehouseId,
+      stationId,
+      `APS audit warehouse ${randomUUID()}`,
+    ]);
+    await db.query('insert into public.classifications(id,name) values ($1,$2),($3,$4)', [
+      leafA,
+      `APS audit leaf A ${randomUUID()}`,
+      leafB,
+      `APS audit leaf B ${randomUUID()}`,
+    ]);
+    const party = (
+      await asRole('authenticated', A, (c) =>
+        c.query("insert into public.parties(branch,name) values ('inbound',$1) returning id,code", [
+          `APS audit supplier ${randomUUID()}`,
+        ]),
+      )
+    ).rows[0];
+    const partyOut = (
+      await asRole('authenticated', A, (c) =>
+        c.query(
+          "insert into public.parties(branch,name) values ('outbound',$1) returning id,code",
+          [`APS audit customer ${randomUUID()}`],
+        ),
+      )
+    ).rows[0];
+    const sister = (
+      await asRole('authenticated', A, (c) =>
+        c.query('insert into public.sister_companies(name,level) values ($1,1) returning id,code', [
+          `APS audit sister ${randomUUID()}`,
+        ]),
+      )
+    ).rows[0];
+    const firstYear = (
+      await asRole('authenticated', A, (c) =>
+        c.query(
+          "insert into public.fiscal_years(start_date,end_date) values ('2040-07-01','2041-06-30') returning id,name",
+        ),
+      )
+    ).rows[0];
+    const secondYear = (
+      await asRole('authenticated', A, (c) =>
+        c.query(
+          "insert into public.fiscal_years(start_date,end_date) values ('2041-07-01','2042-06-30') returning id,name",
+        ),
+      )
+    ).rows[0];
+    return {
+      stationId,
+      warehouseId,
+      leafA,
+      leafB,
+      party,
+      partyOut,
+      sister,
+      firstYear,
+      secondYear,
+    };
+  };
+
+  const insertApsLetter = (fixture, input) =>
+    asRole('authenticated', A, (c) =>
+      c.query(
+        `insert into public.letters
+           (fiscal_year_id, letter_type, letter_number, letter_date, party_id, sister_company_id)
+         values ($1,$2,$3,$4::date,$5,$6)
+         returning id, letter_number, letter_number_raw, status,
+                   source_total, destination_total, counterparty_code, counterparty_name`,
+        [
+          input.yearId ?? fixture.firstYear.id,
+          input.type,
+          input.number,
+          input.date ?? '2040-08-15',
+          input.partyId ?? null,
+          input.sisterId ?? null,
+        ],
+      ),
+    );
+
+  const insertApsLine = (letterId, line) =>
+    asRole('authenticated', A, (c) =>
+      c.query(
+        `insert into public.letter_lines
+           (letter_id, direction, warehouse_id, classification_id, amount, paired_line_id)
+         values ($1,$2,$3,$4,$5,$6) returning id`,
+        [
+          letterId,
+          line.direction,
+          line.warehouseId,
+          line.classificationId,
+          line.amount,
+          line.pairedLineId ?? null,
+        ],
+      ),
+    );
+
+  const approveApsLetter = (letterId) =>
+    asRole('authenticated', A, (c) => c.query('select public.aps_approve_letter($1)', [letterId]));
+
+  const cancelApsLetter = (letterId, reason) =>
+    asRole('authenticated', A, (c) =>
+      c.query('select public.aps_cancel_letter($1,$2)', [letterId, reason]),
+    );
+
+  /** Run `fn` and return the error it raised, so a message can be asserted. */
+  const captureApsError = async (fn) => {
+    try {
+      await fn();
+    } catch (error) {
+      return error;
+    }
+    throw new Error('expected the call to fail');
+  };
+
+  await test('APS letters: permission-gated, author-scoped drafts and one numbering series per fiscal year', async () => {
+    const fixture = await seedApsLetters();
+    const createdIds = [];
+    let readerRoleId = null;
+    try {
+      const columns = await db.query(
+        "select column_name from information_schema.columns where table_schema='public' and table_name='letters' order by ordinal_position",
+      );
+      const names = columns.rows.map((row) => row.column_name);
+      for (const column of [
+        'fiscal_year_id',
+        'letter_type',
+        'letter_number',
+        'letter_number_raw',
+        'letter_date',
+        'status',
+        'party_id',
+        'sister_company_id',
+        'counterparty_code',
+        'counterparty_name',
+        'source_total',
+        'destination_total',
+        'created_by',
+        'approved_at',
+        'approved_by',
+        'cancelled_at',
+        'cancelled_by',
+        'cancel_reason',
+      ]) {
+        assert.ok(names.includes(column), `letters.${column} is missing`);
+      }
+      assert.deepEqual(
+        (
+          await db.query(
+            "select column_name from information_schema.columns where table_schema='public' and table_name='letter_lines' order by ordinal_position",
+          )
+        ).rows.map((row) => row.column_name),
+        [
+          'id',
+          'letter_id',
+          'line_number',
+          'direction',
+          'warehouse_id',
+          'classification_id',
+          'amount',
+          'paired_line_id',
+          'note',
+          'created_at',
+          'updated_at',
+        ],
+      );
+
+      assert.deepEqual(
+        (
+          await db.query(
+            "select slug, module from public.permissions where slug like 'aps.%' order by slug",
+          )
+        ).rows,
+        [
+          { slug: 'aps.letters:cancel', module: 'aps' },
+          { slug: 'aps.letters:create', module: 'aps' },
+          { slug: 'aps.letters:read', module: 'aps' },
+          { slug: 'aps.reconciliation:manage', module: 'aps' },
+        ],
+      );
+      assert.deepEqual(
+        (
+          await db.query(
+            `select distinct r.slug
+               from public.role_permissions rp
+               join public.roles r on r.id = rp.role_id
+               join public.permissions p on p.id = rp.permission_id
+              where p.slug like 'aps.%'
+              order by r.slug`,
+          )
+        ).rows.map((row) => row.slug),
+        ['owner', 'super_admin'],
+      );
+
+      // D1(a) + normalisation: «٠٠٧», «007» and «7» are one number, and the
+      // key is (fiscal year, number) — not (counterparty, number).
+      const first = (
+        await insertApsLetter(fixture, {
+          type: 'inbound',
+          number: '٠٠٧',
+          partyId: fixture.party.id,
+        })
+      ).rows[0];
+      createdIds.push(first.id);
+      assert.equal(first.letter_number, '7');
+      assert.equal(first.letter_number_raw, '٠٠٧');
+      assert.equal(first.status, 'draft');
+      assert.equal(first.source_total, '0.00');
+      assert.equal(first.destination_total, '0.00');
+      assert.equal(first.counterparty_code, fixture.party.code);
+      assert.ok(first.counterparty_name.startsWith('APS audit supplier'));
+
+      await expectCode('23505', () =>
+        insertApsLetter(fixture, { type: 'outbound', number: '007', partyId: fixture.partyOut.id }),
+      );
+      await expectCode('23505', () =>
+        insertApsLetter(fixture, { type: 'outbound', number: '7', partyId: fixture.partyOut.id }),
+      );
+      // The same number in another fiscal year is a different letter.
+      createdIds.push(
+        (
+          await insertApsLetter(fixture, {
+            yearId: fixture.secondYear.id,
+            type: 'inbound',
+            number: '7',
+            date: '2041-08-15',
+            partyId: fixture.party.id,
+          })
+        ).rows[0].id,
+      );
+
+      // A viewer holds none of the APS capabilities.
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select count(*)::int as n from public.letters'),
+          )
+        ).rows[0].n,
+        0,
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) =>
+          c.query(
+            `insert into public.letters (fiscal_year_id, letter_type, letter_number, letter_date, party_id, created_by)
+             values ($1,'inbound','900',$2::date,$3,$4)`,
+            [fixture.firstYear.id, '2040-09-01', fixture.party.id, V],
+          ),
+        ),
+      );
+
+      // `aps.letters:read` alone sees approved letters and never a draft.
+      readerRoleId = randomUUID();
+      await db.query(
+        "insert into public.roles(id,slug,name_ar,name_en) values ($1,'audit_aps_reader','قارئ خطابات','APS reader')",
+        [readerRoleId],
+      );
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.letters:read'",
+        [readerRoleId],
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+        V,
+        readerRoleId,
+      ]);
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select count(*)::int as n from public.letters'),
+          )
+        ).rows[0].n,
+        0,
+        'a draft is never visible to anyone but its author',
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select count(*)::int as n from public.letter_lines'),
+          )
+        ).rows[0].n,
+        0,
+        'line visibility follows the letter',
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('select count(*)::int as n from public.letters'),
+          )
+        ).rows[0].n,
+        createdIds.length,
+      );
+
+      assert.deepEqual(
+        (
+          await db.query(
+            "select policyname, cmd from pg_policies where schemaname='public' and tablename in ('letters','letter_lines') and permissive='PERMISSIVE' order by policyname",
+          )
+        ).rows.map((row) => `${row.policyname}:${row.cmd}`),
+        [
+          'letter_lines_create:INSERT',
+          'letter_lines_delete:DELETE',
+          'letter_lines_read:SELECT',
+          'letter_lines_update:UPDATE',
+          'letters_create:INSERT',
+          'letters_delete:DELETE',
+          'letters_read:SELECT',
+          'letters_update:UPDATE',
+        ],
+      );
+      assert.deepEqual(
+        (
+          await db.query(
+            `select tgname from pg_trigger
+              where tgrelid in ('public.letters'::regclass,'public.letter_lines'::regclass)
+                and not tgisinternal
+              order by tgname`,
+          )
+        ).rows.map((row) => row.tgname),
+        [
+          'letter_lines_aps_before_write',
+          'letter_lines_aps_recalc_totals',
+          'letter_lines_set_updated_at',
+          'letters_aps_before_write',
+          'letters_set_updated_at',
+        ],
+      );
+    } finally {
+      if (readerRoleId) {
+        await db.query('delete from public.user_roles where role_id=$1', [readerRoleId]);
+        await db.query('delete from public.roles where id=$1', [readerRoleId]);
+      }
+      await db.query('delete from public.letters where id=any($1::uuid[])', [createdIds]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [
+        [fixture.firstYear.id, fixture.secondYear.id],
+      ]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        [fixture.leafA, fixture.leafB],
+      ]);
+      await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
+      await db.query('delete from public.stations where id=$1', [fixture.stationId]);
+      await db.query('delete from public.parties where id=any($1::uuid[])', [
+        [fixture.party.id, fixture.partyOut.id],
+      ]);
+      await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+    }
+  });
+
+  await test('APS letters: approval enforces pairing, open periods and the audit trail', async () => {
+    const fixture = await seedApsLetters();
+    const createdIds = [];
+    let readerRoleId = null;
+    try {
+      // ---- A single-sided letter: the totals come from its own lines. ------
+      const inbound = (
+        await insertApsLetter(fixture, {
+          type: 'inbound',
+          number: '10',
+          partyId: fixture.party.id,
+        })
+      ).rows[0];
+      createdIds.push(inbound.id);
+      await insertApsLine(inbound.id, {
+        direction: 'in',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafA,
+        amount: 125.5,
+      });
+      assert.deepEqual(
+        (
+          await db.query(
+            'select source_total::text, destination_total::text from public.letters where id=$1',
+            [inbound.id],
+          )
+        ).rows[0],
+        { source_total: '0.00', destination_total: '125.50' },
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('select public.aps_suggest_letter_number($1) as next', [fixture.firstYear.id]),
+          )
+        ).rows[0].next,
+        '11',
+      );
+
+      await approveApsLetter(inbound.id);
+      assert.deepEqual(
+        (
+          await db.query(
+            'select status, approved_at is not null as stamped from public.letters where id=$1',
+            [inbound.id],
+          )
+        ).rows[0],
+        { status: 'approved', stamped: true },
+      );
+      const approvalAudit = (
+        await db.query(
+          "select actor_id, metadata from public.audit_logs where entity='letters' and entity_id=$1 and action='aps.letter_approved'",
+          [inbound.id],
+        )
+      ).rows[0];
+      assert.equal(approvalAudit.actor_id, A);
+      assert.equal(approvalAudit.metadata.letter_number, '10');
+      assert.equal(approvalAudit.metadata.letter_type, 'inbound');
+      assert.equal(approvalAudit.metadata.destination_total, 125.5);
+      assert.equal(approvalAudit.metadata.line_count, 1);
+
+      // Approved means frozen: no second approval, no update, no delete, no
+      // new line, and the number stays taken.
+      await expectCode('22023', () => approveApsLetter(inbound.id));
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('update public.letters set letter_date=letter_date where id=$1 returning id', [
+              inbound.id,
+            ]),
+          )
+        ).rowCount,
+        0,
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('delete from public.letters where id=$1 returning id', [inbound.id]),
+          )
+        ).rowCount,
+        0,
+      );
+
+      // ---- D4(b): an internal transfer must balance and be paired. ---------
+      const transfer = (
+        await insertApsLetter(fixture, {
+          type: 'internal_transfer',
+          number: '11',
+          date: '2040-08-20',
+        })
+      ).rows[0];
+      createdIds.push(transfer.id);
+      const source = (
+        await insertApsLine(transfer.id, {
+          direction: 'out',
+          warehouseId: fixture.warehouseId,
+          classificationId: fixture.leafA,
+          amount: 100,
+        })
+      ).rows[0];
+      // A pair that names a non-existent partner, or an unequal one, fails on
+      // write — where the mistake is made.
+      await expectCode('23503', () =>
+        insertApsLine(transfer.id, {
+          direction: 'in',
+          warehouseId: fixture.warehouseId,
+          classificationId: fixture.leafA,
+          amount: 100,
+          pairedLineId: randomUUID(),
+        }),
+      );
+      await expectCode('23514', () =>
+        insertApsLine(transfer.id, {
+          direction: 'in',
+          warehouseId: fixture.warehouseId,
+          classificationId: fixture.leafA,
+          amount: 90,
+          pairedLineId: source.id,
+        }),
+      );
+      // An unpaired destination line is caught at approval.
+      await insertApsLine(transfer.id, {
+        direction: 'in',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafB,
+        amount: 100,
+      });
+      assert.match(
+        (await captureApsError(() => approveApsLetter(transfer.id))).message,
+        /name the source line/,
+      );
+      await db.query("delete from public.letter_lines where letter_id=$1 and direction='in'", [
+        transfer.id,
+      ]);
+      // Paired and balanced, but it moves stock into a different classification:
+      // D4(b) requires the explicit reclassification flag.
+      await insertApsLine(transfer.id, {
+        direction: 'in',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafB,
+        amount: 100,
+        pairedLineId: source.id,
+      });
+      assert.match(
+        (await captureApsError(() => approveApsLetter(transfer.id))).message,
+        /reclassification/,
+      );
+      await asRole('authenticated', A, (c) =>
+        c.query(
+          'update public.letters set has_reclassification=true, reclassification_reason=$2 where id=$1',
+          [transfer.id, 'تحويل بين تصنيفين بقرار من الإدارة'],
+        ),
+      );
+      await approveApsLetter(transfer.id);
+      const approvedTransfer = (
+        await db.query(
+          'select status, source_total::text, destination_total::text from public.letters where id=$1',
+          [transfer.id],
+        )
+      ).rows[0];
+      assert.deepEqual(approvedTransfer, {
+        status: 'approved',
+        source_total: '100.00',
+        destination_total: '100.00',
+      });
+      // The next free number counts the approved ones.
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query('select public.aps_suggest_letter_number($1) as next', [fixture.firstYear.id]),
+          )
+        ).rows[0].next,
+        '12',
+      );
+
+      // ---- D3(a): an external transfer is a sister company, one direction. -
+      const external = (
+        await insertApsLetter(fixture, {
+          type: 'external_transfer',
+          number: '12',
+          date: '2040-08-25',
+          sisterId: fixture.sister.id,
+        })
+      ).rows[0];
+      createdIds.push(external.id);
+      assert.equal(external.counterparty_code, fixture.sister.code);
+      await insertApsLine(external.id, {
+        direction: 'out',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafA,
+        amount: 10,
+      });
+      await insertApsLine(external.id, {
+        direction: 'in',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafB,
+        amount: 5,
+      });
+      assert.match(
+        (await captureApsError(() => approveApsLetter(external.id))).message,
+        /one direction/,
+      );
+
+      // An inbound party cannot be used on an outbound letter: the branch must
+      // match the type, and that cross-table rule lives in the write trigger.
+      assert.match(
+        (
+          await captureApsError(() =>
+            insertApsLetter(fixture, { type: 'outbound', number: '13', partyId: fixture.party.id }),
+          )
+        ).message,
+        /needs a outbound party/,
+      );
+
+      // ---- D8(a+b): a closed month blocks approval until supplements open. --
+      await db.query(
+        'update public.fiscal_months set is_closed=true where fiscal_year_id=$1 and month_number=2',
+        [fixture.secondYear.id],
+      );
+      const closed = (
+        await insertApsLetter(fixture, {
+          yearId: fixture.secondYear.id,
+          type: 'outbound',
+          number: '1',
+          date: '2041-08-10',
+          partyId: fixture.partyOut.id,
+        })
+      ).rows[0];
+      createdIds.push(closed.id);
+      // A draft may be prepared for a closed period...
+      await insertApsLine(closed.id, {
+        direction: 'out',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafA,
+        amount: 40,
+      });
+      // ...but it cannot post.
+      assert.match(
+        (await captureApsError(() => approveApsLetter(closed.id))).message,
+        /month containing .* is closed/,
+      );
+      await db.query('update public.fiscal_years set supplements_open=true where id=$1', [
+        fixture.secondYear.id,
+      ]);
+      await approveApsLetter(closed.id);
+      assert.equal(
+        (await db.query('select status from public.letters where id=$1', [closed.id])).rows[0]
+          .status,
+        'approved',
+      );
+
+      // ---- D7(b) + D11(a): cancellation needs the capability and a reason. -
+      await expectCode('22023', () => cancelApsLetter(inbound.id, '  '));
+      await asRole('authenticated', V, (c) =>
+        c.query('select public.aps_cancel_letter($1,$2)', [inbound.id, 'إلغاء بلا صلاحية']),
+      ).then(
+        () => {
+          throw new Error('a viewer must not cancel a letter');
+        },
+        (error) => assert.equal(error.code, '42501'),
+      );
+      await cancelApsLetter(inbound.id, 'خطأ في رقم الخطاب الورقي');
+      const cancelled = (
+        await db.query(
+          'select status, cancel_reason, cancelled_by from public.letters where id=$1',
+          [inbound.id],
+        )
+      ).rows[0];
+      assert.equal(cancelled.status, 'cancelled');
+      assert.equal(cancelled.cancel_reason, 'خطأ في رقم الخطاب الورقي');
+      assert.equal(cancelled.cancelled_by, A);
+      const cancelAudit = (
+        await db.query(
+          "select metadata from public.audit_logs where entity='letters' and entity_id=$1 and action='aps.letter_cancelled'",
+          [inbound.id],
+        )
+      ).rows[0];
+      assert.equal(cancelAudit.metadata.previous_status, 'approved');
+      assert.equal(cancelAudit.metadata.reason, 'خطأ في رقم الخطاب الورقي');
+      await expectCode('22023', () => cancelApsLetter(inbound.id, 'محاولة إلغاء ثانية'));
+
+      // A cancelled number is never reused.
+      await expectCode('23505', () =>
+        insertApsLetter(fixture, { type: 'inbound', number: '10', partyId: fixture.party.id }),
+      );
+
+      // ---- The read capability alone now sees exactly the approved letters. -
+      readerRoleId = randomUUID();
+      await db.query(
+        "insert into public.roles(id,slug,name_ar,name_en) values ($1,'audit_aps_reader2','قارئ خطابات 2','APS reader 2')",
+        [readerRoleId],
+      );
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.letters:read'",
+        [readerRoleId],
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+        V,
+        readerRoleId,
+      ]);
+      const visible = await asRole('authenticated', V, (c) =>
+        c.query('select id, status from public.letters order by letter_number'),
+      );
+      assert.deepEqual(visible.rows, [
+        { id: closed.id, status: 'approved' },
+        { id: inbound.id, status: 'cancelled' },
+        { id: transfer.id, status: 'approved' },
+      ]);
+    } finally {
+      if (readerRoleId) {
+        await db.query('delete from public.user_roles where role_id=$1', [readerRoleId]);
+        await db.query('delete from public.roles where id=$1', [readerRoleId]);
+      }
+      await db.query('delete from public.letters where id=any($1::uuid[])', [createdIds]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [
+        [fixture.firstYear.id, fixture.secondYear.id],
+      ]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        [fixture.leafA, fixture.leafB],
+      ]);
+      await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
+      await db.query('delete from public.stations where id=$1', [fixture.stationId]);
+      await db.query('delete from public.parties where id=$1', [fixture.party.id]);
+      await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
     }
   });
 
