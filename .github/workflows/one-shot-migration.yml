@@ -1,0 +1,48 @@
+name: One-shot Supabase Production Migration
+
+# Temporary manual-only path to apply pending migrations without the Docker-based CI job.
+# Remove this workflow after the one-time production migration succeeds.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run a non-applying preview first (set false to apply migrations)
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  apply-migrations:
+    name: Apply migrations to production
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: Production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.118.0
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --yes
+
+      - name: Preview linked migrations (dry run)
+        if: ${{ inputs.dry_run }}
+        run: supabase db push --linked --dry-run --yes
+
+      - name: Apply linked migrations
+        if: ${{ !inputs.dry_run }}
+        run: supabase db push --linked --yes
