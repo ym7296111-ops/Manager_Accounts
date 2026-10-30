@@ -21,9 +21,11 @@ import ProjectSettings from '@/pages/settings/ProjectSettings';
 import ResetPasswordPage from '@/pages/ResetPasswordPage';
 import SettingsPage from '@/pages/SettingsPage';
 import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
+import ApsLetterEntryPage from '@/pages/workspaces/ApsLetterEntryPage';
 import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
 import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
 import WorkspacePage from '@/pages/workspaces/WorkspacePage';
+import { APS_LETTER_CREATE_CAPABILITY } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
 
@@ -81,6 +83,14 @@ function AppRoutes() {
               element={
                 <RequireCapability requirement={APS_LETTERS_READ_REQUIREMENT}>
                   <ApsLettersPage />
+                </RequireCapability>
+              }
+            />
+            <Route
+              path="letters/new"
+              element={
+                <RequireCapability requirement={APS_LETTER_CREATE_CAPABILITY}>
+                  <ApsLetterEntryPage />
                 </RequireCapability>
               }
             />

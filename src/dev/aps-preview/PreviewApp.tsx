@@ -4,8 +4,10 @@ import { RequireCapability } from '@/components/auth/RequireCapability';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { I18nProvider, useI18n } from '@/i18n/I18nContext';
 import DashboardLayout from '@/layouts/DashboardLayout';
+import { APS_LETTER_CREATE_CAPABILITY } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
+import ApsLetterEntryPage from '@/pages/workspaces/ApsLetterEntryPage';
 import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
 import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
 
@@ -43,6 +45,15 @@ function ReviewBanner() {
           <option value="network">{ar ? 'خطأ اتصال' : 'Network error'}</option>
           <option value="restricted">
             {ar ? 'الدليل محجوب، والأسماء محفوظة' : 'Directory denied; snapshots visible'}
+          </option>
+          <option value="approval-fails">
+            {ar ? 'الإدخال: الاعتماد مرفوض' : 'Entry: approval refused'}
+          </option>
+          <option value="approval-unknown">
+            {ar ? 'الإدخال: نتيجة الاعتماد مجهولة' : 'Entry: approval result lost'}
+          </option>
+          <option value="save-unknown">
+            {ar ? 'الإدخال: نتيجة الحفظ مجهولة' : 'Entry: save result lost'}
           </option>
         </select>
       </label>
@@ -87,6 +98,14 @@ export default function PreviewApp() {
                     element={
                       <RequireCapability requirement={APS_LETTERS_READ_REQUIREMENT}>
                         <ApsLettersPage />
+                      </RequireCapability>
+                    }
+                  />
+                  <Route
+                    path="letters/new"
+                    element={
+                      <RequireCapability requirement={APS_LETTER_CREATE_CAPABILITY}>
+                        <ApsLetterEntryPage />
                       </RequireCapability>
                     }
                   />

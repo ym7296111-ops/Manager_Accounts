@@ -69,7 +69,12 @@ function NavRow({ node, collapsed, onNavigate, onRequestExpand, idPrefix }: NavR
           onClick={onNavigate}
           title={collapsed ? label : undefined}
           aria-label={collapsed ? label : undefined}
-          className={({ isActive }) => activeLinkClass(isActive)}
+          className={({ isActive }) =>
+            activeLinkClass(
+              isActive &&
+                !(node.id === 'aps-letters' && location.pathname === '/workspaces/aps/letters/new'),
+            )
+          }
         >
           <Icon className="size-[18px] shrink-0" aria-hidden="true" />
           {!collapsed && <span className="truncate">{label}</span>}

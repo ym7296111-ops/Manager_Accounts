@@ -1,6 +1,7 @@
 import {
   Bell,
   BookOpenText,
+  FilePlus2,
   DatabaseBackup,
   KeyRound,
   KeySquare,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { CapabilityRequirement } from '@/hooks/useAuthCapabilities';
 import type { TranslationKey } from '@/i18n/locales/ar';
+import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
 
@@ -112,6 +114,15 @@ export const NAV_ITEMS: NavNode[] = [
     children:
       workspace.slug === 'aps'
         ? [
+            {
+              kind: 'link',
+              id: 'aps-letter-entry',
+              to: APS_LETTER_NEW_PATH,
+              labelKey: 'aps.entry.tab',
+              icon: FilePlus2,
+              capability: APS_LETTER_CREATE_CAPABILITY,
+              end: true,
+            },
             {
               kind: 'link',
               id: 'aps-letters',

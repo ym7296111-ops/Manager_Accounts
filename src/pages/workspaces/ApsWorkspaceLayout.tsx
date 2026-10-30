@@ -1,11 +1,22 @@
-import { BookOpenText, Eye, FolderOpen } from 'lucide-react';
-import { NavLink, Outlet } from 'react-router';
+import { BookOpenText, Eye, FilePlus2, FolderOpen } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation } from 'react-router';
+import {
+  requirementMet,
+  useAuthCapabilities,
+  type CapabilityRequirement,
+} from '@/hooks/useAuthCapabilities';
 import { useI18n } from '@/i18n/I18nContext';
-import { APS_LETTERS_PATH } from '@/lib/apsLetters';
+import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
+import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 
-/** APS currently exposes only the read-only letters tab. */
 export default function ApsWorkspaceLayout() {
   const { t } = useI18n();
+  const capabilities = useAuthCapabilities();
+  const location = useLocation();
+  const canUse = (requirement: CapabilityRequirement) =>
+    !capabilities.isAuthoritative ||
+    requirementMet(requirement, (slug) => capabilities.hasCapability(slug));
+  const creating = location.pathname === APS_LETTER_NEW_PATH;
 
   return (
     <div className="@container min-w-0 space-y-6">
@@ -22,20 +33,40 @@ export default function ApsWorkspaceLayout() {
             {t('aps.workspace.description')}
           </p>
         </div>
-        <span className="border-border bg-card text-muted-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
-          <Eye className="text-primary size-4" aria-hidden="true" />
-          {t('aps.workspace.readOnly')}
-        </span>
+        {!canUse(APS_LETTER_CREATE_CAPABILITY) && (
+          <span className="border-border bg-card text-muted-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold">
+            <Eye className="text-primary size-4" aria-hidden="true" />
+            {t('aps.workspace.readOnly')}
+          </span>
+        )}
       </header>
 
-      <nav aria-label={t('aps.workspace.navigation')} className="border-border border-b">
-        <NavLink
-          to={APS_LETTERS_PATH}
-          className="text-primary border-primary inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold"
-        >
-          <BookOpenText className="size-4" aria-hidden="true" />
-          {t('aps.letters.tab')}
-        </NavLink>
+      <nav
+        aria-label={t('aps.workspace.navigation')}
+        className="border-border flex flex-wrap gap-x-5 border-b"
+      >
+        {canUse(APS_LETTERS_READ_REQUIREMENT) && (
+          <Link
+            to={APS_LETTERS_PATH}
+            aria-current={creating ? undefined : 'page'}
+            className={`inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold ${creating ? 'text-muted-foreground hover:text-foreground border-transparent' : 'text-primary border-primary'}`}
+          >
+            <BookOpenText className="size-4" aria-hidden="true" />
+            {t('aps.letters.tab')}
+          </Link>
+        )}
+        {canUse(APS_LETTER_CREATE_CAPABILITY) && (
+          <NavLink
+            to={APS_LETTER_NEW_PATH}
+            end
+            className={({ isActive }) =>
+              `inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold ${isActive ? 'text-primary border-primary' : 'text-muted-foreground hover:text-foreground border-transparent'}`
+            }
+          >
+            <FilePlus2 className="size-4" aria-hidden="true" />
+            {t('aps.entry.tab')}
+          </NavLink>
+        )}
       </nav>
 
       <Outlet />

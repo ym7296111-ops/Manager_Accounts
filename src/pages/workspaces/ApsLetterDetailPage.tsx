@@ -1,6 +1,8 @@
 import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Boxes, Layers3 } from 'lucide-react';
 import { Link, useLocation, useParams } from 'react-router';
 import { useApsLetterDetail } from '@/hooks/useApsLetters';
+import { useAuthCapabilities } from '@/hooks/useAuthCapabilities';
+import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import { useI18n } from '@/i18n/I18nContext';
 import { APS_LETTERS_PATH, isLetterId } from '@/lib/apsLetters';
 import {
@@ -18,6 +20,7 @@ export default function ApsLetterDetailPage() {
   const { letterId = '' } = useParams();
   const location = useLocation();
   const query = useApsLetterDetail(letterId);
+  const capabilities = useAuthCapabilities();
   const back = (
     <Link
       to={{ pathname: APS_LETTERS_PATH, search: location.search }}
@@ -70,7 +73,20 @@ export default function ApsLetterDetailPage() {
               {t('aps.letters.detailTitle', { number: letter.number })}
             </h2>
           </div>
-          <LetterStatusBadge status={letter.status} />
+          <div className="flex flex-wrap items-center gap-3">
+            <LetterStatusBadge status={letter.status} />
+            {letter.status === 'draft' &&
+              letter.type !== 'settlement' &&
+              (!capabilities.isAuthoritative ||
+                capabilities.hasCapability(APS_LETTER_CREATE_CAPABILITY)) && (
+                <Link
+                  to={`${APS_LETTER_NEW_PATH}?draft=${letter.id}`}
+                  className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-10 items-center rounded-xl border px-3 text-sm font-semibold"
+                >
+                  {t('aps.entry.editDraft')}
+                </Link>
+              )}
+          </div>
         </div>
         <div className="border-border mt-5 grid min-w-0 grid-cols-1 gap-4 border-t pt-5 @md:grid-cols-3">
           <div className="min-w-0">
