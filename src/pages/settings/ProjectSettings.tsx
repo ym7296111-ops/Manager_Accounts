@@ -5,6 +5,7 @@ import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
 import Classifications from '@/pages/settings/Classifications';
+import IssuersSettings from '@/pages/settings/IssuersSettings';
 import Parties from '@/pages/settings/Parties';
 import SisterCompanies from '@/pages/settings/SisterCompanies';
 import StationsWarehouses from '@/pages/settings/StationsWarehouses';
@@ -16,13 +17,14 @@ import { UnsavedChangesProvider } from '@/pages/settings/UnsavedChangesProvider'
  * Project-settings screen (`/settings/project`).
  *
  * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes five tabs under the header, in this order:
+ * exposes six tabs under the header, in this order:
  *
  *   1. المحطات والمخازن        stations + warehouses (nested single read)
  *   2. التصنيفات               classifications (flat read assembled into a tree)
  *   3. جهات الوارد وأغراض الصرف  parties (a two-root tree: inbound / outbound)
  *   4. الشركات الشقيقة          sister companies (a two-level parent → branch tree)
  *   5. عام                     financial settings (annual years, periods, opening balances)
+ *   6. أكواد المُصدرين          the controlled list behind «كود الخطاب» on entry
  *
  * Every tab fetches only while its own panel is mounted, so switching tabs
  * costs no background traffic. Sister companies sits at the top level rather
@@ -37,7 +39,7 @@ import { UnsavedChangesProvider } from '@/pages/settings/UnsavedChangesProvider'
  * an in-progress opening balance. Both tab bars ask the provider first.
  */
 type ProjectSettingsTab =
-  'stations' | 'classifications' | 'parties' | 'sisterCompanies' | 'general';
+  'stations' | 'classifications' | 'parties' | 'sisterCompanies' | 'general' | 'issuers';
 
 interface ProjectSettingsTabConfig {
   id: ProjectSettingsTab;
@@ -64,6 +66,10 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
   {
     id: 'general',
     labelKey: 'settings.project.tabs.general',
+  },
+  {
+    id: 'issuers',
+    labelKey: 'settings.project.tabs.issuers',
   },
 ] as const;
 
@@ -165,6 +171,10 @@ function ProjectSettingsScreen() {
           ) : activeConfig.id === 'sisterCompanies' ? (
             /* The tree opens straight away — no sub-tabs of its own. */
             <SisterCompanies />
+          ) : activeConfig.id === 'issuers' ? (
+            /* The flat register behind the entry screen's letter-code
+               dropdown: two letters, an optional name, active/disabled. */
+            <IssuersSettings />
           ) : (
             <FiscalSettings />
           )}

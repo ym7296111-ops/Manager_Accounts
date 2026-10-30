@@ -151,6 +151,35 @@ export function letterCodeIncomplete(value: string): boolean {
 }
 
 /**
+ * The screen's two controls and the stored value.
+ *
+ * `issuer_reference` is one column (`YM:63`), but it is answered by two inputs:
+ * a dropdown of the registered issuers and a digits-only number field with the
+ * colon printed between them. These two helpers are the only place that
+ * conversion happens, so the composed value the hooks save is exactly the shape
+ * the database CHECK accepts.
+ */
+export function splitLetterCode(value: string): {
+  readonly code: string;
+  readonly number: string;
+} {
+  const normalized = normalizeLetterCode(value);
+  const separator = normalized.indexOf(':');
+  return separator === -1
+    ? { code: normalized, number: '' }
+    : { code: normalized.slice(0, 2), number: normalized.slice(separator + 1) };
+}
+
+/**
+ * Without an issuer there is no code at all — the number cannot stand alone, so
+ * clearing the dropdown clears the pair rather than leaving an orphan number.
+ */
+export function joinLetterCode(code: string, number: string): string {
+  if (code === '') return '';
+  return number === '' ? code : `${code}:${number}`;
+}
+
+/**
  * Today in the browser's own calendar, `YYYY-MM-DD`. The period bar is about
  * the day the letter is being written, not about a date the clerk types.
  */

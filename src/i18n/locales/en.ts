@@ -428,10 +428,17 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.periodClosed': 'Period closed',
   'aps.entry.epsNumber': 'System number (EPS)',
   'aps.entry.letterCode': 'Letter code',
-  'aps.entry.letterCodePlaceholder': 'YM:63',
-  'aps.entry.letterCodeHint': 'Two Latin letters, the colon added for you, then digits.',
+  'aps.entry.letterCodeIssuer': 'Issuer',
+  'aps.entry.letterCodeNumber': 'Number',
+  'aps.entry.chooseIssuer': 'Choose the issuer',
+  'aps.entry.letterCodeInactive': '(inactive)',
+  'aps.entry.letterCodeHint':
+    'Choose the issuer from the register, then type the number in digits only. The colon is added for you.',
   'aps.entry.letterCodeInvalid':
-    'The required shape is two Latin letters, a colon, then digits (for example YM:63), with a registered issuer prefix.',
+    'The code prefix is not an active issuer; choose one from the list.',
+  'aps.entry.letterCodeNumberRequired': 'Type the letter-code number in digits only.',
+  'aps.entry.letterCodeNoIssuers':
+    'No active issuer. Add a code under Project settings → Issuer codes.',
   'aps.entry.searchWarehouse': 'Search by warehouse or station',
   'aps.entry.noWarehouseMatches': 'No matching warehouse',
   'aps.entry.clearWarehouse': 'Clear the warehouse',
@@ -519,7 +526,7 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.errorUnknown': 'Could not save. Try again or contact your administrator.',
   'aps.entry.validate.number': 'Enter the system number (EPS) in digits only, 1 to 64 digits.',
   'aps.entry.validate.letterCode':
-    'Enter the letter code in the required shape: two Latin letters, a colon, then digits (for example YM:63).',
+    'Choose the issuer, then type the letter-code number in digits only (for example YM:63).',
   'aps.entry.validate.issuerCode': 'The letter code prefix is not a registered, active issuer.',
   'aps.entry.validate.period':
     'No running period is configured. Check the periodic settings before entering a letter.',
@@ -583,6 +590,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.tabs.parties': 'Inbound & Outbound',
   'settings.project.tabs.sisterCompanies': 'Sister companies',
   'settings.project.tabs.general': 'General',
+  'settings.project.tabs.issuers': 'Issuer codes',
   'settings.project.stations.add': 'Add station',
   'settings.project.stations.addWarehouse': 'Add warehouse',
   'settings.project.stations.warehouseCount': '{count} warehouses',
@@ -848,6 +856,68 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.sisterCompanies.writeError.notFound':
     'This company no longer exists. Refresh the tree and try again.',
   'settings.project.sisterCompanies.writeError.unknown': 'The operation failed. Please try again.',
+  'settings.project.issuers.heading': 'Issuer codes',
+  'settings.project.issuers.description':
+    'Two Latin letters identify who issued a paper letter (YM = ياسر), and they are the choices in the letter-code dropdown on the entry screen. The letters are fixed after creation, the name is optional, and deactivating a code hides it from entry while keeping its history.',
+  'settings.project.issuers.add': 'Add new code',
+  'settings.project.issuers.column.code': 'Code',
+  'settings.project.issuers.column.name': 'Name',
+  'settings.project.issuers.column.status': 'Status',
+  'settings.project.issuers.column.actions': 'Actions',
+  'settings.project.issuers.status.active': 'Active',
+  'settings.project.issuers.status.inactive': 'Disabled',
+  'settings.project.issuers.loading': 'Loading issuer codes…',
+  'settings.project.issuers.retry': 'Try again',
+  'settings.project.issuers.empty.title': 'No issuer codes yet',
+  'settings.project.issuers.empty.description':
+    'Add the first code (two Latin letters); it appears in the letter-code dropdown on the entry screen.',
+  'settings.project.issuers.action.edit': 'Rename',
+  'settings.project.issuers.action.deactivate': 'Deactivate',
+  'settings.project.issuers.action.activate': 'Activate',
+  'settings.project.issuers.dialog.add': 'Add a new issuer code',
+  'settings.project.issuers.dialog.edit': 'Rename the issuer',
+  'settings.project.issuers.dialog.code': 'The two letters (for example YM)',
+  'settings.project.issuers.dialog.codeFixed': 'The two letters (fixed identity)',
+  'settings.project.issuers.dialog.codeHint':
+    'Two Latin letters only, stored in upper case. They cannot be changed after creation.',
+  'settings.project.issuers.dialog.immutable':
+    'The two letters are the identity of the code and cannot be edited — only the name can change.',
+  'settings.project.issuers.dialog.name': 'Name / description (optional)',
+  'settings.project.issuers.dialog.nameHint':
+    'Shown beside the code in the list, e.g. YM — ياسر. If left blank, the code is shown alone.',
+  'settings.project.issuers.dialog.save': 'Save',
+  'settings.project.issuers.dialog.cancel': 'Cancel',
+  'settings.project.issuers.dialog.close': 'Close',
+  'settings.project.issuers.dialog.saving': 'Saving…',
+  'settings.project.issuers.validation.codeRequired': 'Enter the two Latin letters of the code.',
+  'settings.project.issuers.validation.codeShape':
+    'The code is exactly two Latin letters, e.g. YM.',
+  'settings.project.issuers.validation.nameTooLong':
+    'The name is longer than 120 characters; shorten it and save again.',
+  'settings.project.issuers.success.added':
+    'The code was added and is available on the entry screen.',
+  'settings.project.issuers.success.renamed': 'The name was saved.',
+  'settings.project.issuers.success.activated':
+    'The code is active and available on the entry screen.',
+  'settings.project.issuers.success.deactivated':
+    'The code is disabled and no longer offered on the entry screen; its history is kept.',
+  'settings.project.issuers.dismiss': 'Dismiss alert',
+  'settings.project.issuers.error.forbidden':
+    'You do not have permission to read issuer codes (project.settings:manage).',
+  'settings.project.issuers.error.unavailable': 'The issuer-code service is unavailable right now.',
+  'settings.project.issuers.error.network': 'Could not reach the server. Please try again.',
+  'settings.project.issuers.error.unknown': 'Could not load the issuer codes. Please try again.',
+  'settings.project.issuers.writeError.forbidden':
+    'You do not have permission to manage issuer codes (project.settings:manage).',
+  'settings.project.issuers.writeError.unavailable':
+    'The issuer-code service is unavailable right now.',
+  'settings.project.issuers.writeError.network': 'Could not reach the server. Please try again.',
+  'settings.project.issuers.writeError.validation': 'The code or the name does not match the rule.',
+  'settings.project.issuers.writeError.duplicate':
+    'This code is already registered (upper and lower case are the same code).',
+  'settings.project.issuers.writeError.notFound':
+    'This code no longer exists. Refresh the list and try again.',
+  'settings.project.issuers.writeError.unknown': 'The operation failed. Please try again.',
   'settings.project.fiscal.heading': 'Financial settings',
   'settings.project.fiscal.description':
     'Manage fiscal years, accounting periods, and opening balances for stations, warehouses, and classifications.',

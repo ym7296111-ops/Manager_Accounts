@@ -6,10 +6,12 @@ import { I18nProvider, useI18n } from '@/i18n/I18nContext';
 import DashboardLayout from '@/layouts/DashboardLayout';
 import { APS_LETTER_CREATE_CAPABILITY } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
+import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
 import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
 import ApsLetterEntryPage from '@/pages/workspaces/ApsLetterEntryPage';
 import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
 import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
+import IssuersSettings from '@/pages/settings/IssuersSettings';
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -27,6 +29,9 @@ function ReviewBanner() {
           ? 'معاينة للمراجعة ببيانات خيالية — لا تتصل بـ Supabase ولا تختبر RLS.'
           : 'Review preview with fictional data — no Supabase connection or RLS testing.'}
       </strong>
+      <Link to="/settings/issuers" className="font-semibold underline underline-offset-2">
+        {ar ? 'أكواد المُصدرين' : 'Issuer codes'}
+      </Link>
       <label className="flex items-center gap-2">
         {ar ? 'الحالة:' : 'Scenario:'}
         <select
@@ -118,6 +123,19 @@ export default function PreviewApp() {
                     }
                   />
                 </Route>
+                {/* The issuer register lives in project settings; the review
+                    harness mounts that one panel so a code can be added here
+                    and seen in the entry dropdown on the other route. */}
+                <Route
+                  path="settings/issuers"
+                  element={
+                    <RequireCapability requirement={PROJECT_SETTINGS_CAPABILITY}>
+                      <div className="mx-auto max-w-4xl px-4 py-5 sm:px-6">
+                        <IssuersSettings />
+                      </div>
+                    </RequireCapability>
+                  }
+                />
                 <Route path="*" element={<PreviewFallback />} />
               </Route>
             </Routes>

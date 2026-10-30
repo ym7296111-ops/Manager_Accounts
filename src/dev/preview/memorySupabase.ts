@@ -22,6 +22,10 @@
  *   is minted per branch (`IN-001` / `OUT-001`), a payload carrying `code` — or
  *   `branch` on update — is rejected, and a branch outside the two roots is
  *   refused with 23514;
+ * * the issuer register is a flat list of two-letter codes: `code` is refused on
+ *   update (it is the identity), a duplicate is refused case-insensitively with
+ *   23505, the name falls back to the code when blank, and there is no delete
+ *   privilege at all — a used code is deactivated, like the database allows;
  * * sister companies form a two-level tree: `SIS-001` for a parent company and
  *   `SIS-001-01` for its first branch, `parent_id`/`code`/`level` are refused
  *   on update, and deleting a company that still has branches raises 23503;
@@ -715,6 +719,134 @@ function runSisterCompany(
   }
 }
 
+/**
+ * The issuer register (`public.issuers`): `code` is the identity, `name` is
+ * optional, and a used code is deactivated rather than deleted — the table
+ * grants `select, insert, update` only.
+ */
+interface IssuerPreviewRow {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+const issuers: IssuerPreviewRow[] = [
+  {
+    id: 'issuer-ym',
+    code: 'YM',
+    name: 'ياسر',
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+  {
+    id: 'issuer-aa',
+    code: 'AA',
+    name: 'أحمد عبد الله',
+    is_active: true,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  },
+];
+
+/** `issuers_code_format check (code ~ '^[A-Za-z]{2}$')`. */
+function writeIssuerCode(value: unknown): string {
+  const code = typeof value === 'string' ? value.trim().toUpperCase() : '';
+  if (!/^[A-Z]{2}$/.test(code)) {
+    throw new DbError('23514', 'issuers_code_format');
+  }
+  if (issuers.some((row) => row.code.toUpperCase() === code)) {
+    throw new DbError('23505', 'issuers_code_upper_key');
+  }
+  return code;
+}
+
+function insertIssuer(payload: Record<string, unknown>): IssuerPreviewRow {
+  if ('id' in payload || 'created_at' in payload) {
+    throw new DbError('42501', 'preview: the client must not write server columns');
+  }
+  const code = writeIssuerCode(payload.code);
+  const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+  const row: IssuerPreviewRow = {
+    id: id('issuer'),
+    code,
+    /* `issuers.name` is `not null`: a blank name is stored as the code, which
+       is what the client sends after `validateIssuerName`. */
+    name: name === '' ? code : name,
+    is_active: payload.is_active !== false,
+    created_at: nowIso(),
+    updated_at: nowIso(),
+  };
+  if ([...row.name].length > 120) {
+    throw new DbError('23514', 'issuers_name_not_blank');
+  }
+  issuers.push(row);
+  return { ...row };
+}
+
+function updateIssuer(
+  payload: Record<string, unknown>,
+  filters: readonly (readonly [string, unknown])[],
+): IssuerPreviewRow {
+  /* The two letters are the identity: an update that carried them would rewrite
+     the prefix of every letter already recorded against the row. */
+  if ('id' in payload || 'code' in payload) {
+    throw new DbError('42501', 'preview: code is write-once (insert only)');
+  }
+  const row = matchOne(issuers, filters);
+  if (row === null) {
+    throw new DbError('PGRST116', 'JSON object requested, 0 rows returned');
+  }
+  if ('name' in payload) {
+    const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+    if (name === '' || [...name].length > 120) {
+      throw new DbError('23514', 'issuers_name_not_blank');
+    }
+    row.name = name;
+  }
+  if ('is_active' in payload) {
+    row.is_active = payload.is_active === true;
+  }
+  row.updated_at = nowIso();
+  return { ...row };
+}
+
+function runIssuer(
+  operation: 'insert' | 'update' | 'delete' | 'select',
+  payload: Record<string, unknown> | undefined,
+  filters: readonly (readonly [string, unknown])[],
+  single: boolean,
+): Outcome {
+  try {
+    if (operation === 'insert') {
+      const row = insertIssuer(payload ?? {});
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'update') {
+      const row = updateIssuer(payload ?? {}, filters);
+      return { data: single ? row : [row], error: null };
+    }
+    if (operation === 'delete') {
+      /* No delete grant exists on the table: the preview refuses it the way the
+         database would (42501) instead of pretending the row vanished. */
+      throw new DbError('42501', 'permission denied for table issuers');
+    }
+    const rows = issuers
+      .slice()
+      .sort((a, b) => a.code.localeCompare(b.code, 'en', { sensitivity: 'base' }))
+      .map((row) => ({ ...row }));
+    return { data: rows, error: null };
+  } catch (error) {
+    if (error instanceof DbError) {
+      return { data: null, error };
+    }
+    throw error;
+  }
+}
+
 function runParty(
   operation: 'insert' | 'update' | 'delete' | 'select',
   payload: Record<string, unknown> | undefined,
@@ -1118,6 +1250,14 @@ function builder(
     }
     if (table === 'parties') {
       return runParty(
+        operation as 'insert' | 'update' | 'delete' | 'select',
+        onePayload(payload),
+        filters,
+        single,
+      );
+    }
+    if (table === 'issuers') {
+      return runIssuer(
         operation as 'insert' | 'update' | 'delete' | 'select',
         onePayload(payload),
         filters,

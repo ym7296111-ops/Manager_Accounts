@@ -147,10 +147,14 @@ function pageHeader(page: Page) {
   return page.getByRole('banner').filter({ hasText: /خطاب|تحويل|letter|transfer/i });
 }
 
-async function fillHeader(page: Page, number: string, code = 'ym63') {
+/**
+ * The letter code is not typed: the issuer is chosen from the register and the
+ * number is typed beside it, with the colon printed between the two.
+ */
+async function fillHeader(page: Page, number: string, code = '63') {
   await page.getByLabel('رقم النظام (EPS)').fill(number);
-  // The colon is added by the field itself: the clerk types `ym63`.
-  await page.getByLabel('كود الخطاب').fill(code);
+  await page.getByLabel('المُصدر').selectOption('YM');
+  await page.getByLabel('الرقم', { exact: true }).fill(code);
 }
 
 /** The warehouse is a searchable combobox; the option carries the station. */
@@ -220,7 +224,8 @@ test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
   // The two-line header still fits: the period line and the two inputs.
   await expect(page.getByText(/عام مالي /)).toBeVisible();
-  await expect(page.getByLabel('كود الخطاب')).toBeVisible();
+  await expect(page.getByLabel('المُصدر')).toBeVisible();
+  await expect(page.getByLabel('الرقم', { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -270,24 +275,29 @@ test('the letter header is a period line and two typed numbers, nothing else', a
   await expect(headerSection.getByText(/فترة \d+ — /)).toBeVisible();
   await expect(headerSection.getByText(/عام مالي /)).toBeVisible();
 
-  // The date, the fiscal year and the issuer picker are gone from the screen.
+  // The date and the fiscal year are gone from the screen.
   await expect(page.getByLabel('تاريخ الخطاب')).toHaveCount(0);
   await expect(page.getByLabel('السنة المالية')).toHaveCount(0);
-  await expect(page.getByLabel('كود المُصدر')).toHaveCount(0);
-  await expect(page.getByLabel('رقم المُصدر')).toHaveCount(0);
-  // Two lines only: the read-only period and the two typed numbers.
+  // Two lines only: the read-only period, the EPS number and the two controls
+  // of the letter code.
   await expect(headerSection.getByRole('textbox')).toHaveCount(2);
-  await expect(headerSection.getByRole('combobox')).toHaveCount(0);
+  await expect(headerSection.getByRole('combobox')).toHaveCount(1);
 
-  // Line 2: the two manual numbers. The letter code formats itself.
-  const code = page.getByLabel('كود الخطاب');
-  await code.fill('ym');
-  await expect(code).toHaveValue('YM');
-  await code.fill('ym63');
-  await expect(code).toHaveValue('YM:63');
-  await code.fill('يم٦٣');
-  await expect(code).toHaveValue('');
-  await code.fill('ym63');
+  // Line 2: the letter code is `[ YM ▼ ] : [ 63 ]`. The dropdown lists the
+  // active issuers as `code — name`, and the number field takes digits only.
+  const issuer = page.getByLabel('المُصدر');
+  const number = page.getByLabel('الرقم', { exact: true });
+  await expect(issuer.locator('option')).toHaveText([
+    'اختر المُصدر',
+    'AA — أحمد عبد الله',
+    'YM — ياسر',
+  ]);
+  await expect(number).toBeDisabled();
+  await issuer.selectOption('YM');
+  await expect(number).toBeEnabled();
+  await number.fill('٦٣');
+  await expect(number).toHaveValue('');
+  await number.fill('63');
   await page.getByLabel('رقم النظام (EPS)').fill('9021');
   await expectNoHorizontalOverflow(page);
 });
@@ -298,5 +308,70 @@ test('English entry screen renders left to right', async ({ page }) => {
   await expect(pageHeader(page).getByText('New inbound letter')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
   await expect(page.getByRole('button', { name: /Inbound/ })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+/**
+ * The letter code is chosen, not typed — so the list it is chosen from has to be
+ * real. This walks the whole loop in one in-memory session (the preview keeps
+ * its rows per page load, so navigation stays inside the app): a code added in
+ * the issuer register appears in the entry dropdown, deactivating it removes it
+ * again, and a chosen code plus a number is stored as `issuer_reference`.
+ */
+test('an issuer added in settings reaches the entry dropdown, and disabling it removes it', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/workspaces/aps/letters/new');
+  const issuerOptions = () => page.getByLabel('المُصدر').locator('option');
+
+  // 1) Add the code in the register (client-side navigation keeps the rows).
+  await page.getByRole('link', { name: 'أكواد المُصدرين', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'أكواد المُصدرين' })).toBeVisible();
+  await page.getByRole('button', { name: 'إضافة كود جديد' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('الحرفان (مثال: YM)').fill('ab');
+  await expect(dialog.getByLabel('الحرفان (مثال: YM)')).toHaveValue('AB');
+  await dialog.getByLabel('الاسم / الوصف (اختياري)').fill('بدر');
+  await dialog.getByRole('button', { name: 'حفظ' }).click();
+  await expect(page.getByRole('alert')).toContainText('أُضيف الكود');
+  await expect(page.getByRole('rowheader', { name: 'AB' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'بدر', exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  // 2) The entry dropdown is the same register, printed as `code — name`.
+  await page.goBack();
+  await expect(page.getByLabel('المُصدر')).toBeVisible();
+  await expect(issuerOptions().filter({ hasText: 'AB — بدر' })).toHaveCount(1);
+
+  // 3) Deactivating it removes it from the dropdown — the row and the letters
+  //    already recorded with it stay.
+  await page.getByRole('link', { name: 'أكواد المُصدرين', exact: true }).click();
+  await page.getByRole('button', { name: 'تعطيل AB — بدر' }).click();
+  await expect(page.getByRole('alert')).toContainText('عُطّل الكود');
+  await expect(page.getByRole('rowheader', { name: 'AB' })).toBeVisible();
+
+  await page.goBack();
+  await expect(page.getByLabel('المُصدر')).toBeVisible();
+  await expect(issuerOptions().filter({ hasText: 'AB — بدر' })).toHaveCount(0);
+  await expect(issuerOptions().filter({ hasText: 'YM — ياسر' })).toHaveCount(1);
+
+  // 4) A chosen issuer and a number are saved as one column: `YM:63`.
+  await page.getByLabel('رقم النظام (EPS)').fill('9100');
+  await page.getByLabel('المُصدر').selectOption('YM');
+  await page.getByLabel('الرقم', { exact: true }).fill('63');
+  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
+  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await page.getByLabel('القيمة').fill('10');
+  await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
+  await expect(page.getByText(/حُفظت المسودة بنجاح/)).toBeVisible();
+
+  await page
+    .getByRole('navigation', { name: 'أقسام مساحة APS' })
+    .getByRole('link', { name: 'استعراض الخطابات' })
+    .click();
+  await page.getByRole('link', { name: 'عرض التفاصيل 9100' }).click();
+  await expect(page.getByText('YM:63')).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });

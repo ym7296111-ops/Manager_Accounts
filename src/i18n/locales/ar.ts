@@ -417,10 +417,16 @@ export const ar = {
   'aps.entry.periodClosed': 'الفترة مغلقة',
   'aps.entry.epsNumber': 'رقم النظام (EPS)',
   'aps.entry.letterCode': 'كود الخطاب',
-  'aps.entry.letterCodePlaceholder': 'YM:63',
-  'aps.entry.letterCodeHint': 'حرفان إنجليزيان، ثُمّ النقطتان تلقائياً، ثم الأرقام.',
-  'aps.entry.letterCodeInvalid':
-    'الصيغة المطلوبة حرفان إنجليزيان ثم : ثم أرقام (مثل YM:63)، وبادئة مسجلة في سجل المُصدرين.',
+  'aps.entry.letterCodeIssuer': 'المُصدر',
+  'aps.entry.letterCodeNumber': 'الرقم',
+  'aps.entry.chooseIssuer': 'اختر المُصدر',
+  'aps.entry.letterCodeInactive': '(غير نشط)',
+  'aps.entry.letterCodeHint':
+    'اختر المُصدر من السجل، ثم اكتب الرقم بالأرقام فقط. النقطتان توضعان تلقائياً.',
+  'aps.entry.letterCodeInvalid': 'بادئة الكود ليست مُصدراً نشطاً؛ اختر مُصدراً من القائمة.',
+  'aps.entry.letterCodeNumberRequired': 'اكتب رقم كود الخطاب بالأرقام فقط.',
+  'aps.entry.letterCodeNoIssuers':
+    'لا يوجد مُصدر نشط. أضف كوداً من: ضبط المشروع ← أكواد المُصدرين.',
   'aps.entry.searchWarehouse': 'ابحث بالمخزن أو المحطة',
   'aps.entry.noWarehouseMatches': 'لا يوجد مخزن مطابق',
   'aps.entry.clearWarehouse': 'مسح المخزن',
@@ -500,8 +506,7 @@ export const ar = {
   'aps.entry.errorInvalid': 'تعذّر حفظ الخطاب. راجع القيم والسنة والتصنيفات والفترة المالية.',
   'aps.entry.errorUnknown': 'تعذّر الحفظ. حاول مجدداً أو تواصل مع المسؤول.',
   'aps.entry.validate.number': 'أدخل رقم النظام (EPS) بالأرقام فقط، من 1 إلى 64 رقماً.',
-  'aps.entry.validate.letterCode':
-    'أدخل كود الخطاب بالصيغة الصحيحة: حرفان إنجليزيان ثم : ثم أرقام (مثل YM:63).',
+  'aps.entry.validate.letterCode': 'اختر المُصدر ثم اكتب رقم كود الخطاب بالأرقام فقط (مثل YM:63).',
   'aps.entry.validate.issuerCode': 'بادئة كود الخطاب ليست مُصدراً مسجلاً ونشطاً.',
   'aps.entry.validate.period': 'لا توجد فترة جارية مهيأة. راجع الضبط الدوري قبل إدخال الخطاب.',
   'aps.entry.validate.party': 'اختر جهة نشطة من فرع الخطاب الصحيح.',
@@ -561,6 +566,7 @@ export const ar = {
   'settings.project.tabs.parties': 'جهات الوارد وأغراض الصرف',
   'settings.project.tabs.sisterCompanies': 'الشركات الشقيقة',
   'settings.project.tabs.general': 'عام',
+  'settings.project.tabs.issuers': 'أكواد المُصدرين',
   'settings.project.stations.add': 'إضافة محطة',
   'settings.project.stations.addWarehouse': 'إضافة مخزن',
   'settings.project.stations.warehouseCount': '{count} مخزن',
@@ -817,6 +823,63 @@ export const ar = {
   'settings.project.sisterCompanies.writeError.notFound':
     'هذه الشركة لم تعد موجودة. حدّث الشجرة وحاول مرة أخرى.',
   'settings.project.sisterCompanies.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
+  'settings.project.issuers.heading': 'أكواد المُصدرين',
+  'settings.project.issuers.description':
+    'حرفان إنجليزيان يحددان مُصدر الخطاب الورقي (مثل YM = ياسر)، ويظهر الكود في قائمة «كود الخطاب» بشاشة الإدخال. الحرفان ثابتان بعد الإنشاء، والاسم اختياري، والتعطيل يُخفي الكود من الإدخال ويحفظ تاريخه.',
+  'settings.project.issuers.add': 'إضافة كود جديد',
+  'settings.project.issuers.column.code': 'الكود',
+  'settings.project.issuers.column.name': 'الاسم',
+  'settings.project.issuers.column.status': 'الحالة',
+  'settings.project.issuers.column.actions': 'إجراءات',
+  'settings.project.issuers.status.active': 'نشط',
+  'settings.project.issuers.status.inactive': 'معطّل',
+  'settings.project.issuers.loading': 'جارٍ تحميل أكواد المُصدرين…',
+  'settings.project.issuers.retry': 'إعادة المحاولة',
+  'settings.project.issuers.empty.title': 'لا توجد أكواد مُصدرين بعد',
+  'settings.project.issuers.empty.description':
+    'أضف أول كود (حرفان إنجليزيان) ليظهر في قائمة كود الخطاب بشاشة الإدخال.',
+  'settings.project.issuers.action.edit': 'تعديل اسم',
+  'settings.project.issuers.action.deactivate': 'تعطيل',
+  'settings.project.issuers.action.activate': 'تفعيل',
+  'settings.project.issuers.dialog.add': 'إضافة كود مُصدر جديد',
+  'settings.project.issuers.dialog.edit': 'تعديل اسم المُصدر',
+  'settings.project.issuers.dialog.code': 'الحرفان (مثال: YM)',
+  'settings.project.issuers.dialog.codeFixed': 'الحرفان (هوية ثابتة)',
+  'settings.project.issuers.dialog.codeHint':
+    'حرفان إنجليزيان فقط، ويُحفظان بأحرف كبيرة. لا يمكن تغييرهما بعد الإنشاء.',
+  'settings.project.issuers.dialog.immutable':
+    'الحرفان هوية الكود ولا يقبلان التعديل؛ الاسم فقط هو ما يمكن تغييره.',
+  'settings.project.issuers.dialog.name': 'الاسم / الوصف (اختياري)',
+  'settings.project.issuers.dialog.nameHint':
+    'يظهر بجوار الكود في القائمة، مثل: YM — ياسر. إن تُرك فارغاً يُعرض الكود وحده.',
+  'settings.project.issuers.dialog.save': 'حفظ',
+  'settings.project.issuers.dialog.cancel': 'إلغاء',
+  'settings.project.issuers.dialog.close': 'إغلاق',
+  'settings.project.issuers.dialog.saving': 'جارٍ الحفظ…',
+  'settings.project.issuers.validation.codeRequired': 'أدخل الحرفين الإنجليزيين للكود.',
+  'settings.project.issuers.validation.codeShape': 'الكود حرفان إنجليزيان فقط، مثل YM.',
+  'settings.project.issuers.validation.nameTooLong': 'الاسم أطول من 120 حرفاً؛ اختصره ثم احفظ.',
+  'settings.project.issuers.success.added': 'أُضيف الكود وأصبح متاحاً في شاشة الإدخال.',
+  'settings.project.issuers.success.renamed': 'حُفظ الاسم.',
+  'settings.project.issuers.success.activated': 'فُعّل الكود وأصبح متاحاً في شاشة الإدخال.',
+  'settings.project.issuers.success.deactivated':
+    'عُطّل الكود ولم يعد يظهر في شاشة الإدخال؛ تاريخه محفوظ.',
+  'settings.project.issuers.dismiss': 'إغلاق التنبيه',
+  'settings.project.issuers.error.forbidden':
+    'لا تملك صلاحية قراءة أكواد المُصدرين (project.settings:manage).',
+  'settings.project.issuers.error.unavailable': 'خدمة أكواد المُصدرين غير متاحة حالياً.',
+  'settings.project.issuers.error.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.issuers.error.unknown': 'تعذّر تحميل أكواد المُصدرين، حاول مرة أخرى.',
+  'settings.project.issuers.writeError.forbidden':
+    'لا تملك صلاحية إدارة أكواد المُصدرين (project.settings:manage).',
+  'settings.project.issuers.writeError.unavailable': 'خدمة أكواد المُصدرين غير متاحة حالياً.',
+  'settings.project.issuers.writeError.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
+  'settings.project.issuers.writeError.validation': 'الكود أو الاسم لا يطابق القاعدة.',
+  'settings.project.issuers.writeError.duplicate':
+    'هذا الكود مسجل بالفعل (الحرفان الكبيران والصغيران كود واحد).',
+  'settings.project.issuers.writeError.notFound':
+    'لم يعد هذا الكود موجوداً. حدّث القائمة وحاول مرة أخرى.',
+  'settings.project.issuers.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
   'settings.project.fiscal.heading': 'الضبط المالي',
   'settings.project.fiscal.description':
     'إدارة السنوات المالية والفترات المحاسبية وأرصدة أول المدة للمخازن والتصنيفات.',
