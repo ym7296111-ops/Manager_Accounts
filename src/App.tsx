@@ -1,6 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
-import { RedirectDashboardOnly, RequireAuth } from '@/components/auth/RequireAuth';
+import {
+  RedirectDashboardOnly,
+  RequireAuth,
+  RequireCapability,
+} from '@/components/auth/RequireAuth';
 import { DocumentTitle } from '@/components/layout/DocumentTitle';
 import { AuthProvider } from '@/context/AuthContext';
 import { BrandingProvider } from '@/context/BrandingContext';
@@ -16,7 +20,11 @@ import ProfilePage from '@/pages/ProfilePage';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
 import ResetPasswordPage from '@/pages/ResetPasswordPage';
 import SettingsPage from '@/pages/SettingsPage';
+import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
+import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
+import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
 import WorkspacePage from '@/pages/workspaces/WorkspacePage';
+import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
 
 /**
@@ -66,6 +74,25 @@ function AppRoutes() {
               element={<Navigate to={workspace.path} replace />}
             />
           ))}
+          <Route path="workspaces/aps" element={<ApsWorkspaceLayout />}>
+            <Route index element={<Navigate to="letters" replace />} />
+            <Route
+              path="letters"
+              element={
+                <RequireCapability requirement={APS_LETTERS_READ_REQUIREMENT}>
+                  <ApsLettersPage />
+                </RequireCapability>
+              }
+            />
+            <Route
+              path="letters/:letterId"
+              element={
+                <RequireCapability requirement={APS_LETTERS_READ_REQUIREMENT}>
+                  <ApsLetterDetailPage />
+                </RequireCapability>
+              }
+            />
+          </Route>
           <Route path="workspaces/:workspaceSlug" element={<WorkspacePage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings/my-profile" element={<ProfilePage />} />

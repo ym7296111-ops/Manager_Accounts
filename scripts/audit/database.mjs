@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 54);
+    assert.equal(migrations.length, 55);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1998,6 +1998,7 @@ try {
     assert.ok(migrations.includes('20261112000000_opening_balances_freeze.sql'));
     assert.ok(migrations.includes('20261113000000_aps_letters.sql'));
     assert.ok(migrations.includes('20261114000000_aps_reconciliation.sql'));
+    assert.ok(migrations.includes('20261115000000_aps_letter_line_name_snapshots.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2919,6 +2920,376 @@ try {
     throw new Error('expected the call to fail');
   };
 
+  await test('APS snapshots: columns are required, have no defaults, and the existing guard remains private', async () => {
+    const columns = (
+      await db.query(
+        `select column_name, is_nullable, column_default
+           from information_schema.columns
+          where table_schema='public' and table_name='letter_lines'
+            and column_name in ('warehouse_name','classification_name')
+          order by column_name`,
+      )
+    ).rows;
+    assert.deepEqual(columns, [
+      { column_name: 'classification_name', is_nullable: 'NO', column_default: null },
+      { column_name: 'warehouse_name', is_nullable: 'NO', column_default: null },
+    ]);
+    const guard = (
+      await db.query(
+        `select p.prosecdef, p.proconfig, t.tgenabled
+           from pg_proc p join pg_trigger t on t.tgfoid=p.oid
+          where p.oid='public.aps_letter_lines_before_write()'::regprocedure
+            and t.tgrelid='public.letter_lines'::regclass
+            and t.tgname='letter_lines_aps_before_write'`,
+      )
+    ).rows[0];
+    assert.equal(guard.prosecdef, true);
+    assert.deepEqual(guard.proconfig, ['search_path=pg_catalog, public']);
+    assert.equal(guard.tgenabled, 'O');
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      assert.equal(
+        (
+          await db.query('select has_function_privilege($1,$2,$3) as allowed', [
+            role,
+            'public.aps_letter_lines_before_write()',
+            'EXECUTE',
+          ])
+        ).rows[0].allowed,
+        false,
+        `${role} must not execute the trigger function directly`,
+      );
+    }
+  });
+
+  await test('APS snapshots: forged input is replaced, drafts refresh on save, and approved names stay historical', async () => {
+    const fixture = await seedApsLetters();
+    const createdIds = [];
+    const creatorRole = randomUUID();
+    const readerRole = randomUUID();
+    try {
+      for (const [roleId, slug, permission, actor] of [
+        [creatorRole, `audit_snapshot_creator_${creatorRole}`, 'aps.letters:create', E],
+        [readerRole, `audit_snapshot_reader_${readerRole}`, 'aps.letters:read', V],
+      ]) {
+        await db.query('insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$3,$4)', [
+          roleId,
+          slug,
+          'فحص اللقطة',
+          'Snapshot audit',
+        ]);
+        await db.query(
+          'insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug=$2',
+          [roleId, permission],
+        );
+        await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+          actor,
+          roleId,
+        ]);
+      }
+      const warehouseName = (
+        await db.query('select name from public.warehouses where id=$1', [fixture.warehouseId])
+      ).rows[0].name;
+      const classA = (
+        await db.query('select name from public.classifications where id=$1', [fixture.leafA])
+      ).rows[0].name;
+      const classB = (
+        await db.query('select name from public.classifications where id=$1', [fixture.leafB])
+      ).rows[0].name;
+      for (const [table, referenceId] of [
+        ['warehouses', fixture.warehouseId],
+        ['classifications', fixture.leafA],
+      ]) {
+        const hidden = await asRole('authenticated', E, (c) =>
+          c.query(`select id from public.${table} where id=$1`, [referenceId]),
+        );
+        assert.equal(hidden.rowCount, 0, `${table} must remain hidden from the create-only actor`);
+      }
+      const letter = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letters (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
+         values ($1,'inbound','77','2040-08-15',$2) returning id`,
+            [fixture.firstYear.id, fixture.party.id],
+          ),
+        )
+      ).rows[0];
+      createdIds.push(letter.id);
+      const plain = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letter_lines(letter_id,direction,warehouse_id,classification_id,amount)
+         values ($1,'in',$2,$3,10) returning id, warehouse_name, classification_name`,
+            [letter.id, fixture.warehouseId, fixture.leafA],
+          ),
+        )
+      ).rows[0];
+      assert.equal(plain.warehouse_name, warehouseName);
+      assert.equal(plain.classification_name, classA);
+      const forged = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letter_lines
+          (letter_id,direction,warehouse_id,classification_id,amount,warehouse_name,classification_name)
+         values ($1,'in',$2,$3,5,'forged warehouse','forged classification')
+         returning id, warehouse_name, classification_name`,
+            [letter.id, fixture.warehouseId, fixture.leafA],
+          ),
+        )
+      ).rows[0];
+      assert.equal(forged.warehouse_name, warehouseName);
+      assert.equal(forged.classification_name, classA);
+      const edited = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            `update public.letter_lines
+            set classification_id=$2, warehouse_name='forged again', classification_name='forged again'
+          where id=$1 returning warehouse_name, classification_name`,
+            [forged.id, fixture.leafB],
+          ),
+        )
+      ).rows[0];
+      assert.deepEqual(edited, { warehouse_name: warehouseName, classification_name: classB });
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select id from public.letter_lines where letter_id=$1', [letter.id]),
+          )
+        ).rowCount,
+        0,
+        'read capability must not expose another author’s ordinary draft',
+      );
+
+      const savedWarehouse = `Warehouse at latest draft save ${randomUUID()}`;
+      const savedClass = `Classification at latest draft save ${randomUUID()}`;
+      await db.query('update public.warehouses set name=$2 where id=$1', [
+        fixture.warehouseId,
+        savedWarehouse,
+      ]);
+      await db.query('update public.classifications set name=$2 where id=$1', [
+        fixture.leafB,
+        savedClass,
+      ]);
+      const resaved = (
+        await asRole('authenticated', E, (c) =>
+          c.query(
+            'update public.letter_lines set amount=amount+1 where id=$1 returning warehouse_name, classification_name',
+            [forged.id],
+          ),
+        )
+      ).rows[0];
+      assert.deepEqual(resaved, {
+        warehouse_name: savedWarehouse,
+        classification_name: savedClass,
+      });
+      assert.equal(
+        (
+          await db.query(
+            'select destination_total::text as total from public.letters where id=$1',
+            [letter.id],
+          )
+        ).rows[0].total,
+        '16.00',
+      );
+      await asRole('authenticated', E, (c) =>
+        c.query('select public.aps_approve_letter($1)', [letter.id]),
+      );
+      await db.query('update public.warehouses set name=$2 where id=$1', [
+        fixture.warehouseId,
+        `Warehouse renamed after approval ${randomUUID()}`,
+      ]);
+      await db.query('update public.classifications set name=$2 where id=$1', [
+        fixture.leafB,
+        `Classification renamed after approval ${randomUUID()}`,
+      ]);
+      const historical = (
+        await asRole('authenticated', V, (c) =>
+          c.query(
+            'select id, warehouse_name, classification_name from public.letter_lines where letter_id=$1 order by line_number',
+            [letter.id],
+          ),
+        )
+      ).rows;
+      assert.deepEqual(historical, [
+        { id: plain.id, warehouse_name: warehouseName, classification_name: classA },
+        { id: forged.id, warehouse_name: savedWarehouse, classification_name: savedClass },
+      ]);
+      for (const [table, referenceId] of [
+        ['warehouses', fixture.warehouseId],
+        ['classifications', fixture.leafB],
+      ]) {
+        const hidden = await asRole('authenticated', V, (c) =>
+          c.query(`select id from public.${table} where id=$1`, [referenceId]),
+        );
+        assert.equal(hidden.rowCount, 0, `${table} must remain hidden from the reader`);
+      }
+      const denied = await asRole('authenticated', E, (c) =>
+        c.query(`update public.letter_lines set warehouse_name='tampered' where id=$1`, [
+          forged.id,
+        ]),
+      );
+      assert.equal(denied.rowCount, 0, 'approved lines stay frozen under the existing RLS policy');
+      await expectCode('23514', () =>
+        db.query(`update public.letter_lines set warehouse_name='tampered' where id=$1`, [
+          forged.id,
+        ]),
+      );
+      await cancelApsLetter(letter.id, 'إلغاء للاختبار');
+      await db.query('update public.warehouses set name=$2 where id=$1', [
+        fixture.warehouseId,
+        `Warehouse renamed after cancellation ${randomUUID()}`,
+      ]);
+      const cancelled = await asRole('authenticated', V, (c) =>
+        c.query(
+          'select id, warehouse_name, classification_name from public.letter_lines where letter_id=$1 order by line_number',
+          [letter.id],
+        ),
+      );
+      assert.deepEqual(cancelled.rows, historical, 'cancellation must retain the same snapshots');
+      await expectCode('23514', () =>
+        db.query(`update public.letter_lines set classification_name='tampered' where id=$1`, [
+          forged.id,
+        ]),
+      );
+    } finally {
+      await db.query('delete from public.user_roles where role_id=any($1::uuid[])', [
+        [creatorRole, readerRole],
+      ]);
+      await db.query('delete from public.roles where id=any($1::uuid[])', [
+        [creatorRole, readerRole],
+      ]);
+      await db.query('delete from public.letters where id=any($1::uuid[])', [createdIds]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [
+        [fixture.firstYear.id, fixture.secondYear.id],
+      ]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        [fixture.leafA, fixture.leafB],
+      ]);
+      await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
+      await db.query('delete from public.stations where id=$1', [fixture.stationId]);
+      await db.query('delete from public.parties where id=any($1::uuid[])', [
+        [fixture.party.id, fixture.partyOut.id],
+      ]);
+      await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+    }
+  });
+
+  await test('APS snapshots: migration rejects existing lines atomically without changing the data or guard', async () => {
+    const fixture = await seedApsLetters();
+    const createdIds = [];
+    try {
+      const letter = (
+        await insertApsLetter(fixture, {
+          type: 'inbound',
+          number: '78',
+          partyId: fixture.party.id,
+        })
+      ).rows[0].id;
+      createdIds.push(letter);
+      const line = (
+        await insertApsLine(letter, {
+          direction: 'in',
+          warehouseId: fixture.warehouseId,
+          classificationId: fixture.leafA,
+          amount: 7,
+        })
+      ).rows[0].id;
+      const original = (
+        await db.query(
+          'select id, amount::text, warehouse_name, classification_name from public.letter_lines where id=$1',
+          [line],
+        )
+      ).rows[0];
+      const migration = await readFile(
+        `${ROOT}supabase/migrations/20261115000000_aps_letter_line_name_snapshots.sql`,
+        'utf8',
+      );
+      await db.query('begin');
+      try {
+        // Locally simulate the pre-migration schema with one existing line.
+        // The surrounding transaction restores the actual schema afterwards.
+        await db.query(
+          'alter table public.letter_lines drop column warehouse_name, drop column classification_name',
+        );
+        const originalMigration = await readFile(
+          `${ROOT}supabase/migrations/20261113000000_aps_letters.sql`,
+          'utf8',
+        );
+        const originalGuard = originalMigration.match(
+          /create or replace function public\.aps_letter_lines_before_write\(\)[\s\S]*?\n\$\$;/,
+        );
+        assert.ok(originalGuard, 'the original line guard must be present');
+        await db.query(originalGuard[0]);
+        const before = (
+          await db.query(
+            `select pg_get_functiondef('public.aps_letter_lines_before_write()'::regprocedure) as body`,
+          )
+        ).rows[0].body;
+        await db.query('savepoint before_snapshot_migration');
+        await expectCode('23502', () => db.query(migration));
+        await db.query('rollback to savepoint before_snapshot_migration');
+        const after = (
+          await db.query(
+            `select pg_get_functiondef('public.aps_letter_lines_before_write()'::regprocedure) as body`,
+          )
+        ).rows[0].body;
+        assert.equal(after, before, 'the guard function must not be replaced on failure');
+        assert.equal(
+          (
+            await db.query(
+              `select count(*)::int as n from information_schema.columns
+            where table_schema='public' and table_name='letter_lines'
+              and column_name in ('warehouse_name','classification_name')`,
+            )
+          ).rows[0].n,
+          0,
+          'neither snapshot column may remain after a failed migration',
+        );
+        assert.equal(
+          (
+            await db.query('select amount::text as amount from public.letter_lines where id=$1', [
+              line,
+            ])
+          ).rows[0].amount,
+          '7.00',
+        );
+        assert.equal(
+          (
+            await db.query(
+              `select tgenabled from pg_trigger where tgrelid='public.letter_lines'::regclass
+            and tgname='letter_lines_aps_before_write'`,
+            )
+          ).rows[0].tgenabled,
+          'O',
+        );
+      } finally {
+        await db.query('rollback');
+      }
+      assert.deepEqual(
+        (
+          await db.query(
+            'select id, amount::text, warehouse_name, classification_name from public.letter_lines where id=$1',
+            [line],
+          )
+        ).rows[0],
+        original,
+      );
+    } finally {
+      await db.query('delete from public.letters where id=any($1::uuid[])', [createdIds]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [
+        [fixture.firstYear.id, fixture.secondYear.id],
+      ]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        [fixture.leafA, fixture.leafB],
+      ]);
+      await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
+      await db.query('delete from public.stations where id=$1', [fixture.stationId]);
+      await db.query('delete from public.parties where id=any($1::uuid[])', [
+        [fixture.party.id, fixture.partyOut.id],
+      ]);
+      await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+    }
+  });
+
   await test('APS letters: permission-gated, author-scoped drafts and one numbering series per fiscal year', async () => {
     const fixture = await seedApsLetters();
     const createdIds = [];
@@ -2968,6 +3339,8 @@ try {
           'note',
           'created_at',
           'updated_at',
+          'warehouse_name',
+          'classification_name',
         ],
       );
 
@@ -4210,6 +4583,32 @@ try {
         V,
       );
       letterIds.push(ownSettlement);
+      const managerSnapshots = await asRole('authenticated', V, (c) =>
+        c.query(
+          'select warehouse_name, classification_name from public.letter_lines where letter_id=$1',
+          [ownSettlement],
+        ),
+      );
+      const referenceSnapshots = await db.query(
+        `select w.name as warehouse_name, c.name as classification_name
+           from public.warehouses w cross join public.classifications c
+          where w.id=$1 and c.id=$2`,
+        [fixture.warehouseId, fixture.leafA],
+      );
+      assert.deepEqual(
+        managerSnapshots.rows,
+        referenceSnapshots.rows,
+        'settlement RPC must capture names visible to the reconciliation manager',
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', V, (c) =>
+            c.query('select id from public.warehouses where id=$1', [fixture.warehouseId]),
+          )
+        ).rowCount,
+        0,
+        'the manager must not gain directory access',
+      );
       await expectCode('42501', () =>
         asRole('authenticated', V, (c) =>
           c.query('select public.aps_approve_letter($1)', [ownSettlement]),
@@ -5089,8 +5488,16 @@ try {
       });
       const settlementLine = (
         await db.query(
-          'select direction, amount, warehouse_id, classification_id, note from public.letter_lines where letter_id=$1',
+          'select direction, amount, warehouse_id, classification_id, warehouse_name, classification_name, note from public.letter_lines where letter_id=$1',
           [firstSettlement],
+        )
+      ).rows[0];
+      const settlementReferences = (
+        await db.query(
+          `select w.name as warehouse_name, c.name as classification_name
+           from public.warehouses w cross join public.classifications c
+          where w.id=$1 and c.id=$2`,
+          [fixture.warehouseId, fixture.leafA],
         )
       ).rows[0];
       assert.deepEqual(settlementLine, {
@@ -5098,6 +5505,8 @@ try {
         amount: '10.00',
         warehouse_id: fixture.warehouseId,
         classification_id: fixture.leafA,
+        warehouse_name: settlementReferences.warehouse_name,
+        classification_name: settlementReferences.classification_name,
         note: `تسوية مطابقة ${fixture.month1.name}`,
       });
       await expectCode('22023', () => createApsSettlement(sessionId, fixture.warehouseId));

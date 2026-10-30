@@ -1,5 +1,6 @@
 import {
   Bell,
+  BookOpenText,
   DatabaseBackup,
   KeyRound,
   KeySquare,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { CapabilityRequirement } from '@/hooks/useAuthCapabilities';
 import type { TranslationKey } from '@/i18n/locales/ar';
+import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
 
 export const PROJECT_SETTINGS_CAPABILITY = 'project.settings:manage';
@@ -60,6 +62,8 @@ export interface NavLinkNode {
   icon: LucideIcon;
   /** Exact match for the index route ("/"). */
   end?: boolean;
+  /** The same navigation item remains active on its nested detail routes. */
+  matchDescendants?: boolean;
   /**
    * Capability requirement to see this leaf (Phase 2 capability channel).
    * Undefined = always visible. A string is one slug; an array means ANY of
@@ -105,7 +109,20 @@ export const NAV_ITEMS: NavNode[] = [
     to: workspace.path,
     labelKey: workspace.labelKey,
     icon: workspace.icon,
-    children: [],
+    children:
+      workspace.slug === 'aps'
+        ? [
+            {
+              kind: 'link',
+              id: 'aps-letters',
+              to: APS_LETTERS_PATH,
+              labelKey: 'aps.letters.tab',
+              icon: BookOpenText,
+              capability: APS_LETTERS_READ_REQUIREMENT,
+              matchDescendants: true,
+            },
+          ]
+        : [],
   })),
   {
     kind: 'group',
@@ -205,11 +222,14 @@ export const NAV_ITEMS: NavNode[] = [
   },
 ];
 
-/** Find the leaf link whose route matches the current pathname (exact match). */
+/** Find the leaf link matching this route, including explicitly enabled descendants. */
 export function findNavLinkByPath(nodes: NavNode[], pathname: string): NavLinkNode | null {
   for (const node of nodes) {
     if (node.kind === 'link') {
-      if (node.to === pathname) {
+      if (
+        node.to === pathname ||
+        (node.matchDescendants === true && pathname.startsWith(`${node.to}/`))
+      ) {
         return node;
       }
     } else {
