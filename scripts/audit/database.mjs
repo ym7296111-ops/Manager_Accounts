@@ -111,6 +111,145 @@ try {
         ],
       );
     }
+    if (file === '20261114000000_aps_reconciliation.sql') {
+      await test('APS reconciliation migration removes automatic client table grants', async () => {
+        // Supabase can auto-grant privileges on tables created by postgres. The
+        // offline fixture does not, so exercise the actual migration with those
+        // defaults (including inherited PUBLIC grants), then roll everything
+        // back and replay it normally for the rest of the audit.
+        await db.query('savepoint aps_automatic_grants');
+        try {
+          await db.query(
+            'alter default privileges in schema public grant all on tables to public, anon, authenticated',
+          );
+          await db.query('create table public.aps_automatic_grants_probe (id integer)');
+          for (const role of ['anon', 'authenticated']) {
+            for (const privilege of ['SELECT', 'INSERT', 'TRUNCATE']) {
+              const { rows } = await db.query('select has_table_privilege($1, $2, $3) as allowed', [
+                role,
+                'public.aps_automatic_grants_probe',
+                privilege,
+              ]);
+              assert.equal(rows[0].allowed, true, `probe: ${role} must inherit ${privilege}`);
+            }
+          }
+
+          await db.query(sql);
+
+          for (const table of ['aps_reconciliation_sessions', 'aps_reconciliation_items']) {
+            const relation = `public.${table}`;
+            const { rows } = await db.query(
+              'select relrowsecurity, relforcerowsecurity from pg_class where oid = $1::regclass',
+              [relation],
+            );
+            assert.deepEqual(rows[0], { relrowsecurity: true, relforcerowsecurity: true });
+            const privileges = [
+              'SELECT',
+              'INSERT',
+              'UPDATE',
+              'DELETE',
+              'TRUNCATE',
+              'REFERENCES',
+              'TRIGGER',
+              'MAINTAIN',
+            ];
+            for (const role of ['anon', 'authenticated']) {
+              for (const privilege of privileges) {
+                const result = await db.query('select has_table_privilege($1, $2, $3) as allowed', [
+                  role,
+                  relation,
+                  privilege,
+                ]);
+                assert.equal(
+                  result.rows[0].allowed,
+                  role === 'authenticated' && privilege === 'SELECT',
+                  `${role} ${privilege} on ${table}`,
+                );
+              }
+            }
+            for (const role of ['anon', 'authenticated']) {
+              const denied =
+                role === 'anon'
+                  ? 'SELECT, INSERT, UPDATE, REFERENCES'
+                  : 'INSERT, UPDATE, REFERENCES';
+              const result = await db.query(
+                'select has_any_column_privilege($1, $2, $3) as allowed',
+                [role, relation, denied],
+              );
+              assert.equal(
+                result.rows[0].allowed,
+                false,
+                `${role} unauthorized columns on ${table}`,
+              );
+            }
+            for (const privilege of privileges) {
+              const result = await db.query('select has_table_privilege($1, $2, $3) as allowed', [
+                'service_role',
+                relation,
+                privilege,
+              ]);
+              assert.equal(result.rows[0].allowed, true, `service_role ${privilege} on ${table}`);
+            }
+            // TRUNCATE is not governed by RLS: confirm that PostgreSQL rejects
+            // the actual statement for each untrusted API role as well.
+            for (const role of ['anon', 'authenticated']) {
+              await db.query('savepoint aps_truncate_attempt');
+              try {
+                await db.query(`set local role ${role}`);
+                await expectCode('42501', () => db.query(`truncate table ${relation}`));
+              } finally {
+                await db.query('rollback to savepoint aps_truncate_attempt');
+                await db.query('release savepoint aps_truncate_attempt');
+              }
+            }
+          }
+          const rpc = await db.query(
+            "select has_function_privilege('authenticated', 'public.aps_open_reconciliation(uuid,uuid)', 'EXECUTE') as allowed",
+          );
+          assert.equal(rpc.rows[0].allowed, true, 'authenticated keeps access to the guarded RPC');
+        } finally {
+          await db.query('rollback to savepoint aps_automatic_grants');
+          await db.query('release savepoint aps_automatic_grants');
+        }
+      });
+      await test('APS reconciliation migration rejects inherited client privileges', async () => {
+        // REVOKE cannot remove privileges inherited from an unrelated role.
+        // Ensure the migration fails closed rather than silently committing an
+        // unsafe configuration, including the PostgreSQL 17 MAINTAIN privilege.
+        for (const { role, privilege } of [
+          { role: 'authenticated', privilege: 'TRUNCATE' },
+          { role: 'anon', privilege: 'SELECT' },
+          { role: 'authenticated', privilege: 'MAINTAIN' },
+        ]) {
+          await db.query('savepoint aps_inherited_grants');
+          try {
+            await db.query('create role aps_audit_inherited nologin');
+            await db.query(`grant aps_audit_inherited to ${role}`);
+            await db.query(
+              `alter default privileges in schema public grant ${privilege} on tables to aps_audit_inherited`,
+            );
+            await db.query('create table public.aps_inherited_grants_probe (id integer)');
+            const probe = await db.query('select has_table_privilege($1, $2, $3) as allowed', [
+              role,
+              'public.aps_inherited_grants_probe',
+              privilege,
+            ]);
+            assert.equal(probe.rows[0].allowed, true, `${role} must inherit ${privilege}`);
+            const expectedMessage =
+              privilege === 'MAINTAIN'
+                ? 'API callers must not maintain public.aps_reconciliation_sessions directly'
+                : 'API callers must have only authorized read access to public.aps_reconciliation_sessions';
+            await assert.rejects(
+              () => db.query(sql),
+              (error) => error.code === 'P0001' && error.message === expectedMessage,
+            );
+          } finally {
+            await db.query('rollback to savepoint aps_inherited_grants');
+            await db.query('release savepoint aps_inherited_grants');
+          }
+        }
+      });
+    }
     await db.query(sql);
     await db.query('commit');
   }
