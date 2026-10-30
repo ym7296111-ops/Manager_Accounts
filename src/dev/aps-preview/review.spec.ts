@@ -147,9 +147,10 @@ function pageHeader(page: Page) {
   return page.getByRole('banner').filter({ hasText: /خطاب|تحويل|letter|transfer/i });
 }
 
-async function fillHeader(page: Page, number: string) {
-  await page.getByLabel('تاريخ الخطاب').fill('2026-03-04');
+async function fillHeader(page: Page, number: string, code = 'ym63') {
   await page.getByLabel('رقم النظام (EPS)').fill(number);
+  // The colon is added by the field itself: the clerk types `ym63`.
+  await page.getByLabel('كود الخطاب').fill(code);
 }
 
 /** The warehouse is a searchable combobox; the option carries the station. */
@@ -217,6 +218,9 @@ test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   await expect(page.getByLabel('المصدر — المخزن')).toBeVisible();
   await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
+  // The two-line header still fits: the period line and the two inputs.
+  await expect(page.getByText(/عام مالي /)).toBeVisible();
+  await expect(page.getByLabel('كود الخطاب')).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -255,29 +259,36 @@ test('the sticky header states the letter type and does not duplicate the title'
   await expectNoHorizontalOverflow(page);
 });
 
-test('entry reads the running period, the issuer list and the station label', async ({ page }) => {
+test('the letter header is a period line and two typed numbers, nothing else', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeVisible();
-  await page.getByLabel('تاريخ الخطاب').fill('2026-10-15');
-  await expect(page.getByText(/أنت تدخل خطاباً في: أكتوبر 2026 — الفترة 4/)).toBeVisible();
 
-  const issuer = page.getByLabel('كود المُصدر', { exact: true });
-  await issuer.fill('ياسر');
-  await expect(page.getByRole('option', { name: 'YM — ياسر' })).toBeVisible();
-  await expect(page.getByRole('option', { name: 'AA — أحمد عبد الله' })).toHaveCount(0);
-  await page.getByRole('option', { name: 'YM — ياسر' }).click();
-  await expect(issuer).toHaveValue('YM — ياسر');
-  await page.getByLabel('رقم المُصدر').fill('0042');
+  const headerSection = page.locator('section', {
+    has: page.getByRole('heading', { name: 'بيانات الخطاب' }),
+  });
+  // Line 1: the running period, read from the periodic settings.
+  await expect(headerSection.getByText(/فترة \d+ — /)).toBeVisible();
+  await expect(headerSection.getByText(/عام مالي /)).toBeVisible();
 
-  const warehouse = page.getByLabel('المخزن', { exact: true });
-  await warehouse.fill('غرب');
-  await expect(
-    page.getByRole('option', { name: 'مخزن المواد الخام - محطة غرب القاهرة' }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole('option', { name: 'مخزن التشغيل الرئيسي - محطة شرق القاهرة' }),
-  ).toHaveCount(0);
+  // The date, the fiscal year and the issuer picker are gone from the screen.
+  await expect(page.getByLabel('تاريخ الخطاب')).toHaveCount(0);
+  await expect(page.getByLabel('السنة المالية')).toHaveCount(0);
+  await expect(page.getByLabel('كود المُصدر')).toHaveCount(0);
+  await expect(page.getByLabel('رقم المُصدر')).toHaveCount(0);
+  // Two lines only: the read-only period and the two typed numbers.
+  await expect(headerSection.getByRole('textbox')).toHaveCount(2);
+  await expect(headerSection.getByRole('combobox')).toHaveCount(0);
+
+  // Line 2: the two manual numbers. The letter code formats itself.
+  const code = page.getByLabel('كود الخطاب');
+  await code.fill('ym');
+  await expect(code).toHaveValue('YM');
+  await code.fill('ym63');
+  await expect(code).toHaveValue('YM:63');
+  await code.fill('يم٦٣');
+  await expect(code).toHaveValue('');
+  await code.fill('ym63');
+  await page.getByLabel('رقم النظام (EPS)').fill('9021');
   await expectNoHorizontalOverflow(page);
 });
 

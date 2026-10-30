@@ -116,15 +116,9 @@ export default function ApsLetterDetailPage() {
             <p className="text-foreground text-sm font-semibold break-all">{letter.number}</p>
           </div>
           <div className="min-w-0">
-            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.issuerCode')}</p>
-            <p className="text-foreground text-sm font-semibold">
-              {letter.issuerCode ?? t('aps.letters.notRecorded')}
-            </p>
-          </div>
-          <div className="min-w-0">
-            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.issuerSequence')}</p>
+            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.letterCode')}</p>
             <p className="text-foreground text-sm font-semibold" dir="ltr">
-              {letter.issuerSequence ?? t('aps.letters.notRecorded')}
+              {letter.issuerReference ?? t('aps.letters.notRecorded')}
             </p>
           </div>
         </div>

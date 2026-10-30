@@ -32,10 +32,13 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   APS_LETTER_NEW_PATH,
   entryHasReclassification,
-  entryPeriod,
   entryTotal,
+  fiscalYearLabel,
+  letterCodeIncomplete,
   newEntryForm,
   newEntryLine,
+  normalizeLetterCode,
+  runningEntryPeriod,
   validateEntry,
   warehouseLabel,
   type EntryForm,
@@ -118,6 +121,7 @@ const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   forbidden: 'aps.entry.errorForbidden',
   network: 'aps.entry.errorNetwork',
   duplicate: 'aps.entry.errorDuplicate',
+  duplicateLetterCode: 'aps.entry.errorDuplicateCode',
   existing: 'aps.entry.errorExisting',
   stale: 'aps.entry.errorStale',
   invalid: 'aps.entry.errorInvalid',
@@ -288,7 +292,7 @@ function EntryEditor({
     const empty = newEntryForm();
     const form = draft?.form ?? {
       ...empty,
-      yearId: options.years.find((year) => year.active)?.id ?? '',
+      yearId: runningEntryPeriod(options)?.year.id ?? '',
     };
     return {
       id: draft?.id ?? crypto.randomUUID(),
@@ -318,7 +322,20 @@ function EntryEditor({
   const total = entryTotal(form);
   const parties = options.parties.filter((party) => party.branch === form.type);
   const year = options.years.find((item) => item.id === form.yearId);
-  const period = entryPeriod(form, options);
+  /* The screen works in the period that is running today. A draft that belongs
+     to another fiscal year keeps its own year — and therefore its own period
+     statement — instead of being silently moved forward. */
+  const running = runningEntryPeriod(options);
+  const period = running !== null && running.year.id === form.yearId ? running : null;
+  const activeYear = year ?? running?.year ?? null;
+  const letterCodeId = 'aps-letter-code';
+  const letterCodeHelpId = 'aps-letter-code-help';
+  const letterCodeShapeBad = letterCodeIncomplete(form.letterCode);
+  const letterCodeIssuerBad =
+    !letterCodeShapeBad &&
+    form.letterCode !== '' &&
+    !options.issuers.some((item) => item.code === form.letterCode.slice(0, 2));
+  const letterCodeProblem = letterCodeShapeBad || letterCodeIssuerBad;
   const activeType = TYPES.find((item) => item.value === form.type) ?? TYPES[0]!;
   /* The shell's sticky header is the only header: it carries the type name, its
      colour and its arrow, and it changes the moment the type changes. */
@@ -328,11 +345,6 @@ function EntryEditor({
     icon: activeType.icon,
   });
   const warehouses = warehouseOptions(options.warehouses);
-  const issuers = options.issuers.map((issuer) => ({
-    value: issuer.code,
-    label: `${issuer.code} — ${issuer.name}`,
-    keywords: issuer.name,
-  }));
 
   useEffect(() => {
     if (dirty && !approved) unsavedEntries.set(cacheKey, { id, version, baseline, form });
@@ -465,33 +477,6 @@ function EntryEditor({
 
   return (
     <div className="min-w-0 space-y-5 pb-8">
-      <div
-        role="status"
-        className="border-border bg-muted/55 text-foreground flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold"
-      >
-        <CalendarDays className="text-primary size-4 shrink-0" aria-hidden="true" />
-        {period === null ? (
-          <span className="text-muted-foreground font-normal">{t('aps.entry.periodUnknown')}</span>
-        ) : (
-          <>
-            <span>
-              {t('aps.entry.periodBar', {
-                month: period.month.name,
-                year: period.month.startDate.slice(0, 4),
-                period: period.month.period,
-              })}
-            </span>
-            {period.month.closed && (
-              <span className="text-destructive">— {t('aps.entry.periodClosed')}</span>
-            )}
-          </>
-        )}
-        {dirty && !approved && (
-          <span className="text-muted-foreground ms-auto font-normal">
-            {t('aps.entry.unsaved')}
-          </span>
-        )}
-      </div>
       {initial.restored && dirty && (
         <p className="text-muted-foreground text-xs">{t('aps.entry.restored')}</p>
       )}
@@ -563,118 +548,157 @@ function EntryEditor({
             title={t('aps.entry.headerTitle')}
             hint={t('aps.entry.headerHint')}
           />
-          <div className="mt-5 grid min-w-0 gap-4 @2xl:grid-cols-2 @5xl:grid-cols-3">
-            <label className={labelClass()}>
-              <span>{t('aps.letters.date')}</span>
-              <input
-                className={CONTROL}
-                type="date"
-                dir="ltr"
-                value={form.date}
-                onChange={(event) => patch({ date: event.target.value })}
-              />
-            </label>
+          {/* Line 1 — the running period, read from the periodic settings. It is
+              the only period statement on the screen: nothing is typed here. */}
+          <div
+            role="status"
+            className="border-border bg-muted/55 text-foreground mt-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold"
+          >
+            <CalendarDays className="text-primary size-4 shrink-0" aria-hidden="true" />
+            {period !== null ? (
+              <>
+                <span>
+                  {t('aps.entry.periodLine', {
+                    period: period.month.period,
+                    month: period.month.name,
+                    year: period.month.startDate.slice(0, 4),
+                    fiscalYear: fiscalYearLabel(period.year.name),
+                  })}
+                </span>
+                {period.month.closed && (
+                  <span className="text-destructive">— {t('aps.entry.periodClosed')}</span>
+                )}
+              </>
+            ) : activeYear !== null ? (
+              <span className="text-muted-foreground font-normal">
+                {t('aps.entry.periodOutside', { fiscalYear: fiscalYearLabel(activeYear.name) })}
+              </span>
+            ) : (
+              <span className="text-muted-foreground font-normal">
+                {t('aps.entry.periodUnknown')}
+              </span>
+            )}
+          </div>
+          {/* Line 2 — the two numbers that are typed: the EPS number and the
+              manual letter code. No date, no fiscal-year picker, no period
+              field: all three are answered above or by the database. */}
+          <div className="mt-4 grid min-w-0 gap-4 @2xl:grid-cols-2">
             <label className={labelClass()}>
               <span>{t('aps.entry.epsNumber')}</span>
               <input
                 className={CONTROL}
                 type="text"
-                maxLength={64}
-                autoComplete="off"
-                value={form.number}
-                onChange={(event) => patch({ number: event.target.value })}
-              />
-            </label>
-            <SearchCombobox
-              label={t('aps.entry.issuerCode')}
-              value={form.issuerCode}
-              options={issuers}
-              placeholder={t('aps.entry.chooseIssuer')}
-              searchPlaceholder={t('aps.entry.searchIssuer')}
-              noMatches={t('aps.entry.noIssuerMatches')}
-              clearLabel={t('aps.entry.clearIssuer')}
-              missingLabel={t('aps.entry.unavailableIssuer')}
-              onChange={(issuerCode) => patch({ issuerCode })}
-            />
-            <label className={labelClass()}>
-              <span>{t('aps.entry.issuerSequence')}</span>
-              <input
-                className={CONTROL}
-                type="text"
                 dir="ltr"
-                maxLength={32}
+                inputMode="numeric"
                 autoComplete="off"
-                value={form.issuerSequence}
-                onChange={(event) => patch({ issuerSequence: event.target.value })}
+                maxLength={64}
+                value={form.number}
+                onChange={(event) => patch({ number: event.target.value.replace(/[^0-9]/g, '') })}
               />
             </label>
-            <label className={labelClass()}>
-              <span>{t('aps.entry.year')}</span>
-              <select
-                className={CONTROL}
-                value={form.yearId}
-                onChange={(event) => patch({ yearId: event.target.value })}
-              >
-                <option value="">{t('aps.entry.chooseYear')}</option>
-                {options.years.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                    {item.supplementsOpen
-                      ? ` — ${t('aps.entry.yearSupplement')}`
-                      : item.closed
-                        ? ` — ${t('aps.entry.yearClosed')}`
-                        : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {(form.type === 'inbound' || form.type === 'outbound') && (
-              <OptionSelect
-                label={t(
-                  form.type === 'inbound' ? 'aps.entry.partyInbound' : 'aps.entry.partyOutbound',
-                )}
-                value={form.partyId}
-                options={parties}
-                placeholder={t('aps.entry.chooseParty')}
-                onChange={(partyId) => patch({ partyId })}
-              />
-            )}
-            {form.type === 'external_transfer' && (
-              <OptionSelect
-                label={t('aps.entry.sister')}
-                value={form.sisterId}
-                options={options.sisters}
-                placeholder={t('aps.entry.chooseSister')}
-                onChange={(sisterId) => patch({ sisterId })}
-              />
-            )}
-            {form.type === 'external_transfer' && (
-              <label className={labelClass()}>
-                <span>{t('aps.entry.direction')}</span>
-                <select
-                  className={CONTROL}
-                  value={form.direction}
+            <div className="min-w-0 space-y-2">
+              <label className={labelClass()} htmlFor={letterCodeId}>
+                <span>{t('aps.entry.letterCode')}</span>
+                <input
+                  id={letterCodeId}
+                  className={`${CONTROL} font-semibold tracking-wide ${
+                    letterCodeProblem ? 'ring-destructive/60 bg-destructive/5 ring-2' : ''
+                  }`}
+                  type="text"
+                  dir="ltr"
+                  lang="en"
+                  inputMode="text"
+                  autoCapitalize="characters"
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={32}
+                  placeholder={t('aps.entry.letterCodePlaceholder')}
+                  aria-invalid={letterCodeProblem}
+                  aria-describedby={letterCodeHelpId}
+                  value={form.letterCode}
                   onChange={(event) =>
-                    patch({ direction: event.target.value === 'out' ? 'out' : 'in' })
+                    patch({ letterCode: normalizeLetterCode(event.target.value) })
                   }
-                >
-                  <option value="in">{t('aps.entry.externalIn')}</option>
-                  <option value="out">{t('aps.entry.externalOut')}</option>
-                </select>
+                />
               </label>
-            )}
+              <p
+                id={letterCodeHelpId}
+                className={`text-xs leading-relaxed ${letterCodeProblem ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}
+              >
+                {letterCodeProblem
+                  ? t('aps.entry.letterCodeInvalid')
+                  : t('aps.entry.letterCodeHint')}
+              </p>
+            </div>
           </div>
-          {year?.closed && !year.supplementsOpen && (
-            <p className="text-destructive mt-3 text-xs">
-              {t('aps.entry.yearClosed')} — {t('aps.entry.approveHint')}
-            </p>
-          )}
         </section>
+
+        {/* The counterparty is not header data any more, but it is still one
+            answer: a single row beside its own label, not a whole card of air. */}
+        {!transfer && (
+          <section className={`${CARD} flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end`}>
+            <div className="flex min-w-0 items-start gap-2 sm:w-60 sm:shrink-0">
+              <span className="bg-primary/10 text-primary grid size-7 shrink-0 place-items-center rounded-lg text-xs font-bold">
+                03
+              </span>
+              <div className="min-w-0">
+                <h3 className="text-foreground text-sm font-bold">
+                  {t('aps.entry.counterpartyTitle')}
+                </h3>
+                <p className="text-muted-foreground mt-0.5 text-[11px] leading-relaxed">
+                  {t('aps.entry.counterpartyHint')}
+                </p>
+              </div>
+            </div>
+            <div className="grid min-w-0 flex-1 gap-3 @2xl:grid-cols-2">
+              {(form.type === 'inbound' || form.type === 'outbound') && (
+                <OptionSelect
+                  label={t(
+                    form.type === 'inbound' ? 'aps.entry.partyInbound' : 'aps.entry.partyOutbound',
+                  )}
+                  value={form.partyId}
+                  options={parties}
+                  placeholder={t('aps.entry.chooseParty')}
+                  onChange={(partyId) => patch({ partyId })}
+                />
+              )}
+              {form.type === 'external_transfer' && (
+                <OptionSelect
+                  label={t('aps.entry.sister')}
+                  value={form.sisterId}
+                  options={options.sisters}
+                  placeholder={t('aps.entry.chooseSister')}
+                  onChange={(sisterId) => patch({ sisterId })}
+                />
+              )}
+              {form.type === 'external_transfer' && (
+                <label className={labelClass()}>
+                  <span>{t('aps.entry.direction')}</span>
+                  <select
+                    className={CONTROL}
+                    value={form.direction}
+                    onChange={(event) =>
+                      patch({ direction: event.target.value === 'out' ? 'out' : 'in' })
+                    }
+                  >
+                    <option value="in">{t('aps.entry.externalIn')}</option>
+                    <option value="out">{t('aps.entry.externalOut')}</option>
+                  </select>
+                </label>
+              )}
+            </div>
+            {year?.closed && !year.supplementsOpen && (
+              <p className="text-destructive mt-3 text-xs">
+                {t('aps.entry.yearClosed')} — {t('aps.entry.approveHint')}
+              </p>
+            )}
+          </section>
+        )}
 
         <section className="min-w-0 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <SectionHeading
-              number="03"
+              number={transfer ? '03' : '04'}
               title={t(transfer ? 'aps.entry.pairsTitle' : 'aps.entry.linesTitle')}
               hint={t(transfer ? 'aps.entry.pairsHint' : 'aps.entry.linesHint')}
             />
@@ -866,6 +890,12 @@ function EntryEditor({
           <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t pt-4">
             <p className="text-muted-foreground max-w-lg text-xs leading-relaxed">
               {t('aps.entry.approveHint')}
+              {dirty && !approved && (
+                <span className="text-muted-foreground font-semibold">
+                  {' '}
+                  {t('aps.entry.unsaved')}
+                </span>
+              )}
             </p>
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
               <button

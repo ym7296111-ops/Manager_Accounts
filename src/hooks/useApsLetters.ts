@@ -24,7 +24,7 @@ import { getSupabase } from '@/lib/supabase';
  * Cast money to text in PostgREST so JSON cannot round numeric(18,2).
  */
 export const APS_LETTER_SELECT =
-  'id, letter_type, letter_number, letter_number_raw, issuer_code, issuer_sequence, letter_date, status, counterparty_code, counterparty_name, source_total::text, destination_total::text, cancel_reason, settlement_reason';
+  'id, letter_type, letter_number, letter_number_raw, issuer_reference, letter_date, status, counterparty_code, counterparty_name, source_total::text, destination_total::text, cancel_reason, settlement_reason';
 
 /** Names are server-maintained line snapshots; no reference-table embed or extra read. */
 export const APS_LETTER_LINE_SELECT =
@@ -38,8 +38,8 @@ export interface ApsLetter {
   readonly date: string;
   readonly type: LetterType;
   readonly status: LetterStatus;
-  readonly issuerCode: string | null;
-  readonly issuerSequence: string | null;
+  /** The manual letter code (`YM:63`), null on a letter written without one. */
+  readonly issuerReference: string | null;
   readonly counterpartyCode: string | null;
   readonly counterpartyName: string | null;
   /** `destination_total` = sum of inbound lines. */
@@ -123,8 +123,7 @@ export function parseApsLetter(value: unknown): ApsLetter {
     date,
     type: row.letter_type,
     status: row.status,
-    issuerCode: nonempty(row.issuer_code),
-    issuerSequence: nonempty(row.issuer_sequence),
+    issuerReference: nonempty(row.issuer_reference),
     counterpartyCode: nonempty(row.counterparty_code),
     counterpartyName: nonempty(row.counterparty_name),
     totalIn,

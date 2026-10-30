@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PageHeaderProvider, usePageHeader } from '@/context/PageHeaderContext';
 import { I18nProvider, useI18n } from '@/i18n/I18nContext';
 import { ApsEntryError } from '@/hooks/useApsLetterEntry';
-import type { EntryForm, EntryOptions } from '@/lib/apsLetterEntry';
+import { localToday, type EntryForm, type EntryOptions } from '@/lib/apsLetterEntry';
 import ApsLetterEntryPage from './ApsLetterEntryPage';
 
 type HookState = { isPending: boolean; isError: boolean; data: EntryOptions | null };
@@ -38,13 +38,17 @@ vi.mock('@/hooks/useApsLetterEntry', async () => {
 });
 
 const id = (number: number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
+/* The period is read from the settings through today's date, so the fixture
+   month is built around the day the test actually runs. */
+const today = localToday();
+const calendarYear = today.slice(0, 4);
 const options: EntryOptions = {
   years: [
     {
       id: id(400),
-      name: '2026',
-      startDate: '2026-01-01',
-      endDate: '2026-12-31',
+      name: `${calendarYear}-${Number(calendarYear) + 1}`,
+      startDate: `${calendarYear}-01-01`,
+      endDate: `${calendarYear}-12-31`,
       active: true,
       closed: false,
       supplementsOpen: false,
@@ -54,10 +58,10 @@ const options: EntryOptions = {
     {
       id: id(300),
       yearId: id(400),
-      monthNumber: 3,
+      monthNumber: 1,
       name: 'مارس',
-      startDate: '2026-03-01',
-      endDate: '2026-03-31',
+      startDate: `${calendarYear}-01-01`,
+      endDate: `${calendarYear}-12-31`,
       period: 2,
       closed: false,
     },
@@ -120,8 +124,8 @@ function choose(label: string, value: string) {
 }
 
 /**
- * The warehouse and the issuer are searchable comboboxes: focus opens the list,
- * typing filters it, and the option is a button.
+ * The warehouse is a searchable combobox: focus opens the list, typing filters
+ * it, and the option is a button.
  */
 function pick(label: string, optionName: string) {
   const input = screen.getByLabelText(label);
@@ -131,8 +135,8 @@ function pick(label: string, optionName: string) {
 
 function fillInbound() {
   fireEvent.click(screen.getByRole('button', { name: /^وارد/ }));
-  fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
   fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
+  fireEvent.change(screen.getByLabelText('كود الخطاب'), { target: { value: 'ym63' } });
   choose('جهة الوارد', id(501));
   pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
   choose('التصنيف', id(201));
@@ -162,7 +166,13 @@ describe('APS letter entry screen', () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     const [, version, form] = save.mock.calls[0] as [string, string | null, EntryForm];
     expect(version).toBeNull();
-    expect(form).toMatchObject({ type: 'inbound', number: '2458', partyId: id(501) });
+    expect(form).toMatchObject({
+      type: 'inbound',
+      number: '2458',
+      letterCode: 'YM:63',
+      partyId: id(501),
+    });
+    expect(form).not.toHaveProperty('date');
     expect(screen.getByTestId('shell-header').textContent).toBe('خطاب وارد جديد');
     expect(await screen.findByText(/حُفظت المسودة بنجاح/)).toBeTruthy();
     expect(approve).not.toHaveBeenCalled();
@@ -172,11 +182,10 @@ describe('APS letter entry screen', () => {
   it('validates before any request and keeps the reason rule for reclassification', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
-    expect(await screen.findByText(/أدخل رقم خطاب صحيحاً/)).toBeTruthy();
+    expect(await screen.findByText(/أدخل رقم النظام \(EPS\) بالأرقام فقط/)).toBeTruthy();
     expect(save).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
-    fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
     fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '90' } });
     const selects = screen.getAllByRole('combobox');
     expect(selects.length).toBeGreaterThanOrEqual(4);
@@ -219,13 +228,41 @@ describe('APS letter entry screen', () => {
     expect(screen.queryByText('تم اعتماد الخطاب بنجاح.')).toBeNull();
   });
 
-  it('shows the running period from the periodic settings above the screen', () => {
+  it('states the running period above two fields and asks for no date', () => {
     mount();
-    expect(screen.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
-    expect(screen.getByText(/أنت تدخل خطاباً في: مارس 2026 — الفترة 2/)).toBeTruthy();
-    fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-09-04' } });
-    expect(screen.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeTruthy();
+    expect(screen.getByText(new RegExp(`فترة 2 — مارس ${calendarYear} — عام مالي`))).toBeTruthy();
+    // The three retired controls are gone: the date, the year and the issuer
+    // picker. Only the EPS number and the letter code are typed.
+    expect(screen.queryByLabelText('تاريخ الخطاب')).toBeNull();
+    expect(screen.queryByLabelText('السنة المالية')).toBeNull();
+    expect(screen.queryByLabelText('كود المُصدر')).toBeNull();
+    expect(screen.queryByLabelText('رقم المُصدر')).toBeNull();
+    const header = screen.getByText('بيانات الخطاب').closest('section')!;
+    expect(within(header).getAllByRole('textbox')).toHaveLength(2);
+    expect(within(header).queryAllByRole('combobox')).toHaveLength(0);
+  });
+
+  it('builds the letter code itself and refuses a shape it cannot use', () => {
+    mount();
+    const code = screen.getByLabelText<HTMLInputElement>('كود الخطاب');
+    expect(code.getAttribute('dir')).toBe('ltr');
+    expect(code.getAttribute('lang')).toBe('en');
+    expect(code.getAttribute('autocapitalize')).toBe('characters');
+    fireEvent.change(code, { target: { value: 'ym' } });
+    expect(code.value).toBe('YM');
+    expect(screen.getByText(/الصيغة المطلوبة حرفان إنجليزيان/)).toBeTruthy();
+    fireEvent.change(code, { target: { value: 'ym63' } });
+    expect(code.value).toBe('YM:63');
+    expect(screen.getByText(/حرفان إنجليزيان، ثُمّ النقطتان تلقائياً/)).toBeTruthy();
+    expect(code.getAttribute('aria-invalid')).toBe('false');
+    // Arabic letters never reach the field: the colon and the digits stay Latin.
+    fireEvent.change(code, { target: { value: 'يم٦٣' } });
+    expect(code.value).toBe('');
+    // An unregistered prefix is reported before the server sees it.
+    fireEvent.change(code, { target: { value: 'zz1' } });
+    expect(code.value).toBe('ZZ:1');
+    expect(code.getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByText(/بادئة مسجلة في سجل المُصدرين/)).toBeTruthy();
   });
 
   it('drives the shell header from the chosen type without a second title', () => {
@@ -245,19 +282,13 @@ describe('APS letter entry screen', () => {
     expect(screen.queryAllByRole('heading', { name: /جديد/ })).toHaveLength(0);
   });
 
-  it('searches the issuer by name and saves the code with the issuer sequence', async () => {
+  it('blocks a code whose issuer is not in the register before saving', async () => {
     mount();
     fillInbound();
-    const issuer = screen.getByLabelText('كود المُصدر');
-    fireEvent.focus(issuer);
-    fireEvent.change(issuer, { target: { value: 'ياسر' } });
-    fireEvent.click(screen.getByRole('option', { name: 'YM — ياسر' }));
-    expect(screen.getByLabelText<HTMLInputElement>('كود المُصدر').value).toBe('YM — ياسر');
-    fireEvent.change(screen.getByLabelText('رقم المُصدر'), { target: { value: '0042' } });
+    fireEvent.change(screen.getByLabelText('كود الخطاب'), { target: { value: 'zz7' } });
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    const [, , form] = save.mock.calls[0] as [string, string | null, EntryForm];
-    expect(form).toMatchObject({ issuerCode: 'YM', issuerSequence: '0042' });
+    expect(await screen.findByText(/بادئة كود الخطاب ليست مُصدراً مسجلاً/)).toBeTruthy();
+    expect(save).not.toHaveBeenCalled();
   });
 
   it('shows the server refusal on a load error and offers a retry', () => {

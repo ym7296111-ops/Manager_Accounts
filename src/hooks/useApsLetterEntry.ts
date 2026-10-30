@@ -4,6 +4,7 @@ import { classifyPostgrestReadError } from '@/hooks/postgrestReadError';
 import {
   isEntryOptionId,
   isEntryType,
+  isLetterCode,
   newEntryLine,
   normalizeEntryAmount,
   type EntryForm,
@@ -24,6 +25,7 @@ export type EntryErrorCode =
   | 'forbidden'
   | 'network'
   | 'duplicate'
+  | 'duplicateLetterCode'
   | 'existing'
   | 'stale'
   | 'invalid'
@@ -57,6 +59,8 @@ export function classifyEntryError(error: unknown, status?: number): EntryErrorC
   const code = text(item?.code) ?? '';
   const message = text(item?.message) ?? '';
   if (code === '23505') return 'duplicate';
+  if (code === 'P0001' && message.includes('aps_entry_duplicate_letter_code'))
+    return 'duplicateLetterCode';
   if (code === 'P0001' && message.includes('aps_entry_id_exists')) return 'existing';
   if (code === 'P0001' && message.includes('aps_entry_stale_draft')) return 'stale';
   if (
@@ -255,9 +259,7 @@ export function parseEntryDraft(
 ): LoadedDraft {
   const header = record(headerValue);
   const number = text(header?.letter_number_raw) ?? text(header?.letter_number);
-  const issuerCode = header?.issuer_code == null ? '' : text(header?.issuer_code);
-  const issuerSequence = header?.issuer_sequence == null ? '' : text(header?.issuer_sequence);
-  const date = text(header?.letter_date);
+  const letterCode = header?.issuer_reference == null ? '' : text(header?.issuer_reference);
   const updatedAt = text(header?.updated_at);
   if (
     !isEntryOptionId(header?.id) ||
@@ -266,11 +268,8 @@ export function parseEntryDraft(
     header?.status !== 'draft' ||
     !isEntryType(header?.letter_type) ||
     number === null ||
-    issuerCode === null ||
-    issuerSequence === null ||
-    (issuerCode !== '' && !/^[A-Za-z]{2}$/.test(issuerCode)) ||
-    date === null ||
-    !isLetterDate(date) ||
+    letterCode === null ||
+    (letterCode !== '' && !isLetterCode(letterCode)) ||
     updatedAt === null ||
     !Array.isArray(lineValues)
   )
@@ -329,9 +328,7 @@ export function parseEntryDraft(
     form: {
       type,
       number,
-      issuerCode,
-      issuerSequence,
-      date,
+      letterCode,
       yearId: header.fiscal_year_id,
       partyId,
       sisterId,
@@ -348,7 +345,7 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
   const header = await current
     .from('letters')
     .select(
-      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, issuer_code, issuer_sequence, letter_date, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
+      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, issuer_reference, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
     )
     .eq('id', id)
     .maybeSingle();
@@ -416,14 +413,12 @@ export async function saveEntryDraft(
     p_fiscal_year_id: form.yearId,
     p_letter_type: form.type,
     p_letter_number: form.number,
-    p_letter_date: form.date,
     p_party_id: form.type === 'inbound' || form.type === 'outbound' ? form.partyId : null,
     p_sister_company_id: form.type === 'external_transfer' ? form.sisterId : null,
     p_direction: form.type === 'external_transfer' ? form.direction : null,
     p_reclassification_reason: form.type === 'internal_transfer' ? form.reason : null,
     p_lines: lines,
-    p_issuer_code: form.issuerCode === '' ? null : form.issuerCode.toUpperCase(),
-    p_issuer_sequence: form.issuerSequence === '' ? null : form.issuerSequence,
+    p_issuer_reference: form.letterCode === '' ? null : form.letterCode,
   });
   assertResponse(response);
   const result = record(response.data);

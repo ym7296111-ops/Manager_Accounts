@@ -109,41 +109,50 @@ const sampleLetters = [
 ];
 
 // The mock is intentionally small and ephemeral; it is not an RLS or database simulator.
+// The fiscal year and its months are built around the running calendar year, so
+// the preview always has a period to state (the settings screen is the real source).
+const previewYear = new Date().getFullYear();
+const previewMonths = [
+  'يناير',
+  'فبراير',
+  'مارس',
+  'أبريل',
+  'مايو',
+  'يونيو',
+  'يوليو',
+  'أغسطس',
+  'سبتمبر',
+  'أكتوبر',
+  'نوفمبر',
+  'ديسمبر',
+];
 const entryOptions = {
   fiscal_years: [
     {
       id: uid(401),
-      name: 'السنة المالية 2026',
-      start_date: '2026-01-01',
-      end_date: '2026-12-31',
+      name: `${previewYear}-${previewYear + 1}`,
+      start_date: `${previewYear}-01-01`,
+      end_date: `${previewYear}-12-31`,
       is_active: true,
       is_closed: false,
       supplements_open: false,
     },
   ],
-  fiscal_months: [
-    { month: 1, name: 'يناير', start: '2026-01-01', end: '2026-01-31', period: 1 },
-    { month: 2, name: 'فبراير', start: '2026-02-01', end: '2026-02-28', period: 1 },
-    { month: 3, name: 'مارس', start: '2026-03-01', end: '2026-03-31', period: 1 },
-    { month: 4, name: 'أبريل', start: '2026-04-01', end: '2026-04-30', period: 2 },
-    { month: 5, name: 'مايو', start: '2026-05-01', end: '2026-05-31', period: 2 },
-    { month: 6, name: 'يونيو', start: '2026-06-01', end: '2026-06-30', period: 2 },
-    { month: 7, name: 'يوليو', start: '2026-07-01', end: '2026-07-31', period: 3 },
-    { month: 8, name: 'أغسطس', start: '2026-08-01', end: '2026-08-31', period: 3 },
-    { month: 9, name: 'سبتمبر', start: '2026-09-01', end: '2026-09-30', period: 3 },
-    { month: 10, name: 'أكتوبر', start: '2026-10-01', end: '2026-10-31', period: 4 },
-    { month: 11, name: 'نوفمبر', start: '2026-11-01', end: '2026-11-30', period: 4 },
-    { month: 12, name: 'ديسمبر', start: '2026-12-01', end: '2026-12-31', period: 4 },
-  ].map((item) => ({
-    id: uid(500 + item.month),
-    fiscal_year_id: uid(401),
-    month_number: item.month,
-    name: item.name,
-    start_date: item.start,
-    end_date: item.end,
-    current_period: item.period,
-    is_closed: false,
-  })),
+  fiscal_months: previewMonths.map((name, index) => {
+    const month = index + 1;
+    const start = `${previewYear}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(previewYear, month, 0).getDate();
+    return {
+      id: uid(500 + month),
+      fiscal_year_id: uid(401),
+      month_number: month,
+      name,
+      start_date: start,
+      end_date: `${previewYear}-${String(month).padStart(2, '0')}-${lastDay}`,
+      current_period: Math.floor(index / 3) + 1,
+      is_closed: false,
+    };
+  }),
   warehouses: [
     {
       id: uid(101),
@@ -197,8 +206,7 @@ interface PreviewLetter {
   destination_total: string;
   cancel_reason: string | null;
   settlement_reason: string | null;
-  issuer_code: string | null;
-  issuer_sequence: string | null;
+  issuer_reference: string | null;
   fiscal_year_id: string;
   party_id: string | null;
   sister_company_id: string | null;
@@ -217,8 +225,7 @@ const letters: PreviewLetter[] = sampleLetters.map((item) => ({
         : null,
   sister_company_id: item.letter_type === 'external_transfer' ? uid(601) : null,
   reclassification_reason: null,
-  issuer_code: 'YM',
-  issuer_sequence: item.letter_number,
+  issuer_reference: `YM:${item.letter_number}`,
   created_by: uid(1),
   updated_at: '2026-10-30T12:00:00.000Z',
 }));
@@ -303,14 +310,14 @@ interface MockEntrySave {
   p_fiscal_year_id: string;
   p_letter_type: string;
   p_letter_number: string;
-  p_letter_date: string;
   p_party_id: string | null;
   p_sister_company_id: string | null;
   p_direction: Direction | null;
   p_reclassification_reason: string | null;
   p_lines: MockEntryLine[];
-  p_issuer_code: string | null;
-  p_issuer_sequence: string | null;
+  p_issuer_reference: string | null;
+  /** Optional: the preview mirrors the database default when it is omitted. */
+  p_letter_date?: string;
 }
 let versionNumber = 0;
 function nextVersion() {
@@ -333,9 +340,22 @@ function saveMockDraft(input: MockEntrySave): Response {
     (!current || current.updated_at !== input.p_expected_updated_at)
   )
     return response({ code: 'P0001', message: 'aps_entry_stale_draft' }, 400);
-  const issuerCode = input.p_issuer_code?.toUpperCase() ?? null;
-  if (issuerCode !== null && !entryOptions.issuers.some((item) => item.code === issuerCode))
-    return response({ code: '22023', message: 'Preview unknown issuer' }, 400);
+  const issuerReference = input.p_issuer_reference?.toUpperCase() ?? null;
+  if (issuerReference !== null) {
+    if (!/^[A-Z]{2}:[0-9]+$/.test(issuerReference))
+      return response({ code: '22023', message: 'Preview invalid letter code' }, 400);
+    if (!entryOptions.issuers.some((item) => item.code === issuerReference.slice(0, 2)))
+      return response({ code: '22023', message: 'Preview unknown issuer' }, 400);
+    if (
+      letters.some(
+        (item) =>
+          item.id !== input.p_letter_id &&
+          item.fiscal_year_id === input.p_fiscal_year_id &&
+          item.issuer_reference === issuerReference,
+      )
+    )
+      return response({ code: 'P0001', message: 'aps_entry_duplicate_letter_code' }, 409);
+  }
   if (
     letters.some(
       (item) =>
@@ -416,7 +436,9 @@ function saveMockDraft(input: MockEntrySave): Response {
     letter_type: input.p_letter_type,
     letter_number: input.p_letter_number,
     letter_number_raw: input.p_letter_number,
-    letter_date: input.p_letter_date,
+    // The database dates a new draft itself; editing keeps the stored date.
+    letter_date:
+      input.p_letter_date ?? current?.letter_date ?? new Date().toISOString().slice(0, 10),
     status: 'draft',
     counterparty_code: party?.code ?? sister?.code ?? null,
     counterparty_name: party?.name ?? sister?.name ?? null,
@@ -428,8 +450,7 @@ function saveMockDraft(input: MockEntrySave): Response {
     party_id: input.p_party_id,
     sister_company_id: input.p_sister_company_id,
     reclassification_reason: input.p_reclassification_reason,
-    issuer_code: issuerCode,
-    issuer_sequence: input.p_issuer_sequence,
+    issuer_reference: issuerReference,
     created_by: uid(1),
     updated_at: updatedAt,
   };

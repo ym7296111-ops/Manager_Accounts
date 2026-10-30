@@ -1,5 +1,5 @@
 import { matchesSearch } from '@/lib/arabicText';
-import { isLetterDate, isLetterId, parseLetterAmount } from '@/lib/apsLetters';
+import { isLetterId, parseLetterAmount } from '@/lib/apsLetters';
 
 export const APS_LETTER_NEW_PATH = '/workspaces/aps/letters/new';
 export const APS_LETTER_CREATE_CAPABILITY = 'aps.letters:create';
@@ -65,11 +65,8 @@ export interface EntryForm {
   readonly type: EntryLetterType;
   /** The EPS number printed on the letter (`letter_number`). */
   readonly number: string;
-  /** The issuer's two-letter code, chosen from the controlled list. */
-  readonly issuerCode: string;
-  /** The issuer's own sequence number, typed by hand. */
-  readonly issuerSequence: string;
-  readonly date: string;
+  /** The manual letter code printed on the paper, `YM:63` (`issuer_reference`). */
+  readonly letterCode: string;
   readonly yearId: string;
   readonly partyId: string;
   readonly sisterId: string;
@@ -93,9 +90,7 @@ export function newEntryForm(): EntryForm {
   return {
     type: 'inbound',
     number: '',
-    issuerCode: '',
-    issuerSequence: '',
-    date: '',
+    letterCode: '',
     yearId: '',
     partyId: '',
     sisterId: '',
@@ -105,15 +100,64 @@ export function newEntryForm(): EntryForm {
   };
 }
 
+/** Arabic-Indic and Persian digits become ASCII, so every parser sees one shape. */
+function foldDigits(value: string): string {
+  return value
+    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - '٠'.charCodeAt(0)))
+    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - '۰'.charCodeAt(0)));
+}
+
 /** Accept Arabic and Persian digits without ever converting money to Number. */
 export function normalizeEntryAmount(value: string): string | null {
-  const folded = value
-    .trim()
-    .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - '٠'.charCodeAt(0)))
-    .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - '۰'.charCodeAt(0)))
-    .replace(/٫/g, '.');
+  const folded = foldDigits(value.trim()).replace(/٫/g, '.');
   const amount = parseLetterAmount(folded);
   return amount !== null && BigInt(amount.replace('.', '')) > 0n ? amount : null;
+}
+
+/**
+ * The letter code the field should hold while typing: at most two Latin
+ * letters, upper-cased, then the colon the clerk never types, then ASCII
+ * digits. Arabic letters and every other character are dropped, so a phone
+ * keyboard left on Arabic produces nothing rather than a silent bad value.
+ */
+export const LETTER_CODE_PATTERN = /^[A-Z]{2}:[0-9]+$/;
+export const LETTER_CODE_MAX_LENGTH = 32;
+
+export function normalizeLetterCode(value: string): string {
+  const folded = foldDigits(value);
+  let letters = '';
+  let digits = '';
+  for (const char of folded) {
+    if (letters.length < 2) {
+      if (/[A-Za-z]/.test(char)) letters += char.toUpperCase();
+    } else if (/[0-9]/.test(char)) {
+      digits += char;
+    }
+  }
+  if (letters.length < 2) return letters;
+  return digits === '' ? letters : `${letters}:${digits}`;
+}
+
+export function isLetterCode(value: string): boolean {
+  return value.length <= LETTER_CODE_MAX_LENGTH && LETTER_CODE_PATTERN.test(value);
+}
+
+/**
+ * Whether the field is worth an error line: an empty code is a valid unfinished
+ * draft, but a half-typed one must say what shape it is waiting for.
+ */
+export function letterCodeIncomplete(value: string): boolean {
+  return value !== '' && !isLetterCode(value);
+}
+
+/**
+ * Today in the browser's own calendar, `YYYY-MM-DD`. The period bar is about
+ * the day the letter is being written, not about a date the clerk types.
+ */
+export function localToday(now = new Date()): string {
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
 }
 
 /** `[warehouse] - [station]`, the label used everywhere a warehouse is shown. */
@@ -136,34 +180,37 @@ export function searchWarehouses<T extends EntryWarehouse>(
   );
 }
 
-/** Search the issuer by code or name, so `YM` and `ياسر` both work. */
-export function searchIssuers<T extends EntryIssuer>(
-  entries: readonly T[],
-  query: string,
-): readonly T[] {
-  return entries.filter((entry) => matchesSearch(query, `${entry.code} ${entry.name}`));
-}
-
 export interface EntryPeriod {
   readonly month: EntryMonth;
   readonly year: EntryYear;
 }
 
+/** `2026-2027` → `2026/2027`, the way the fiscal year is written on paper. */
+export function fiscalYearLabel(name: string): string {
+  const label = name.trim();
+  const match = /^(\d{4})-(\d{4})$/.exec(label);
+  return match ? `${match[1]}/${match[2]}` : label;
+}
+
 /**
- * The period the letter date falls in, read from the periodic settings.
+ * The period that is running today, read from the periodic settings.
  *
- * A date outside every configured month is reported as `null` — the screen then
- * says so instead of inventing a period. The chosen fiscal year wins, so a
- * supplemental date cannot borrow another year's month number.
+ * The active fiscal year wins, so a stale inactive year cannot answer for the
+ * month the clerk is working in. `null` means the settings do not cover today:
+ * the screen says so instead of inventing a period.
  */
-export function entryPeriod(form: EntryForm, options: EntryOptions): EntryPeriod | null {
-  const year = options.years.find((item) => item.id === form.yearId);
-  if (year === undefined || !isLetterDate(form.date)) return null;
-  const month = options.months.find(
-    (item) =>
-      item.yearId === form.yearId && form.date >= item.startDate && form.date <= item.endDate,
-  );
-  return month === undefined ? null : { month, year };
+export function runningEntryPeriod(
+  options: EntryOptions,
+  today = localToday(),
+): EntryPeriod | null {
+  const years = [...options.years].sort((a, b) => Number(b.active) - Number(a.active));
+  for (const year of years) {
+    const month = options.months.find(
+      (item) => item.yearId === year.id && today >= item.startDate && today <= item.endDate,
+    );
+    if (month !== undefined) return { month, year };
+  }
+  return null;
 }
 
 export function entryHasReclassification(form: EntryForm): boolean {
@@ -180,10 +227,9 @@ export function entryHasReclassification(form: EntryForm): boolean {
 
 export type EntryValidationCode =
   | 'number'
-  | 'issuer'
-  | 'issuerSequence'
-  | 'year'
-  | 'date'
+  | 'letterCode'
+  | 'issuerCode'
+  | 'period'
   | 'party'
   | 'sister'
   | 'lines'
@@ -198,34 +244,23 @@ export interface EntryValidationError {
 
 const MAX_CENTS = 999_999_999_999_999_999n;
 export function validateEntry(form: EntryForm, options: EntryOptions): EntryValidationError | null {
-  if (
-    form.number.trim() === '' ||
-    form.number.length > 64 ||
-    [...form.number].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
-  )
+  // The EPS number is typed on a numeric field: digits only, exactly as printed.
+  if (form.number.trim() === '' || !/^[0-9]{1,64}$/.test(form.number.trim()))
     return { code: 'number' };
-  // Both issuer fields stay optional on a draft, but a value that is present
-  // must be one the server would accept: a listed code, and a printable
-  // sequence of at most 32 characters.
+  // The letter code stays optional on a draft, but a value that is present must
+  // be the shape the database CHECK accepts.
+  if (form.letterCode !== '' && !isLetterCode(form.letterCode)) return { code: 'letterCode' };
+  // The prefix is what identifies the issuer: the database refuses a code whose
+  // two letters are not in the register, so the screen says it first.
   if (
-    form.issuerCode !== '' &&
-    (!/^[A-Za-z]{2}$/.test(form.issuerCode) ||
-      !options.issuers.some((item) => item.code === form.issuerCode))
+    form.letterCode !== '' &&
+    !options.issuers.some((item) => item.code === form.letterCode.slice(0, 2))
   )
-    return { code: 'issuer' };
-  if (
-    form.issuerSequence !== '' &&
-    (form.issuerSequence.length > 32 ||
-      [...form.issuerSequence].some((char) => {
-        const code = char.charCodeAt(0);
-        return code < 32 || code === 127;
-      }))
-  )
-    return { code: 'issuerSequence' };
-  const year = options.years.find((item) => item.id === form.yearId);
-  if (year === undefined) return { code: 'year' };
-  if (!isLetterDate(form.date) || form.date < year.startDate || form.date > year.endDate)
-    return { code: 'date' };
+    return { code: 'issuerCode' };
+  // The fiscal year is not a question any more: it comes from the periodic
+  // settings through the running period, so a missing period blocks the save.
+  if (form.yearId === '' || !options.years.some((item) => item.id === form.yearId))
+    return { code: 'period' };
   if (
     (form.type === 'inbound' || form.type === 'outbound') &&
     !options.parties.some((item) => item.id === form.partyId && item.branch === form.type)
