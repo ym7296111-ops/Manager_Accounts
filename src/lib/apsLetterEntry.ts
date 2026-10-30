@@ -1,3 +1,4 @@
+import { matchesSearch } from '@/lib/arabicText';
 import { isLetterDate, isLetterId, parseLetterAmount } from '@/lib/apsLetters';
 
 export const APS_LETTER_NEW_PATH = '/workspaces/aps/letters/new';
@@ -9,6 +10,27 @@ export interface EntryOption {
   readonly id: string;
   readonly name: string;
   readonly code: string;
+}
+/**
+ * A warehouse choice always carries its station, because the register and the
+ * paper form name the pair together (`المخزن - المحطة`). The station is null
+ * only for legacy data written before stations were required.
+ */
+export interface EntryWarehouse extends EntryOption {
+  readonly stationName: string | null;
+  readonly stationCode: string | null;
+}
+export type EntryIssuer = EntryOption;
+/** One row of the periodic settings: the month that a period is running in. */
+export interface EntryMonth {
+  readonly id: string;
+  readonly yearId: string;
+  readonly monthNumber: number;
+  readonly name: string;
+  readonly startDate: string;
+  readonly endDate: string;
+  readonly period: number;
+  readonly closed: boolean;
 }
 export interface EntryParty extends EntryOption {
   readonly branch: 'inbound' | 'outbound';
@@ -24,10 +46,12 @@ export interface EntryYear {
 }
 export interface EntryOptions {
   readonly years: readonly EntryYear[];
-  readonly warehouses: readonly EntryOption[];
+  readonly months: readonly EntryMonth[];
+  readonly warehouses: readonly EntryWarehouse[];
   readonly classifications: readonly EntryOption[];
   readonly parties: readonly EntryParty[];
   readonly sisters: readonly EntryOption[];
+  readonly issuers: readonly EntryIssuer[];
 }
 export interface EntryLine {
   readonly key: string;
@@ -39,7 +63,12 @@ export interface EntryLine {
 }
 export interface EntryForm {
   readonly type: EntryLetterType;
+  /** The EPS number printed on the letter (`letter_number`). */
   readonly number: string;
+  /** The issuer's two-letter code, chosen from the controlled list. */
+  readonly issuerCode: string;
+  /** The issuer's own sequence number, typed by hand. */
+  readonly issuerSequence: string;
   readonly date: string;
   readonly yearId: string;
   readonly partyId: string;
@@ -64,6 +93,8 @@ export function newEntryForm(): EntryForm {
   return {
     type: 'inbound',
     number: '',
+    issuerCode: '',
+    issuerSequence: '',
     date: '',
     yearId: '',
     partyId: '',
@@ -85,6 +116,56 @@ export function normalizeEntryAmount(value: string): string | null {
   return amount !== null && BigInt(amount.replace('.', '')) > 0n ? amount : null;
 }
 
+/** `[warehouse] - [station]`, the label used everywhere a warehouse is shown. */
+export function warehouseLabel(item: {
+  readonly name: string;
+  readonly stationName: string | null;
+}): string {
+  return item.stationName === null || item.stationName.trim() === ''
+    ? item.name
+    : `${item.name} - ${item.stationName}`;
+}
+
+/** Search the warehouse by its own name, its station and its code. */
+export function searchWarehouses<T extends EntryWarehouse>(
+  entries: readonly T[],
+  query: string,
+): readonly T[] {
+  return entries.filter((entry) =>
+    matchesSearch(query, `${entry.name} ${entry.stationName ?? ''} ${entry.code}`),
+  );
+}
+
+/** Search the issuer by code or name, so `YM` and `ياسر` both work. */
+export function searchIssuers<T extends EntryIssuer>(
+  entries: readonly T[],
+  query: string,
+): readonly T[] {
+  return entries.filter((entry) => matchesSearch(query, `${entry.code} ${entry.name}`));
+}
+
+export interface EntryPeriod {
+  readonly month: EntryMonth;
+  readonly year: EntryYear;
+}
+
+/**
+ * The period the letter date falls in, read from the periodic settings.
+ *
+ * A date outside every configured month is reported as `null` — the screen then
+ * says so instead of inventing a period. The chosen fiscal year wins, so a
+ * supplemental date cannot borrow another year's month number.
+ */
+export function entryPeriod(form: EntryForm, options: EntryOptions): EntryPeriod | null {
+  const year = options.years.find((item) => item.id === form.yearId);
+  if (year === undefined || !isLetterDate(form.date)) return null;
+  const month = options.months.find(
+    (item) =>
+      item.yearId === form.yearId && form.date >= item.startDate && form.date <= item.endDate,
+  );
+  return month === undefined ? null : { month, year };
+}
+
 export function entryHasReclassification(form: EntryForm): boolean {
   return (
     form.type === 'internal_transfer' &&
@@ -99,6 +180,8 @@ export function entryHasReclassification(form: EntryForm): boolean {
 
 export type EntryValidationCode =
   | 'number'
+  | 'issuer'
+  | 'issuerSequence'
   | 'year'
   | 'date'
   | 'party'
@@ -121,6 +204,24 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     [...form.number].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
   )
     return { code: 'number' };
+  // Both issuer fields stay optional on a draft, but a value that is present
+  // must be one the server would accept: a listed code, and a printable
+  // sequence of at most 32 characters.
+  if (
+    form.issuerCode !== '' &&
+    (!/^[A-Za-z]{2}$/.test(form.issuerCode) ||
+      !options.issuers.some((item) => item.code === form.issuerCode))
+  )
+    return { code: 'issuer' };
+  if (
+    form.issuerSequence !== '' &&
+    (form.issuerSequence.length > 32 ||
+      [...form.issuerSequence].some((char) => {
+        const code = char.charCodeAt(0);
+        return code < 32 || code === 127;
+      }))
+  )
+    return { code: 'issuerSequence' };
   const year = options.years.find((item) => item.id === form.yearId);
   if (year === undefined) return { code: 'year' };
   if (!isLetterDate(form.date) || form.date < year.startDate || form.date > year.endDate)

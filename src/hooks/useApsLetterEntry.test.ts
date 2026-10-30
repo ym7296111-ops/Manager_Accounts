@@ -62,10 +62,31 @@ const optionsPayload = {
       supplements_open: false,
     },
   ],
-  warehouses: [{ id: id(100), name: 'مخزن', code: 'WH-001' }],
+  fiscal_months: [
+    {
+      id: id(300),
+      fiscal_year_id: id(400),
+      month_number: 3,
+      name: 'مارس',
+      start_date: '2026-03-01',
+      end_date: '2026-03-31',
+      current_period: 2,
+      is_closed: false,
+    },
+  ],
+  warehouses: [
+    {
+      id: id(100),
+      name: 'احتياطي',
+      code: 'WH-001',
+      station_name: 'غرب القاهرة',
+      station_code: 'ST-01',
+    },
+  ],
   classifications: [{ id: id(201), name: 'حديد', code: 'CL-001' }],
   parties: [{ id: id(501), name: 'جهة', code: 'IN-001', branch: 'inbound' }],
   sister_companies: [{ id: id(601), name: 'شقيقة', code: 'SIS-001' }],
+  issuers: [{ id: id(701), code: 'YM', name: 'ياسر' }],
 };
 
 function draftHeader(overrides: Record<string, unknown> = {}) {
@@ -75,6 +96,8 @@ function draftHeader(overrides: Record<string, unknown> = {}) {
     letter_type: 'inbound',
     letter_number: '7',
     letter_number_raw: '007',
+    issuer_code: 'YM',
+    issuer_sequence: '0042',
     letter_date: '2026-03-04',
     party_id: id(501),
     sister_company_id: null,
@@ -119,7 +142,17 @@ describe('APS letter entry transport', () => {
   it('reads the creator-only choices through the RPC and never a directory table', async () => {
     const requests = setupTransport(() => json(optionsPayload));
     await expect(fetchEntryOptions()).resolves.toMatchObject({
-      warehouses: optionsPayload.warehouses,
+      warehouses: [
+        {
+          id: id(100),
+          name: 'احتياطي',
+          code: 'WH-001',
+          stationName: 'غرب القاهرة',
+          stationCode: 'ST-01',
+        },
+      ],
+      issuers: [{ code: 'YM', name: 'ياسر' }],
+      months: [{ monthNumber: 3, name: 'مارس', period: 2 }],
     });
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url.pathname).toBe('/rest/v1/rpc/aps_letter_entry_options');
@@ -136,6 +169,8 @@ describe('APS letter entry transport', () => {
     expect(draft.form).toMatchObject({
       type: 'inbound',
       number: '007',
+      issuerCode: 'YM',
+      issuerSequence: '0042',
       partyId: id(501),
       lines: [{ amount: '10.00' }, { amount: '2.50' }],
     });
@@ -144,6 +179,7 @@ describe('APS letter entry transport', () => {
     expect(header.url.searchParams.get('select')).not.toContain('classifications(');
     const lines = requests.find(({ url }) => url.pathname.endsWith('/letter_lines'))!;
     expect(lines.url.searchParams.get('select')).toContain('amount::text');
+    expect(header.url.searchParams.get('select')).toContain('issuer_code');
     expect(lines.url.searchParams.get('letter_id')).toBe(`eq.${id(900)}`);
   });
 
@@ -268,6 +304,8 @@ describe('APS letter entry transport', () => {
     expect(requests[0]!.url.pathname).toBe('/rest/v1/rpc/aps_save_letter_draft');
     expect(body).toMatchObject({
       p_letter_id: id(900),
+      p_issuer_code: null,
+      p_issuer_sequence: null,
       p_expected_updated_at: '2026-03-04T10:00:00+00:00',
       p_letter_type: 'external_transfer',
       p_party_id: null,
@@ -285,6 +323,59 @@ describe('APS letter entry transport', () => {
       p_sister_company_id: null,
       p_direction: null,
     });
+  });
+
+  it('sends the issuer code in upper case and keeps the sequence exactly as typed', async () => {
+    const requests = setupTransport(() =>
+      json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' }),
+    );
+    const form: EntryForm = {
+      ...newEntryForm(),
+      number: '7',
+      issuerCode: 'ym',
+      issuerSequence: '0042',
+      date: '2026-03-04',
+      yearId: id(400),
+      partyId: id(501),
+      lines: [
+        {
+          key: 'l1',
+          warehouseId: id(100),
+          classificationId: id(201),
+          destinationWarehouseId: '',
+          destinationClassificationId: '',
+          amount: '5',
+        },
+      ],
+    };
+    await saveEntryDraft(id(900), null, form);
+    expect(JSON.parse(requests[0]!.body)).toMatchObject({
+      p_issuer_code: 'YM',
+      p_issuer_sequence: '0042',
+    });
+  });
+
+  it('reads the station beside the warehouse and requires a two-letter issuer code', () => {
+    const options = parseEntryOptions(optionsPayload);
+    expect(options.warehouses[0]).toMatchObject({
+      name: 'احتياطي',
+      stationName: 'غرب القاهرة',
+      stationCode: 'ST-01',
+    });
+    expect(options.issuers).toEqual([{ id: id(701), code: 'YM', name: 'ياسر' }]);
+    expect(options.months[0]).toMatchObject({ name: 'مارس', period: 2, yearId: id(400) });
+    expect(() =>
+      parseEntryOptions({ ...optionsPayload, issuers: [{ id: id(701), code: 'Y', name: 'x' }] }),
+    ).toThrow(ApsEntryError);
+    expect(() => parseEntryOptions({ ...optionsPayload, issuers: undefined })).toThrow(
+      ApsEntryError,
+    );
+    expect(() =>
+      parseEntryOptions({
+        ...optionsPayload,
+        fiscal_months: [{ ...optionsPayload.fiscal_months[0], current_period: 0 }],
+      }),
+    ).toThrow(ApsEntryError);
   });
 
   it('approves only through aps_approve_letter', async () => {

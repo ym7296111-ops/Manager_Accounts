@@ -4,6 +4,7 @@ import {
   ArrowLeftRight,
   ArrowRight,
   ArrowUpRight,
+  CalendarDays,
   CheckCircle2,
   ClipboardList,
   FilePlus2,
@@ -24,20 +25,24 @@ import {
   type EntryErrorCode,
   type LoadedDraft,
 } from '@/hooks/useApsLetterEntry';
+import { SearchCombobox } from '@/components/ui/SearchCombobox';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   APS_LETTER_NEW_PATH,
   entryHasReclassification,
+  entryPeriod,
   entryTotal,
   newEntryForm,
   newEntryLine,
   validateEntry,
+  warehouseLabel,
   type EntryForm,
   type EntryLetterType,
   type EntryLine,
   type EntryOption,
   type EntryOptions,
   type EntryValidationError,
+  type EntryWarehouse,
 } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, formatLetterAmount } from '@/lib/apsLetters';
 
@@ -45,37 +50,62 @@ const CONTROL =
   'border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 w-full min-w-0 rounded-xl border px-3 text-sm outline-none focus:ring-2 disabled:opacity-60';
 const CARD =
   'border-border bg-card min-w-0 rounded-2xl border p-4 shadow-[0_2px_12px_rgb(15_23_42/0.035)] sm:p-5';
+/**
+ * One colour per letter type, used by the header band and by the type button
+ * group. The header is the first thing the eye lands on, so the type is stated
+ * three ways — colour, icon and title — rather than by colour alone.
+ */
 const TYPES: readonly {
   value: EntryLetterType;
   hint: TranslationKey;
+  title: TranslationKey;
   icon: typeof ArrowDownLeft;
   color: string;
+  banner: string;
 }[] = [
   {
     value: 'inbound',
     hint: 'aps.entry.inboundHint',
+    title: 'aps.entry.newTitle.inbound',
     icon: ArrowDownLeft,
-    color: 'bg-emerald-500/10 text-emerald-700',
+    color: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+    banner: 'border-emerald-500/25 bg-emerald-500/5 text-emerald-800 dark:text-emerald-200',
   },
   {
     value: 'outbound',
     hint: 'aps.entry.outboundHint',
+    title: 'aps.entry.newTitle.outbound',
     icon: ArrowUpRight,
-    color: 'bg-orange-500/10 text-orange-700',
+    color: 'bg-orange-500/10 text-orange-700 dark:text-orange-300',
+    banner: 'border-orange-500/25 bg-orange-500/5 text-orange-800 dark:text-orange-200',
   },
   {
     value: 'internal_transfer',
     hint: 'aps.entry.internalHint',
+    title: 'aps.entry.newTitle.internal_transfer',
     icon: ArrowLeftRight,
-    color: 'bg-violet-500/10 text-violet-700',
+    color: 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
+    banner: 'border-violet-500/25 bg-violet-500/5 text-violet-800 dark:text-violet-200',
   },
   {
     value: 'external_transfer',
     hint: 'aps.entry.externalHint',
+    title: 'aps.entry.newTitle.external_transfer',
     icon: ArrowRight,
-    color: 'bg-sky-500/10 text-sky-700',
+    color: 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
+    banner: 'border-sky-500/25 bg-sky-500/5 text-sky-800 dark:text-sky-200',
   },
 ];
+
+function warehouseOptions(
+  warehouses: readonly EntryWarehouse[],
+): readonly { value: string; label: string; keywords: string }[] {
+  return warehouses.map((warehouse) => ({
+    value: warehouse.id,
+    label: warehouseLabel(warehouse),
+    keywords: `${warehouse.name} ${warehouse.stationName ?? ''} ${warehouse.code}`,
+  }));
+}
 const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   unavailable: 'aps.entry.errorUnknown',
   forbidden: 'aps.entry.errorForbidden',
@@ -281,6 +311,15 @@ function EntryEditor({
   const total = entryTotal(form);
   const parties = options.parties.filter((party) => party.branch === form.type);
   const year = options.years.find((item) => item.id === form.yearId);
+  const period = entryPeriod(form, options);
+  const activeType = TYPES.find((item) => item.value === form.type) ?? TYPES[0]!;
+  const ActiveIcon = activeType.icon;
+  const warehouses = warehouseOptions(options.warehouses);
+  const issuers = options.issuers.map((issuer) => ({
+    value: issuer.code,
+    label: `${issuer.code} — ${issuer.name}`,
+    keywords: issuer.name,
+  }));
 
   useEffect(() => {
     if (dirty && !approved) unsavedEntries.set(cacheKey, { id, version, baseline, form });
@@ -413,17 +452,47 @@ function EntryEditor({
 
   return (
     <div className="min-w-0 space-y-5 pb-8">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 className="text-foreground text-lg font-bold">
-            {t(draft ? 'aps.entry.editTitle' : 'aps.entry.title')}
-          </h2>
-          <p className="text-muted-foreground text-sm leading-relaxed">
-            {t('aps.entry.description')}
-          </p>
+      <section className={`min-w-0 rounded-2xl border p-4 sm:p-5 ${activeType.banner}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              className={`grid size-10 shrink-0 place-items-center rounded-xl ${activeType.color}`}
+            >
+              <ActiveIcon className="size-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold opacity-80">
+                {t(draft === null ? 'aps.entry.title' : 'aps.entry.editTitle')}
+              </p>
+              <h2 className="mt-0.5 text-lg font-bold break-words">{t(activeType.title)}</h2>
+              <p className="mt-1 text-xs leading-relaxed opacity-90">{t(activeType.hint)}</p>
+            </div>
+          </div>
+          {dirty && !approved && (
+            <span className="text-xs font-semibold opacity-80">{t('aps.entry.unsaved')}</span>
+          )}
         </div>
-        {dirty && !approved && (
-          <span className="text-muted-foreground text-xs">{t('aps.entry.unsaved')}</span>
+      </section>
+      <div
+        role="status"
+        className="border-border bg-muted/55 text-foreground flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold"
+      >
+        <CalendarDays className="text-primary size-4 shrink-0" aria-hidden="true" />
+        {period === null ? (
+          <span className="text-muted-foreground font-normal">{t('aps.entry.periodUnknown')}</span>
+        ) : (
+          <>
+            <span>
+              {t('aps.entry.periodBar', {
+                month: period.month.name,
+                year: period.month.startDate.slice(0, 4),
+                period: period.month.period,
+              })}
+            </span>
+            {period.month.closed && (
+              <span className="text-destructive">— {t('aps.entry.periodClosed')}</span>
+            )}
+          </>
         )}
       </div>
       {initial.restored && dirty && (
@@ -456,10 +525,15 @@ function EntryEditor({
           <SectionHeading
             number="01"
             title={t('aps.entry.typeTitle')}
-            hint={t('aps.entry.headerHint')}
+            hint={t('aps.entry.typeHint')}
           />
-          <div className="mt-4 grid min-w-0 grid-cols-2 gap-2 @4xl:grid-cols-4">
-            {TYPES.map(({ value, hint, icon: Icon, color }) => {
+          {/* One row, four buttons: the type is a switch, not a page. */}
+          <div
+            role="group"
+            aria-label={t('aps.entry.typeTitle')}
+            className="border-border bg-muted/45 mt-4 grid min-w-0 grid-cols-4 gap-1 rounded-xl border p-1"
+          >
+            {TYPES.map(({ value, icon: Icon, color }) => {
               const selected = form.type === value;
               return (
                 <button
@@ -469,18 +543,15 @@ function EntryEditor({
                   onClick={() => {
                     if (!selected) patch({ type: value, partyId: '', sisterId: '' });
                   }}
-                  className={`focus-visible:ring-ring flex min-h-24 min-w-0 items-start gap-2 rounded-xl border p-3 text-start transition-colors focus-visible:ring-2 focus-visible:outline-none ${selected ? 'border-primary bg-primary/5 ring-primary/15 ring-2' : 'border-border hover:bg-muted/50'}`}
+                  className={`focus-visible:ring-ring flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none @xl:flex-row @xl:gap-2 @xl:px-3 ${selected ? 'bg-card text-foreground border-border border shadow-sm' : 'text-muted-foreground hover:bg-card/60 border border-transparent'}`}
                 >
-                  <span className={`grid size-9 shrink-0 place-items-center rounded-lg ${color}`}>
+                  <span
+                    className={`hidden size-7 shrink-0 place-items-center rounded-md @xl:grid ${color}`}
+                  >
                     <Icon className="size-4" aria-hidden="true" />
                   </span>
-                  <span className="min-w-0">
-                    <span className="text-foreground block text-sm font-bold">
-                      {t(`aps.letters.type.${value}`)}
-                    </span>
-                    <span className="text-muted-foreground mt-1 block text-xs leading-relaxed">
-                      {t(hint)}
-                    </span>
+                  <span className="text-[11px] leading-tight font-bold break-words @xl:text-sm">
+                    {t(`aps.letters.type.${value}`)}
                   </span>
                 </button>
               );
@@ -506,7 +577,7 @@ function EntryEditor({
               />
             </label>
             <label className={labelClass()}>
-              <span>{t('aps.letters.number')}</span>
+              <span>{t('aps.entry.epsNumber')}</span>
               <input
                 className={CONTROL}
                 type="text"
@@ -514,6 +585,29 @@ function EntryEditor({
                 autoComplete="off"
                 value={form.number}
                 onChange={(event) => patch({ number: event.target.value })}
+              />
+            </label>
+            <SearchCombobox
+              label={t('aps.entry.issuerCode')}
+              value={form.issuerCode}
+              options={issuers}
+              placeholder={t('aps.entry.chooseIssuer')}
+              searchPlaceholder={t('aps.entry.searchIssuer')}
+              noMatches={t('aps.entry.noIssuerMatches')}
+              clearLabel={t('aps.entry.clearIssuer')}
+              missingLabel={t('aps.entry.unavailableIssuer')}
+              onChange={(issuerCode) => patch({ issuerCode })}
+            />
+            <label className={labelClass()}>
+              <span>{t('aps.entry.issuerSequence')}</span>
+              <input
+                className={CONTROL}
+                type="text"
+                dir="ltr"
+                maxLength={32}
+                autoComplete="off"
+                value={form.issuerSequence}
+                onChange={(event) => patch({ issuerSequence: event.target.value })}
               />
             </label>
             <label className={labelClass()}>
@@ -623,11 +717,15 @@ function EntryEditor({
                       <ArrowUpRight className="size-4" aria-hidden="true" />
                       {t('aps.entry.source')}
                     </p>
-                    <OptionSelect
+                    <SearchCombobox
                       label={`${t('aps.entry.source')} — ${t('aps.letters.warehouse')}`}
                       value={line.warehouseId}
-                      options={options.warehouses}
+                      options={warehouses}
                       placeholder={t('aps.entry.chooseWarehouse')}
+                      searchPlaceholder={t('aps.entry.searchWarehouse')}
+                      noMatches={t('aps.entry.noWarehouseMatches')}
+                      clearLabel={t('aps.entry.clearWarehouse')}
+                      missingLabel={t('aps.entry.unavailableOption')}
                       onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
                     />
                     <OptionSelect
@@ -643,11 +741,15 @@ function EntryEditor({
                       <ArrowDownLeft className="size-4" aria-hidden="true" />
                       {t('aps.entry.destination')}
                     </p>
-                    <OptionSelect
+                    <SearchCombobox
                       label={`${t('aps.entry.destination')} — ${t('aps.letters.warehouse')}`}
                       value={line.destinationWarehouseId}
-                      options={options.warehouses}
+                      options={warehouses}
                       placeholder={t('aps.entry.chooseWarehouse')}
+                      searchPlaceholder={t('aps.entry.searchWarehouse')}
+                      noMatches={t('aps.entry.noWarehouseMatches')}
+                      clearLabel={t('aps.entry.clearWarehouse')}
+                      missingLabel={t('aps.entry.unavailableOption')}
                       onChange={(destinationWarehouseId) =>
                         updateLine(line.key, { destinationWarehouseId })
                       }
@@ -665,11 +767,15 @@ function EntryEditor({
                 </div>
               ) : (
                 <div className="mt-3 grid min-w-0 gap-3 @3xl:grid-cols-3">
-                  <OptionSelect
+                  <SearchCombobox
                     label={t('aps.letters.warehouse')}
                     value={line.warehouseId}
-                    options={options.warehouses}
+                    options={warehouses}
                     placeholder={t('aps.entry.chooseWarehouse')}
+                    searchPlaceholder={t('aps.entry.searchWarehouse')}
+                    noMatches={t('aps.entry.noWarehouseMatches')}
+                    clearLabel={t('aps.entry.clearWarehouse')}
+                    missingLabel={t('aps.entry.unavailableOption')}
                     onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
                   />
                   <OptionSelect

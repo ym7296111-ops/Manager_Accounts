@@ -144,7 +144,13 @@ test('English switches the document direction and keeps details readable', async
 
 async function fillHeader(page: Page, number: string) {
   await page.getByLabel('تاريخ الخطاب').fill('2026-03-04');
-  await page.getByLabel('رقم الخطاب').fill(number);
+  await page.getByLabel('رقم النظام (EPS)').fill(number);
+}
+
+/** The warehouse is a searchable combobox; the option carries the station. */
+async function pickWarehouse(page: Page, label: string, option: string) {
+  await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole('option', { name: option }).click();
 }
 
 test('entry creates an inbound draft and approves it through the existing transition', async ({
@@ -152,14 +158,14 @@ test('entry creates an inbound draft and approves it through the existing transi
 }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'إنشاء خطاب جديد' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeVisible();
   for (const name of [/وارد/, /منصرف/, /تحويل داخلي/, /تحويل خارجي/]) {
     await expect(page.getByRole('button', { name })).toBeVisible();
   }
   await expect(page.getByRole('button', { name: /تسوية/ })).toHaveCount(0);
   await fillHeader(page, '9001');
   await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
-  await page.getByLabel('المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
   await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
   await page.getByLabel('القيمة').fill('120.50');
   await expect(page.getByText('١٢٠٫٥٠')).toBeVisible();
@@ -181,9 +187,9 @@ test('internal entry pairs source and destination and requires a reclassificatio
   await page.goto('/workspaces/aps/letters/new?scenario=approval-fails');
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   await fillHeader(page, '9002');
-  await page.getByLabel('المصدر — المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await pickWarehouse(page, 'المصدر — المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
   await page.getByLabel('المصدر — التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
-  await page.getByLabel('الوجهة — المخزن').selectOption({ label: 'مخزن التشغيل الرئيسي — WH-002' });
+  await pickWarehouse(page, 'الوجهة — المخزن', 'مخزن التشغيل الرئيسي - محطة شرق القاهرة');
   await page.getByLabel('الوجهة — التصنيف').selectOption({ label: 'مستلزمات التشغيل — CL-002' });
   await page.getByLabel('قيمة الزوج').fill('75');
   await expect(page.getByLabel(/سبب إعادة التصنيف/)).toBeVisible();
@@ -200,7 +206,7 @@ test('internal entry pairs source and destination and requires a reclassificatio
 test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'إنشاء خطاب جديد' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeVisible();
   await expect(page.getByRole('button', { name: /وارد/ })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
@@ -215,7 +221,7 @@ test('entry options refusal and lost results are reported honestly', async ({ pa
   await page.goto('/workspaces/aps/letters/new?scenario=save-unknown');
   await fillHeader(page, '9003');
   await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
-  await page.getByLabel('المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
   await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
   await page.getByLabel('القيمة').fill('10');
   await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
@@ -223,10 +229,36 @@ test('entry options refusal and lost results are reported honestly', async ({ pa
   await expect(page.getByRole('link', { name: 'عرض المسودة' })).toBeVisible();
 });
 
+test('entry reads the running period, the issuer list and the station label', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/workspaces/aps/letters/new');
+  await expect(page.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeVisible();
+  await page.getByLabel('تاريخ الخطاب').fill('2026-10-15');
+  await expect(page.getByText(/أنت تدخل خطاباً في: أكتوبر 2026 — الفترة 4/)).toBeVisible();
+
+  const issuer = page.getByLabel('كود المُصدر', { exact: true });
+  await issuer.fill('ياسر');
+  await expect(page.getByRole('option', { name: 'YM — ياسر' })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'AA — أحمد عبد الله' })).toHaveCount(0);
+  await page.getByRole('option', { name: 'YM — ياسر' }).click();
+  await expect(issuer).toHaveValue('YM — ياسر');
+  await page.getByLabel('رقم المُصدر').fill('0042');
+
+  const warehouse = page.getByLabel('المخزن', { exact: true });
+  await warehouse.fill('غرب');
+  await expect(
+    page.getByRole('option', { name: 'مخزن المواد الخام - محطة غرب القاهرة' }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('option', { name: 'مخزن التشغيل الرئيسي - محطة شرق القاهرة' }),
+  ).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
 test('English entry screen renders left to right', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('admin-system:locale', 'en'));
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'Create a new letter' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'New inbound letter' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
   await expect(page.getByRole('button', { name: /Inbound/ })).toBeVisible();
   await expectNoHorizontalOverflow(page);

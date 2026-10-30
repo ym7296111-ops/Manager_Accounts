@@ -182,6 +182,7 @@ describe('APS letter reads', () => {
             classification_id: id(30),
             amount: '123.45',
             warehouse_name: 'المخزن عند حفظ السطر',
+            station_name: 'المحطة عند حفظ السطر',
             classification_name: 'التصنيف عند حفظ السطر',
           },
         ]);
@@ -198,12 +199,14 @@ describe('APS letter reads', () => {
         classificationId: id(30),
         amount: '123.45',
         warehouseName: 'المخزن عند حفظ السطر',
+        stationName: 'المحطة عند حفظ السطر',
         classificationName: 'التصنيف عند حفظ السطر',
       },
     ]);
     const query = requests.find(({ url }) => url.pathname.endsWith('/letter_lines'))!;
     expect(query.url.searchParams.get('select')).toContain('warehouse_name');
     expect(query.url.searchParams.get('select')).toContain('classification_name');
+    expect(query.url.searchParams.get('select')).toContain('station_name');
     expect(query.url.searchParams.get('select')).not.toMatch(
       /\b(?:warehouses|classifications)\s*(?:!|\()/,
     );
@@ -231,6 +234,8 @@ describe('APS letter reads', () => {
     expect(() => parseApsLetterLine({ ...row, classification_name: '  ' })).toThrow(
       ApsLettersError,
     );
+    // A line written before the station label existed stays readable.
+    expect(parseApsLetterLine({ ...row, station_name: null }).stationName).toBeNull();
   });
 
   it('does not reveal whether an inaccessible letter exists or query its lines', async () => {

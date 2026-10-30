@@ -121,10 +121,51 @@ const entryOptions = {
       supplements_open: false,
     },
   ],
+  fiscal_months: [
+    { month: 1, name: 'يناير', start: '2026-01-01', end: '2026-01-31', period: 1 },
+    { month: 2, name: 'فبراير', start: '2026-02-01', end: '2026-02-28', period: 1 },
+    { month: 3, name: 'مارس', start: '2026-03-01', end: '2026-03-31', period: 1 },
+    { month: 4, name: 'أبريل', start: '2026-04-01', end: '2026-04-30', period: 2 },
+    { month: 5, name: 'مايو', start: '2026-05-01', end: '2026-05-31', period: 2 },
+    { month: 6, name: 'يونيو', start: '2026-06-01', end: '2026-06-30', period: 2 },
+    { month: 7, name: 'يوليو', start: '2026-07-01', end: '2026-07-31', period: 3 },
+    { month: 8, name: 'أغسطس', start: '2026-08-01', end: '2026-08-31', period: 3 },
+    { month: 9, name: 'سبتمبر', start: '2026-09-01', end: '2026-09-30', period: 3 },
+    { month: 10, name: 'أكتوبر', start: '2026-10-01', end: '2026-10-31', period: 4 },
+    { month: 11, name: 'نوفمبر', start: '2026-11-01', end: '2026-11-30', period: 4 },
+    { month: 12, name: 'ديسمبر', start: '2026-12-01', end: '2026-12-31', period: 4 },
+  ].map((item) => ({
+    id: uid(500 + item.month),
+    fiscal_year_id: uid(401),
+    month_number: item.month,
+    name: item.name,
+    start_date: item.start,
+    end_date: item.end,
+    current_period: item.period,
+    is_closed: false,
+  })),
   warehouses: [
-    { id: uid(101), name: 'مخزن المواد الخام', code: 'WH-001' },
-    { id: uid(102), name: 'مخزن التشغيل الرئيسي', code: 'WH-002' },
-    { id: uid(103), name: 'مخزن قطع الغيار', code: 'WH-003' },
+    {
+      id: uid(101),
+      name: 'مخزن المواد الخام',
+      code: 'WH-001',
+      station_name: 'محطة غرب القاهرة',
+      station_code: 'ST-01',
+    },
+    {
+      id: uid(102),
+      name: 'مخزن التشغيل الرئيسي',
+      code: 'WH-002',
+      station_name: 'محطة شرق القاهرة',
+      station_code: 'ST-02',
+    },
+    {
+      id: uid(103),
+      name: 'مخزن قطع الغيار',
+      code: 'WH-003',
+      station_name: 'محطة غرب القاهرة',
+      station_code: 'ST-01',
+    },
   ],
   classifications: [
     { id: uid(201), name: 'حديد وصلب', code: 'CL-001' },
@@ -137,6 +178,10 @@ const entryOptions = {
     { id: uid(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
   ],
   sister_companies: [{ id: uid(601), name: 'الشركة الشقيقة — فرع القاهرة', code: 'SIS-002' }],
+  issuers: [
+    { id: uid(701), code: 'YM', name: 'ياسر' },
+    { id: uid(702), code: 'AA', name: 'أحمد عبد الله' },
+  ],
 };
 
 interface PreviewLetter {
@@ -152,6 +197,8 @@ interface PreviewLetter {
   destination_total: string;
   cancel_reason: string | null;
   settlement_reason: string | null;
+  issuer_code: string | null;
+  issuer_sequence: string | null;
   fiscal_year_id: string;
   party_id: string | null;
   sister_company_id: string | null;
@@ -170,6 +217,8 @@ const letters: PreviewLetter[] = sampleLetters.map((item) => ({
         : null,
   sister_company_id: item.letter_type === 'external_transfer' ? uid(601) : null,
   reclassification_reason: null,
+  issuer_code: 'YM',
+  issuer_sequence: item.letter_number,
   created_by: uid(1),
   updated_at: '2026-10-30T12:00:00.000Z',
 }));
@@ -185,9 +234,9 @@ function line(
   classification: number,
 ) {
   const warehouses = [
-    { id: uid(101), name: 'مخزن المواد الخام' },
-    { id: uid(102), name: 'مخزن التشغيل الرئيسي' },
-    { id: uid(103), name: 'مخزن قطع الغيار' },
+    { id: uid(101), name: 'مخزن المواد الخام', station: 'محطة غرب القاهرة' },
+    { id: uid(102), name: 'مخزن التشغيل الرئيسي', station: 'محطة شرق القاهرة' },
+    { id: uid(103), name: 'مخزن قطع الغيار', station: 'محطة غرب القاهرة' },
   ];
   const classifications = [
     { id: uid(201), name: 'حديد وصلب' },
@@ -204,6 +253,7 @@ function line(
     warehouse_id: store.id,
     classification_id: classificationRow.id,
     warehouse_name: store.name,
+    station_name: store.station,
     classification_name: classificationRow.name,
     amount,
   };
@@ -228,6 +278,7 @@ interface PreviewLine {
   warehouse_id: string;
   classification_id: string;
   warehouse_name: string;
+  station_name: string;
   classification_name: string;
   amount: string;
   paired_line_id: string | null;
@@ -258,6 +309,8 @@ interface MockEntrySave {
   p_direction: Direction | null;
   p_reclassification_reason: string | null;
   p_lines: MockEntryLine[];
+  p_issuer_code: string | null;
+  p_issuer_sequence: string | null;
 }
 let versionNumber = 0;
 function nextVersion() {
@@ -280,6 +333,9 @@ function saveMockDraft(input: MockEntrySave): Response {
     (!current || current.updated_at !== input.p_expected_updated_at)
   )
     return response({ code: 'P0001', message: 'aps_entry_stale_draft' }, 400);
+  const issuerCode = input.p_issuer_code?.toUpperCase() ?? null;
+  if (issuerCode !== null && !entryOptions.issuers.some((item) => item.code === issuerCode))
+    return response({ code: '22023', message: 'Preview unknown issuer' }, 400);
   if (
     letters.some(
       (item) =>
@@ -312,6 +368,7 @@ function saveMockDraft(input: MockEntrySave): Response {
       warehouse_id: store.id,
       classification_id: classification.id,
       warehouse_name: store.name,
+      station_name: store.station_name,
       classification_name: classification.name,
       amount,
       paired_line_id: pair,
@@ -371,6 +428,8 @@ function saveMockDraft(input: MockEntrySave): Response {
     party_id: input.p_party_id,
     sister_company_id: input.p_sister_company_id,
     reclassification_reason: input.p_reclassification_reason,
+    issuer_code: issuerCode,
+    issuer_sequence: input.p_issuer_sequence,
     created_by: uid(1),
     updated_at: updatedAt,
   };

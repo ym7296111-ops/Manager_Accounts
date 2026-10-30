@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 56);
+    assert.equal(migrations.length, 57);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2000,6 +2000,7 @@ try {
     assert.ok(migrations.includes('20261114000000_aps_reconciliation.sql'));
     assert.ok(migrations.includes('20261115000000_aps_letter_line_name_snapshots.sql'));
     assert.ok(migrations.includes('20261116000000_aps_letter_entry.sql'));
+    assert.ok(migrations.includes('20261117000000_aps_issuers.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2801,12 +2802,25 @@ try {
   const seedApsLetters = async () => {
     const stationId = randomUUID();
     const warehouseId = randomUUID();
+    // Two Latin letters, unique per run so a fixture never reuses the seeded
+    // `YM` code (the uniqueness rule is case-insensitive).
+    const issuerName = `APS audit issuer ${randomUUID()}`;
+    let issuerCode = '';
+    for (let attempt = 0; attempt < 20 && issuerCode === ''; attempt += 1) {
+      const candidate = Array.from(randomBytes(2))
+        .map((byte) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[byte % 26])
+        .join('');
+      const inserted = await db.query(
+        'insert into public.issuers(code,name) values ($1,$2) on conflict do nothing returning code',
+        [candidate, issuerName],
+      );
+      issuerCode = inserted.rows[0]?.code ?? '';
+    }
+    assert.notEqual(issuerCode, '', 'could not allocate a free issuer code');
     const leafA = randomUUID();
     const leafB = randomUUID();
-    await db.query('insert into public.stations(id,name) values ($1,$2)', [
-      stationId,
-      `APS audit station ${randomUUID()}`,
-    ]);
+    const stationName = `APS audit station ${randomUUID()}`;
+    await db.query('insert into public.stations(id,name) values ($1,$2)', [stationId, stationName]);
     await db.query('insert into public.warehouses(id,station_id,name) values ($1,$2,$3)', [
       warehouseId,
       stationId,
@@ -2856,7 +2870,10 @@ try {
     ).rows[0];
     return {
       stationId,
+      stationName,
       warehouseId,
+      issuerCode,
+      issuerName,
       leafA,
       leafB,
       party,
@@ -2954,12 +2971,13 @@ try {
         [fixture.party.id, fixture.partyOut.id],
       ]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+      await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
     }
   };
   const saveApsEntry = (actor, entry) =>
     asRole('authenticated', actor, (c) =>
       c.query(
-        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) as result`,
+        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13) as result`,
         [
           entry.id,
           entry.version ?? null,
@@ -2972,6 +2990,8 @@ try {
           entry.direction ?? null,
           entry.reason ?? null,
           JSON.stringify(entry.lines),
+          entry.issuerCode ?? null,
+          entry.issuerSequence ?? null,
         ],
       ),
     );
@@ -2991,7 +3011,9 @@ try {
       ).rows[0].options;
       assert.deepEqual(Object.keys(options).sort(), [
         'classifications',
+        'fiscal_months',
         'fiscal_years',
+        'issuers',
         'parties',
         'sister_companies',
         'warehouses',
@@ -3008,13 +3030,46 @@ try {
       );
       assert.ok(options.sister_companies.some((item) => item.id === fixture.sister.id));
       assert.ok(options.fiscal_years.some((item) => item.id === fixture.firstYear.id));
-      assert.deepEqual(
-        Object.keys(options.warehouses.find((item) => item.id === fixture.warehouseId)).sort(),
-        ['code', 'id', 'name'],
+      const warehouseChoice = options.warehouses.find((item) => item.id === fixture.warehouseId);
+      assert.deepEqual(Object.keys(warehouseChoice).sort(), [
+        'code',
+        'id',
+        'name',
+        'station_code',
+        'station_name',
+      ]);
+      assert.equal(warehouseChoice.station_name, fixture.stationName);
+      assert.ok(options.issuers.some((item) => item.code === fixture.issuerCode));
+      assert.deepEqual(Object.keys(options.issuers[0]).sort(), ['code', 'id', 'name']);
+      assert.ok(
+        options.fiscal_months.some(
+          (item) => item.fiscal_year_id === fixture.firstYear.id && item.month_number === 7,
+        ),
       );
+      assert.deepEqual(Object.keys(options.fiscal_months[0]).sort(), [
+        'current_period',
+        'end_date',
+        'fiscal_year_id',
+        'id',
+        'is_closed',
+        'month_number',
+        'name',
+        'start_date',
+      ]);
       assert.deepEqual(
         Object.keys(options.parties.find((item) => item.id === fixture.party.id)).sort(),
         ['branch', 'code', 'id', 'name'],
+      );
+      // The creator reads the issuer list through RLS (it is the dropdown on
+      // the entry screen) but still has no directory grant on warehouses,
+      // classifications, parties, sister companies or fiscal years.
+      assert.equal(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query('select code from public.issuers where code=$1', [fixture.issuerCode]),
+          )
+        ).rowCount,
+        1,
       );
       for (const [table, id] of [
         ['warehouses', fixture.warehouseId],
@@ -3034,7 +3089,7 @@ try {
       }
       const functionFlags = (
         await db.query(
-          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,date,uuid,uuid,text,text,jsonb)'::regprocedure) order by proname`,
+          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,date,uuid,uuid,text,text,jsonb,text,text)'::regprocedure) order by proname`,
         )
       ).rows;
       assert.deepEqual(functionFlags, [
@@ -3155,6 +3210,177 @@ try {
         'approved',
       );
       await expectCode('42501', () => saveApsEntry(E, { ...entry, version: updated.updated_at }));
+    });
+  });
+
+  await test('APS issuers: creators read the list, settings managers maintain it', async () => {
+    await withApsEntryFixture(async (fixture) => {
+      await expectCode('42501', () =>
+        asRole('anon', null, (c) => c.query('select code from public.issuers')),
+      );
+      // A reader without any APS capability sees nothing at the table either.
+      assert.equal(
+        (await asRole('authenticated', V, (c) => c.query('select code from public.issuers')))
+          .rowCount,
+        0,
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', A, (c) =>
+            c.query("select code from public.issuers where code in ('YM',$1) order by code", [
+              fixture.issuerCode,
+            ]),
+          )
+        ).rowCount,
+        2,
+      );
+
+      // Creating or editing a code is project settings, never letter creation.
+      await expectCode('42501', () =>
+        asRole('authenticated', E, (c) =>
+          c.query('insert into public.issuers(code,name) values ($1,$2)', ['ZZ', 'غير مصرح']),
+        ),
+      );
+      // RLS does not raise on an UPDATE that matches no permitted row: it
+      // simply changes nothing, which is asserted here by the row count.
+      assert.equal(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query("update public.issuers set name='x' where code=$1", [fixture.issuerCode]),
+          )
+        ).rowCount,
+        0,
+      );
+      // Two Latin letters exactly, and the uniqueness rule ignores case.
+      await expectCode('23514', () =>
+        asRole('authenticated', A, (c) =>
+          c.query('insert into public.issuers(code,name) values ($1,$2)', ['Y1', 'رمز خاطئ']),
+        ),
+      );
+      await expectCode('23505', () =>
+        asRole('authenticated', A, (c) =>
+          c.query('insert into public.issuers(code,name) values ($1,$2)', ['ym', 'مكرر']),
+        ),
+      );
+
+      const renamed = `APS audit issuer renamed ${randomUUID()}`;
+      await asRole('authenticated', A, (c) =>
+        c.query('update public.issuers set name=$2 where code=$1', [fixture.issuerCode, renamed]),
+      );
+      assert.equal(
+        (
+          await db.query('select name,is_active from public.issuers where code=$1', [
+            fixture.issuerCode,
+          ])
+        ).rows[0].name,
+        renamed,
+      );
+
+      // `authenticated` is granted select/insert/update only; anon holds no
+      // privilege at all and deletion has to go through deactivation.
+      const privileges = await db.query(
+        `select grantee, privilege_type
+           from information_schema.role_table_grants
+          where table_schema='public' and table_name='issuers'
+            and grantee in ('anon','authenticated')
+          order by grantee, privilege_type`,
+      );
+      assert.deepEqual(privileges.rows, [
+        { grantee: 'authenticated', privilege_type: 'INSERT' },
+        { grantee: 'authenticated', privilege_type: 'SELECT' },
+        { grantee: 'authenticated', privilege_type: 'UPDATE' },
+      ]);
+      assert.equal(
+        (
+          await db.query(
+            "select has_table_privilege('authenticated','public.issuers','DELETE') as allowed",
+          )
+        ).rows[0].allowed,
+        false,
+      );
+      assert.equal(
+        (await db.query("select has_table_privilege('anon','public.issuers','SELECT') as allowed"))
+          .rows[0].allowed,
+        false,
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', A, (c) =>
+          c.query('delete from public.issuers where code=$1', [fixture.issuerCode]),
+        ),
+      );
+
+      const policies = await db.query(
+        `select policyname, cmd from pg_catalog.pg_policies
+          where schemaname='public' and tablename='issuers'
+            and policyname like 'issuers_%'
+          order by policyname`,
+      );
+      assert.deepEqual(policies.rows, [
+        { policyname: 'issuers_letter_readers_select', cmd: 'SELECT' },
+        { policyname: 'issuers_project_settings_insert', cmd: 'INSERT' },
+        { policyname: 'issuers_project_settings_update', cmd: 'UPDATE' },
+      ]);
+      assert.equal(
+        (
+          await db.query(
+            "select relrowsecurity, relforcerowsecurity from pg_class where oid='public.issuers'::regclass",
+          )
+        ).rows[0].relrowsecurity,
+        true,
+      );
+    });
+  });
+
+  await test('APS issuers: the draft stores the code and a settled letter freezes it', async () => {
+    await withApsEntryFixture(async (fixture, ids) => {
+      const id = randomUUID();
+      ids.push(id);
+      const entry = {
+        id,
+        yearId: fixture.firstYear.id,
+        type: 'inbound',
+        number: '311',
+        date: '2040-08-15',
+        partyId: fixture.party.id,
+        issuerCode: fixture.issuerCode.toLowerCase(),
+        issuerSequence: '0042',
+        lines: [
+          { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '10.25' },
+        ],
+      };
+      await expectCode('22023', () => saveApsEntry(E, { ...entry, issuerCode: 'ZZ' }));
+      await expectCode('22023', () =>
+        saveApsEntry(E, { ...entry, issuerSequence: 'x'.repeat(33) }),
+      );
+      const created = (await saveApsEntry(E, entry)).rows[0].result;
+      const header = (
+        await db.query('select issuer_code, issuer_sequence from public.letters where id=$1', [id])
+      ).rows[0];
+      assert.equal(header.issuer_code, fixture.issuerCode);
+      assert.equal(header.issuer_sequence, '0042');
+      // The station travels with the line as a snapshot, like the two names.
+      const line = (
+        await db.query(
+          'select warehouse_name, station_name, classification_name from public.letter_lines where letter_id=$1',
+          [id],
+        )
+      ).rows[0];
+      assert.equal(line.station_name, fixture.stationName);
+
+      await asRole('authenticated', E, (c) =>
+        c.query('select public.aps_approve_letter($1)', [id]),
+      );
+      const frozen = await captureApsError(() =>
+        db.query('update public.letters set issuer_sequence=$2 where id=$1', [id, '9999']),
+      );
+      assert.equal(frozen.code, '23514');
+      assert.match(frozen.message, /issuer of a approved letter is immutable/);
+      assert.equal(
+        (await db.query('select issuer_sequence from public.letters where id=$1', [id])).rows[0]
+          .issuer_sequence,
+        '0042',
+      );
+      assert.ok(created.updated_at);
     });
   });
 
@@ -3529,6 +3755,7 @@ try {
         [fixture.party.id, fixture.partyOut.id],
       ]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+      await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
     }
   });
 
@@ -3646,6 +3873,7 @@ try {
         [fixture.party.id, fixture.partyOut.id],
       ]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+      await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
     }
   });
 
@@ -3700,6 +3928,7 @@ try {
           'updated_at',
           'warehouse_name',
           'classification_name',
+          'station_name',
         ],
       );
 
@@ -3858,8 +4087,10 @@ try {
         [
           'letter_lines_aps_before_write',
           'letter_lines_aps_recalc_totals',
+          'letter_lines_aps_station_snapshot',
           'letter_lines_set_updated_at',
           'letters_aps_before_write',
+          'letters_aps_issuer_freeze',
           'letters_set_updated_at',
         ],
       );
@@ -3881,6 +4112,7 @@ try {
         [fixture.party.id, fixture.partyOut.id],
       ]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+      await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
     }
   });
 
@@ -4207,6 +4439,7 @@ try {
       await db.query('delete from public.stations where id=$1', [fixture.stationId]);
       await db.query('delete from public.parties where id=$1', [fixture.party.id]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+      await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
     }
   });
 

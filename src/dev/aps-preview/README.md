@@ -16,4 +16,7 @@ normal app build.
 After installing the Playwright Chromium browser, `npm run test:e2e:aps-preview`
 starts this harness and runs browser checks without Supabase or authentication
 state. These synthetic tests do not replace the real Supabase E2E suite.
-Screenshots for review are in `docs/reviews/aps-letters-snapshot/`.
+Screenshots for review are in `docs/reviews/aps-letters-snapshot/` (browse and
+detail) and `docs/reviews/aps-issuers/` (entry screen: type button group,
+coloured header, running-period bar, issuer list and `warehouse - station`
+labels).
