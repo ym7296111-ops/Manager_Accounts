@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 55);
+    assert.equal(migrations.length, 56);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1999,6 +1999,7 @@ try {
     assert.ok(migrations.includes('20261113000000_aps_letters.sql'));
     assert.ok(migrations.includes('20261114000000_aps_reconciliation.sql'));
     assert.ok(migrations.includes('20261115000000_aps_letter_line_name_snapshots.sql'));
+    assert.ok(migrations.includes('20261116000000_aps_letter_entry.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2919,6 +2920,364 @@ try {
     }
     throw new Error('expected the call to fail');
   };
+
+  const withApsEntryFixture = async (fn) => {
+    const fixture = await seedApsLetters();
+    const roleId = randomUUID();
+    const letterIds = [];
+    try {
+      await db.query('insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$3,$4)', [
+        roleId,
+        `audit_entry_${roleId}`,
+        'إدخال خطابات',
+        'Letter entry',
+      ]);
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.letters:create'",
+        [roleId],
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [E, roleId]);
+      await fn(fixture, letterIds);
+    } finally {
+      await db.query('delete from public.user_roles where role_id=$1', [roleId]);
+      await db.query('delete from public.roles where id=$1', [roleId]);
+      await db.query('delete from public.letters where id=any($1::uuid[])', [letterIds]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [
+        [fixture.firstYear.id, fixture.secondYear.id],
+      ]);
+      await db.query('delete from public.classifications where id=any($1::uuid[])', [
+        [fixture.leafA, fixture.leafB],
+      ]);
+      await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
+      await db.query('delete from public.stations where id=$1', [fixture.stationId]);
+      await db.query('delete from public.parties where id=any($1::uuid[])', [
+        [fixture.party.id, fixture.partyOut.id],
+      ]);
+      await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
+    }
+  };
+  const saveApsEntry = (actor, entry) =>
+    asRole('authenticated', actor, (c) =>
+      c.query(
+        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) as result`,
+        [
+          entry.id,
+          entry.version ?? null,
+          entry.yearId,
+          entry.type,
+          entry.number,
+          entry.date,
+          entry.partyId ?? null,
+          entry.sisterId ?? null,
+          entry.direction ?? null,
+          entry.reason ?? null,
+          JSON.stringify(entry.lines),
+        ],
+      ),
+    );
+
+  await test('APS entry: limited choices are creator-only without directory grants or RLS changes', async () => {
+    await withApsEntryFixture(async (fixture) => {
+      await expectCode('42501', () =>
+        asRole('anon', null, (c) => c.query('select public.aps_letter_entry_options()')),
+      );
+      await expectCode('42501', () =>
+        asRole('authenticated', V, (c) => c.query('select public.aps_letter_entry_options()')),
+      );
+      const options = (
+        await asRole('authenticated', E, (c) =>
+          c.query('select public.aps_letter_entry_options() as options'),
+        )
+      ).rows[0].options;
+      assert.deepEqual(Object.keys(options).sort(), [
+        'classifications',
+        'fiscal_years',
+        'parties',
+        'sister_companies',
+        'warehouses',
+      ]);
+      assert.ok(options.warehouses.some((item) => item.id === fixture.warehouseId));
+      assert.ok(options.classifications.some((item) => item.id === fixture.leafA));
+      assert.ok(
+        options.parties.some((item) => item.id === fixture.party.id && item.branch === 'inbound'),
+      );
+      assert.ok(
+        options.parties.some(
+          (item) => item.id === fixture.partyOut.id && item.branch === 'outbound',
+        ),
+      );
+      assert.ok(options.sister_companies.some((item) => item.id === fixture.sister.id));
+      assert.ok(options.fiscal_years.some((item) => item.id === fixture.firstYear.id));
+      assert.deepEqual(
+        Object.keys(options.warehouses.find((item) => item.id === fixture.warehouseId)).sort(),
+        ['code', 'id', 'name'],
+      );
+      assert.deepEqual(
+        Object.keys(options.parties.find((item) => item.id === fixture.party.id)).sort(),
+        ['branch', 'code', 'id', 'name'],
+      );
+      for (const [table, id] of [
+        ['warehouses', fixture.warehouseId],
+        ['classifications', fixture.leafA],
+        ['parties', fixture.party.id],
+        ['sister_companies', fixture.sister.id],
+        ['fiscal_years', fixture.firstYear.id],
+      ]) {
+        assert.equal(
+          (
+            await asRole('authenticated', E, (c) =>
+              c.query(`select id from public.${table} where id=$1`, [id]),
+            )
+          ).rowCount,
+          0,
+        );
+      }
+      const functionFlags = (
+        await db.query(
+          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,date,uuid,uuid,text,text,jsonb)'::regprocedure) order by proname`,
+        )
+      ).rows;
+      assert.deepEqual(functionFlags, [
+        {
+          proname: 'aps_letter_entry_options',
+          prosecdef: true,
+          proconfig: ['search_path=pg_catalog, public'],
+        },
+        {
+          proname: 'aps_save_letter_draft',
+          prosecdef: false,
+          proconfig: ['search_path=pg_catalog, public'],
+        },
+      ]);
+    });
+  });
+
+  await test('APS entry: saves are atomic, owned, conflict-safe and use existing approval', async () => {
+    await withApsEntryFixture(async (fixture, ids) => {
+      const id = randomUUID();
+      ids.push(id);
+      const entry = {
+        id,
+        yearId: fixture.firstYear.id,
+        type: 'inbound',
+        number: '007',
+        date: '2040-08-15',
+        partyId: fixture.party.id,
+        lines: [
+          { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '10.25' },
+        ],
+      };
+      await expectCode('42501', () => saveApsEntry(V, entry));
+      const created = (await saveApsEntry(E, entry)).rows[0].result;
+      assert.equal(created.id, id);
+      assert.ok(created.updated_at);
+      const lineBefore = (
+        await db.query(
+          'select id,direction,amount::text,warehouse_name,classification_name from public.letter_lines where letter_id=$1',
+          [id],
+        )
+      ).rows;
+      assert.equal(lineBefore.length, 1);
+      assert.equal(lineBefore[0].direction, 'in');
+      assert.equal(lineBefore[0].amount, '10.25');
+      assert.equal(
+        (
+          await db.query(
+            'select letter_number,destination_total::text,created_by from public.letters where id=$1',
+            [id],
+          )
+        ).rows[0].letter_number,
+        '7',
+      );
+      const repeat = await captureApsError(() => saveApsEntry(E, entry));
+      assert.equal(repeat.code, 'P0001');
+      assert.match(repeat.message, /aps_entry_id_exists/);
+      assert.equal(
+        (
+          await db.query('select count(*)::int as n from public.letter_lines where letter_id=$1', [
+            id,
+          ])
+        ).rows[0].n,
+        1,
+      );
+      const duplicateId = randomUUID();
+      ids.push(duplicateId);
+      await expectCode('23505', () => saveApsEntry(E, { ...entry, id: duplicateId, number: '٧' }));
+      assert.equal(
+        (await db.query('select id from public.letters where id=$1', [duplicateId])).rowCount,
+        0,
+      );
+      const failedEdit = {
+        ...entry,
+        version: created.updated_at,
+        number: '88',
+        lines: [entry.lines[0], { ...entry.lines[0], classification_id: randomUUID() }],
+      };
+      await expectCode('23514', () => saveApsEntry(E, failedEdit));
+      assert.deepEqual(
+        (
+          await db.query(
+            'select id,direction,amount::text,warehouse_name,classification_name from public.letter_lines where letter_id=$1',
+            [id],
+          )
+        ).rows,
+        lineBefore,
+      );
+      assert.equal(
+        (await db.query('select letter_number from public.letters where id=$1', [id])).rows[0]
+          .letter_number,
+        '7',
+      );
+      const updated = (
+        await saveApsEntry(E, {
+          ...entry,
+          version: created.updated_at,
+          lines: [{ ...entry.lines[0], amount: '14.50' }],
+        })
+      ).rows[0].result;
+      assert.notEqual(updated.updated_at, created.updated_at);
+      const stale = await captureApsError(() =>
+        saveApsEntry(E, { ...entry, version: created.updated_at }),
+      );
+      assert.equal(stale.code, 'P0001');
+      assert.match(stale.message, /aps_entry_stale_draft/);
+      assert.equal(
+        (await db.query('select destination_total::text from public.letters where id=$1', [id]))
+          .rows[0].destination_total,
+        '14.50',
+      );
+      await expectCode('42501', () => saveApsEntry(A, { ...entry, version: updated.updated_at }));
+      await asRole('authenticated', E, (c) =>
+        c.query('select public.aps_approve_letter($1)', [id]),
+      );
+      assert.equal(
+        (await db.query('select status from public.letters where id=$1', [id])).rows[0].status,
+        'approved',
+      );
+      await expectCode('42501', () => saveApsEntry(E, { ...entry, version: updated.updated_at }));
+    });
+  });
+
+  await test('APS entry: all letter types, paired transfers and reclassification reasons', async () => {
+    await withApsEntryFixture(async (fixture, ids) => {
+      const pair = {
+        source_warehouse_id: fixture.warehouseId,
+        source_classification_id: fixture.leafA,
+        destination_warehouse_id: fixture.warehouseId,
+        destination_classification_id: fixture.leafB,
+        amount: '33.25',
+      };
+      const id = randomUUID();
+      ids.push(id);
+      const transfer = {
+        id,
+        yearId: fixture.firstYear.id,
+        type: 'internal_transfer',
+        number: '90',
+        date: '2040-08-15',
+        lines: [pair],
+      };
+      await expectCode('22023', () => saveApsEntry(E, transfer));
+      assert.equal((await db.query('select id from public.letters where id=$1', [id])).rowCount, 0);
+      const saved = (await saveApsEntry(E, { ...transfer, reason: 'إعادة تصنيف' })).rows[0].result;
+      const lines = (
+        await db.query(
+          'select id,direction,amount::text,paired_line_id from public.letter_lines where letter_id=$1 order by line_number',
+          [id],
+        )
+      ).rows;
+      assert.equal(lines.length, 2);
+      assert.equal(lines[0].direction, 'out');
+      assert.equal(lines[1].direction, 'in');
+      assert.equal(lines[1].paired_line_id, lines[0].id);
+      assert.equal(lines[0].amount, '33.25');
+      assert.equal(lines[1].amount, '33.25');
+      const header = (
+        await db.query(
+          'select has_reclassification,reclassification_reason,source_total::text,destination_total::text from public.letters where id=$1',
+          [id],
+        )
+      ).rows[0];
+      assert.deepEqual(header, {
+        has_reclassification: true,
+        reclassification_reason: 'إعادة تصنيف',
+        source_total: '33.25',
+        destination_total: '33.25',
+      });
+      // Editing a pair removes the incoming reference first, then replaces both sides.
+      await saveApsEntry(E, {
+        ...transfer,
+        version: saved.updated_at,
+        reason: 'إعادة تصنيف',
+        lines: [{ ...pair, amount: '34.50' }],
+      });
+      await asRole('authenticated', E, (c) =>
+        c.query('select public.aps_approve_letter($1)', [id]),
+      );
+      for (const [type, number, partyId, sisterId, direction] of [
+        ['outbound', '91', fixture.partyOut.id, null, 'out'],
+        ['external_transfer', '92', null, fixture.sister.id, 'in'],
+        ['external_transfer', '93', null, fixture.sister.id, 'out'],
+      ]) {
+        const next = randomUUID();
+        ids.push(next);
+        await saveApsEntry(E, {
+          id: next,
+          yearId: fixture.firstYear.id,
+          type,
+          number,
+          date: '2040-08-15',
+          partyId,
+          sisterId,
+          direction,
+          lines: [
+            { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '1.00' },
+          ],
+        });
+        assert.equal(
+          (await db.query('select direction from public.letter_lines where letter_id=$1', [next]))
+            .rows[0].direction,
+          direction,
+        );
+        await asRole('authenticated', E, (c) =>
+          c.query('select public.aps_approve_letter($1)', [next]),
+        );
+      }
+      const wrongBranch = randomUUID();
+      ids.push(wrongBranch);
+      await expectCode('23514', () =>
+        saveApsEntry(E, {
+          id: wrongBranch,
+          yearId: fixture.firstYear.id,
+          type: 'outbound',
+          number: '94',
+          date: '2040-08-15',
+          partyId: fixture.party.id,
+          lines: [
+            { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '1.00' },
+          ],
+        }),
+      );
+      assert.equal(
+        (await db.query('select id from public.letters where id=$1', [wrongBranch])).rowCount,
+        0,
+      );
+      const invalid = randomUUID();
+      ids.push(invalid);
+      await expectCode('22023', () =>
+        saveApsEntry(E, {
+          ...transfer,
+          id: invalid,
+          reason: 'إعادة تصنيف',
+          lines: [{ ...pair, amount: '-4' }],
+        }),
+      );
+      assert.equal(
+        (await db.query('select id from public.letters where id=$1', [invalid])).rowCount,
+        0,
+      );
+    });
+  });
 
   await test('APS snapshots: columns are required, have no defaults, and the existing guard remains private', async () => {
     const columns = (

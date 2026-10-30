@@ -141,3 +141,93 @@ test('English switches the document direction and keeps details readable', async
   await expect(page.getByText('حديد وصلب')).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
+
+async function fillHeader(page: Page, number: string) {
+  await page.getByLabel('تاريخ الخطاب').fill('2026-03-04');
+  await page.getByLabel('رقم الخطاب').fill(number);
+}
+
+test('entry creates an inbound draft and approves it through the existing transition', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/workspaces/aps/letters/new');
+  await expect(page.getByRole('heading', { name: 'إنشاء خطاب جديد' })).toBeVisible();
+  for (const name of [/وارد/, /منصرف/, /تحويل داخلي/, /تحويل خارجي/]) {
+    await expect(page.getByRole('button', { name })).toBeVisible();
+  }
+  await expect(page.getByRole('button', { name: /تسوية/ })).toHaveCount(0);
+  await fillHeader(page, '9001');
+  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  await page.getByLabel('المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await page.getByLabel('القيمة').fill('120.50');
+  await expect(page.getByText('١٢٠٫٥٠')).toBeVisible();
+  await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
+  await expect(page.getByText(/حُفظت المسودة بنجاح/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'حفظ التعديلات' })).toBeVisible();
+  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
+  await expect(page.getByText('تم اعتماد الخطاب بنجاح.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'إنشاء خطاب آخر' })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  // Opening the detail of the approved letter confirms approval reached the register.
+  await page.getByRole('link', { name: 'العودة إلى سجل الخطابات' }).click();
+  await expect(page.getByRole('link', { name: 'عرض التفاصيل 9001' })).toBeVisible();
+});
+
+test('internal entry pairs source and destination and requires a reclassification reason', async ({
+  page,
+}) => {
+  await page.goto('/workspaces/aps/letters/new?scenario=approval-fails');
+  await page.getByRole('button', { name: /تحويل داخلي/ }).click();
+  await fillHeader(page, '9002');
+  await page.getByLabel('المصدر — المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await page.getByLabel('المصدر — التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await page.getByLabel('الوجهة — المخزن').selectOption({ label: 'مخزن التشغيل الرئيسي — WH-002' });
+  await page.getByLabel('الوجهة — التصنيف').selectOption({ label: 'مستلزمات التشغيل — CL-002' });
+  await page.getByLabel('قيمة الزوج').fill('75');
+  await expect(page.getByLabel(/سبب إعادة التصنيف/)).toBeVisible();
+  await expect(page.getByText('المصدر والوجهة متساويان')).toBeVisible();
+  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
+  await expect(page.getByText(/أدخل سبب إعادة التصنيف/)).toBeVisible();
+  await page.getByLabel(/سبب إعادة التصنيف/).fill('إعادة تصنيف أثناء النقل');
+  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
+  await expect(page.getByText(/حُفظت المسودة، لكن تعذّر اعتمادها/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'عرض المسودة' })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test('entry stays usable at 390px with the paired layout', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/workspaces/aps/letters/new');
+  await expect(page.getByRole('heading', { name: 'إنشاء خطاب جديد' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /وارد/ })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.getByRole('button', { name: /تحويل داخلي/ }).click();
+  await expect(page.getByLabel('المصدر — المخزن')).toBeVisible();
+  await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test('entry options refusal and lost results are reported honestly', async ({ page }) => {
+  await page.goto('/workspaces/aps/letters/new?scenario=forbidden');
+  await expect(page.getByRole('alert')).toContainText('لا تملك صلاحية إنشاء الخطابات');
+  await page.goto('/workspaces/aps/letters/new?scenario=save-unknown');
+  await fillHeader(page, '9003');
+  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  await page.getByLabel('المخزن').selectOption({ label: 'مخزن المواد الخام — WH-001' });
+  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await page.getByLabel('القيمة').fill('10');
+  await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
+  await expect(page.getByRole('alert')).toContainText('قد يكون الحفظ اكتمل');
+  await expect(page.getByRole('link', { name: 'عرض المسودة' })).toBeVisible();
+});
+
+test('English entry screen renders left to right', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('admin-system:locale', 'en'));
+  await page.goto('/workspaces/aps/letters/new');
+  await expect(page.getByRole('heading', { name: 'Create a new letter' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
+  await expect(page.getByRole('button', { name: /Inbound/ })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});

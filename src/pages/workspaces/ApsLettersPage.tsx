@@ -1,11 +1,27 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, FileSearch, Filter, LoaderCircle, RotateCcw, X } from 'lucide-react';
+import {
+  ChevronDown,
+  FilePlus2,
+  FileSearch,
+  Filter,
+  LoaderCircle,
+  RotateCcw,
+  X,
+} from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { NavigationType, useLocation, useNavigationType, useSearchParams } from 'react-router';
+import {
+  Link,
+  NavigationType,
+  useLocation,
+  useNavigationType,
+  useSearchParams,
+} from 'react-router';
 import { useAuth } from '@/context/AuthContext';
+import { useAuthCapabilities } from '@/hooks/useAuthCapabilities';
 import { apsLettersQueryKey, useApsLetters } from '@/hooks/useApsLetters';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
+import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import {
   activeLetterFilterCount,
   EMPTY_LETTER_FILTERS,
@@ -297,6 +313,9 @@ export default function ApsLettersPage() {
   const count = activeLetterFilterCount(filters);
   const queryClient = useQueryClient();
   const query = useApsLetters(filters, cursor, valid);
+  const capabilities = useAuthCapabilities();
+  const canCreate =
+    !capabilities.isAuthoritative || capabilities.hasCapability(APS_LETTER_CREATE_CAPABILITY);
   const [sheetOpen, setSheetOpen] = useState(false);
   const latestSearch = useRef(location.search);
   const pendingSearches = useRef(new Set<string>());
@@ -394,6 +413,15 @@ export default function ApsLettersPage() {
             </span>
           )}
         </button>
+        {canCreate && (
+          <Link
+            to={APS_LETTER_NEW_PATH}
+            className="bg-primary text-primary-foreground focus-visible:ring-ring inline-flex min-h-11 items-center gap-2 rounded-xl px-4 text-sm font-semibold hover:opacity-90 focus-visible:ring-2 focus-visible:outline-none"
+          >
+            <FilePlus2 className="size-4" aria-hidden="true" />
+            {t('aps.entry.tab')}
+          </Link>
+        )}
       </div>
 
       <div className="border-border bg-card hidden min-w-0 rounded-2xl border p-4 @2xl:block">
