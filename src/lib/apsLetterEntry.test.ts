@@ -4,12 +4,14 @@ import {
   entryTotal,
   fiscalYearLabel,
   isLetterCode,
+  joinLetterCode,
   letterCodeIncomplete,
   newEntryForm,
   normalizeEntryAmount,
   normalizeLetterCode,
   runningEntryPeriod,
   searchWarehouses,
+  splitLetterCode,
   validateEntry,
   warehouseLabel,
   type EntryForm,
@@ -224,6 +226,21 @@ describe('APS letter entry validation', () => {
     expect(isLetterCode('ym:63')).toBe(false);
     expect(letterCodeIncomplete('')).toBe(false);
     expect(letterCodeIncomplete('YM')).toBe(true);
+  });
+
+  it('composes the two entry controls into the one stored column', () => {
+    // The dropdown holds the code, the field holds the digits, and the colon is
+    // printed between them — `issuer_reference` is still one column.
+    expect(joinLetterCode('YM', '63')).toBe('YM:63');
+    expect(joinLetterCode('YM', '')).toBe('YM');
+    expect(joinLetterCode('', '63')).toBe('');
+    expect(splitLetterCode('YM:63')).toEqual({ code: 'YM', number: '63' });
+    expect(splitLetterCode('YM:0063')).toEqual({ code: 'YM', number: '0063' });
+    expect(splitLetterCode('YM')).toEqual({ code: 'YM', number: '' });
+    expect(splitLetterCode('')).toEqual({ code: '', number: '' });
+    // Anything the field is fed is folded to the stored shape first.
+    expect(splitLetterCode('ym٦٣')).toEqual({ code: 'YM', number: '63' });
+    expect(splitLetterCode('يم')).toEqual({ code: '', number: '' });
   });
 
   it('accepts a registered issuer prefix and rejects anything else', () => {

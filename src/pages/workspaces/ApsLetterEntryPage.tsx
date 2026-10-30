@@ -34,11 +34,11 @@ import {
   entryHasReclassification,
   entryTotal,
   fiscalYearLabel,
-  letterCodeIncomplete,
+  joinLetterCode,
   newEntryForm,
   newEntryLine,
-  normalizeLetterCode,
   runningEntryPeriod,
+  splitLetterCode,
   validateEntry,
   warehouseLabel,
   type EntryForm,
@@ -50,11 +50,20 @@ import {
   type EntryWarehouse,
 } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, formatLetterAmount } from '@/lib/apsLetters';
+import { issuerLabel } from '@/lib/issuers';
 
 const CONTROL =
   'border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 w-full min-w-0 rounded-xl border px-3 text-sm outline-none focus:ring-2 disabled:opacity-60';
 const CARD =
   'border-border bg-card min-w-0 rounded-2xl border p-4 shadow-[0_2px_12px_rgb(15_23_42/0.035)] sm:p-5';
+
+/* The letter code is `[ YM ▼ ] : [ 63 ]`: two controls with the colon printed
+   between them, so the separator is never typed and never wrong. Both are
+   `dir="ltr"` — a code reordered by the RTL paragraph would read differently. */
+const CODE_SELECT =
+  'border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 min-w-0 flex-1 basis-0 rounded-xl border px-2 text-sm font-semibold outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60';
+const CODE_NUMBER =
+  'border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 w-20 shrink-0 rounded-xl border px-2 text-center text-sm font-semibold tracking-wide tabular-nums outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60 sm:w-28';
 /**
  * One colour per letter type, used by the header band and by the type button
  * group. The header is the first thing the eye lands on, so the type is stated
@@ -330,12 +339,17 @@ function EntryEditor({
   const activeYear = year ?? running?.year ?? null;
   const letterCodeId = 'aps-letter-code';
   const letterCodeHelpId = 'aps-letter-code-help';
-  const letterCodeShapeBad = letterCodeIncomplete(form.letterCode);
-  const letterCodeIssuerBad =
-    !letterCodeShapeBad &&
-    form.letterCode !== '' &&
-    !options.issuers.some((item) => item.code === form.letterCode.slice(0, 2));
-  const letterCodeProblem = letterCodeShapeBad || letterCodeIssuerBad;
+  /* One stored column (`issuer_reference`, e.g. `YM:63`) answered by two
+     controls: the dropdown of registered issuers and the digits. The colon is
+     never typed — `joinLetterCode` writes it. */
+  const letterCode = splitLetterCode(form.letterCode);
+  const issuerKnown = options.issuers.some((item) => item.code === letterCode.code);
+  /* A draft can hold a code that was deactivated afterwards: the value is kept
+     (and shown as inactive) rather than silently dropped, and the save refuses
+     it with the issuer explanation. */
+  const letterCodeProblem = letterCode.code !== '' && !issuerKnown;
+  const letterCodeNumberMissing = letterCode.code !== '' && letterCode.number === '';
+  const noActiveIssuers = options.issuers.length === 0;
   const activeType = TYPES.find((item) => item.value === form.type) ?? TYPES[0]!;
   /* The shell's sticky header is the only header: it carries the type name, its
      colour and its arrow, and it changes the moment the type changes. */
@@ -579,9 +593,10 @@ function EntryEditor({
               </span>
             )}
           </div>
-          {/* Line 2 — the two numbers that are typed: the EPS number and the
-              manual letter code. No date, no fiscal-year picker, no period
-              field: all three are answered above or by the database. */}
+          {/* Line 2 — the EPS number is typed, and the letter code is answered
+              by a dropdown of the registered issuers plus a digits-only field.
+              No date, no fiscal-year picker, no period field: all three are
+              answered above or by the database. */}
           <div className="mt-4 grid min-w-0 gap-4 @2xl:grid-cols-2">
             <label className={labelClass()}>
               <span>{t('aps.entry.epsNumber')}</span>
@@ -597,37 +612,83 @@ function EntryEditor({
               />
             </label>
             <div className="min-w-0 space-y-2">
-              <label className={labelClass()} htmlFor={letterCodeId}>
-                <span>{t('aps.entry.letterCode')}</span>
-                <input
-                  id={letterCodeId}
-                  className={`${CONTROL} font-semibold tracking-wide ${
+              <span id={letterCodeId} className="text-foreground block text-xs font-semibold">
+                {t('aps.entry.letterCode')}
+              </span>
+              <div
+                role="group"
+                aria-labelledby={letterCodeId}
+                dir="ltr"
+                className="flex min-w-0 items-stretch gap-1.5"
+              >
+                <select
+                  aria-label={t('aps.entry.letterCodeIssuer')}
+                  className={`${CODE_SELECT} ${
                     letterCodeProblem ? 'ring-destructive/60 bg-destructive/5 ring-2' : ''
                   }`}
+                  value={letterCode.code}
+                  disabled={noActiveIssuers}
+                  aria-invalid={letterCodeProblem}
+                  aria-describedby={letterCodeHelpId}
+                  onChange={(event) =>
+                    patch({
+                      letterCode: joinLetterCode(event.target.value, letterCode.number),
+                    })
+                  }
+                >
+                  <option value="">{t('aps.entry.chooseIssuer')}</option>
+                  {options.issuers.map((issuer) => (
+                    <option key={issuer.id} value={issuer.code}>
+                      {issuerLabel(issuer)}
+                    </option>
+                  ))}
+                  {letterCodeProblem ? (
+                    <option value={letterCode.code}>
+                      {`${letterCode.code} ${t('aps.entry.letterCodeInactive')}`}
+                    </option>
+                  ) : null}
+                </select>
+                <span
+                  aria-hidden="true"
+                  className="text-muted-foreground self-center font-mono text-lg font-bold"
+                >
+                  :
+                </span>
+                <input
+                  aria-label={t('aps.entry.letterCodeNumber')}
+                  className={CODE_NUMBER}
                   type="text"
                   dir="ltr"
                   lang="en"
-                  inputMode="text"
-                  autoCapitalize="characters"
+                  inputMode="numeric"
                   autoComplete="off"
-                  spellCheck={false}
-                  maxLength={32}
-                  placeholder={t('aps.entry.letterCodePlaceholder')}
-                  aria-invalid={letterCodeProblem}
+                  maxLength={29}
+                  value={letterCode.number}
+                  disabled={letterCode.code === ''}
                   aria-describedby={letterCodeHelpId}
-                  value={form.letterCode}
                   onChange={(event) =>
-                    patch({ letterCode: normalizeLetterCode(event.target.value) })
+                    patch({
+                      letterCode: joinLetterCode(
+                        letterCode.code,
+                        event.target.value.replace(/[^0-9]/g, ''),
+                      ),
+                    })
                   }
                 />
-              </label>
+              </div>
               <p
                 id={letterCodeHelpId}
-                className={`text-xs leading-relaxed ${letterCodeProblem ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}
+                className={`text-xs leading-relaxed ${
+                  letterCodeProblem ? 'text-destructive font-semibold' : 'text-muted-foreground'
+                }`}
               >
-                {letterCodeProblem
-                  ? t('aps.entry.letterCodeInvalid')
-                  : t('aps.entry.letterCodeHint')}
+                {noActiveIssuers
+                  ? t('aps.entry.letterCodeNoIssuers')
+                  : letterCodeProblem
+                    ? t('aps.entry.letterCodeInvalid')
+                    : letterCodeNumberMissing
+                      ? t('aps.entry.letterCodeNumberRequired')
+                      : t('aps.entry.letterCodeHint')}
               </p>
             </div>
           </div>

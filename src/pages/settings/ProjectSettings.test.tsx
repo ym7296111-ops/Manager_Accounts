@@ -6,6 +6,7 @@ import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
 import type * as ClassificationsModule from '@/hooks/useClassifications';
 import type * as FiscalSettingsModule from '@/hooks/useFiscalSettings';
 import type * as PartiesModule from '@/hooks/useParties';
+import type * as IssuersModule from '@/hooks/useIssuers';
 import type * as SisterCompaniesModule from '@/hooks/useSisterCompanies';
 import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
@@ -55,6 +56,26 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
     }),
     useCreateFiscalYear: () => ({ isPending: false, mutateAsync: vi.fn() }),
     useActivateFiscalYear: () => ({ isPending: false, mutateAsync: vi.fn() }),
+  };
+});
+
+/* The issuer register reads on mount; stub it so this test asserts the shell's
+   wiring. `IssuersSettings.test.tsx` covers the panel itself. */
+vi.mock('@/hooks/useIssuers', async (importOriginal) => {
+  const actual = await importOriginal<typeof IssuersModule>();
+  return {
+    ...actual,
+    useIssuers: () => ({
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: [
+        { id: 'i1', code: 'YM', name: 'ياسر', isActive: true },
+        { id: 'i2', code: 'AA', name: 'أحمد عبد الله', isActive: false },
+      ],
+      error: null,
+      refetch: vi.fn(),
+    }),
   };
 });
 
@@ -205,7 +226,7 @@ describe('ProjectSettings', () => {
     window.localStorage.clear();
   });
 
-  it('renders the project settings shell with five tabs in the specified order', () => {
+  it('renders the project settings shell with six tabs in the specified order', () => {
     renderScreen();
 
     expect(screen.getByRole('heading', { name: 'ضبط المشروع' })).toBeTruthy();
@@ -220,13 +241,15 @@ describe('ProjectSettings', () => {
     expect(tablist).toBeTruthy();
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(5);
+    expect(tabs).toHaveLength(6);
     expect(tabs[0]?.textContent).toBe('المحطات والمخازن');
     expect(tabs[1]?.textContent).toBe('التصنيفات');
     expect(tabs[2]?.textContent).toBe('جهات الوارد وأغراض الصرف');
     /* Sister companies is a top-level tab of its own, ahead of General. */
     expect(tabs[3]?.textContent).toBe('الشركات الشقيقة');
     expect(tabs[4]?.textContent).toBe('عام');
+    /* The issuer register sits last: it is the list behind the entry screen. */
+    expect(tabs[5]?.textContent).toBe('أكواد المُصدرين');
 
     // First tab is active by default, and it now renders the read-only accordion
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
@@ -263,7 +286,7 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('IN-001')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'إضافة جهة داخل «جهات الوارد»' })).toBeTruthy();
     /* The roots replace the old sub-tab strip entirely. */
-    expect(screen.queryAllByRole('tab')).toHaveLength(5);
+    expect(screen.queryAllByRole('tab')).toHaveLength(6);
     // Only the active panel is mounted, so the classifications tree is gone.
     expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
 
@@ -283,6 +306,14 @@ describe('ProjectSettings', () => {
     expect(screen.getByRole('tab', { name: 'الضبط الدوري' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'أرصدة أول المدة' })).toBeTruthy();
     expect(screen.queryByText('محتوى الإعدادات العامة قيد الإنشاء')).toBeNull();
+
+    // The issuer register is a flat table with no sub-tabs of its own.
+    fireEvent.click(tabs[5]!);
+    expect(tabs[5]?.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('heading', { name: 'أكواد المُصدرين' })).toBeTruthy();
+    expect(screen.getByRole('rowheader', { name: 'YM' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'إضافة كود جديد' })).toBeTruthy();
+    expect(screen.queryByRole('tablist', { name: 'الضبط المالي' })).toBeNull();
 
     fireEvent.click(tabs[0]!);
     expect(screen.getByText('المحطة الرئيسية')).toBeTruthy();

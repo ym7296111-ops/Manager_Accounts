@@ -187,11 +187,51 @@ const entryOptions = {
     { id: uid(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
   ],
   sister_companies: [{ id: uid(601), name: 'الشركة الشقيقة — فرع القاهرة', code: 'SIS-002' }],
-  issuers: [
-    { id: uid(701), code: 'YM', name: 'ياسر' },
-    { id: uid(702), code: 'AA', name: 'أحمد عبد الله' },
-  ],
 };
+
+/**
+ * The issuer register, shared by the entry dropdown and the settings tab: the
+ * review can add a code in one screen and watch it arrive in the other, exactly
+ * as `aps_letter_entry_options` filters `public.issuers` on `is_active`.
+ */
+interface PreviewIssuer {
+  id: string;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+const issuers: PreviewIssuer[] = [
+  {
+    id: uid(701),
+    code: 'YM',
+    name: 'ياسر',
+    is_active: true,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: uid(702),
+    code: 'AA',
+    name: 'أحمد عبد الله',
+    is_active: true,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  },
+];
+
+/** `where issuer.is_active` in `aps_letter_entry_options()`. */
+function activeIssuers() {
+  return (
+    issuers
+      .filter((row) => row.is_active)
+      /* `order by issuer.code` in `aps_letter_entry_options()`. */
+      .sort((a, b) => a.code.localeCompare(b.code, 'en'))
+      .map((row) => ({ id: row.id, code: row.code, name: row.name }))
+  );
+}
 
 interface PreviewLetter {
   id: string;
@@ -344,7 +384,7 @@ function saveMockDraft(input: MockEntrySave): Response {
   if (issuerReference !== null) {
     if (!/^[A-Z]{2}:[0-9]+$/.test(issuerReference))
       return response({ code: '22023', message: 'Preview invalid letter code' }, 400);
-    if (!entryOptions.issuers.some((item) => item.code === issuerReference.slice(0, 2)))
+    if (!activeIssuers().some((item) => item.code === issuerReference.slice(0, 2)))
       return response({ code: '22023', message: 'Preview unknown issuer' }, 400);
     if (
       letters.some(
@@ -480,7 +520,7 @@ async function previewFetch(input: RequestInfo | URL, init?: RequestInit): Promi
   if (url.pathname.endsWith('/rpc/aps_letter_entry_options')) {
     return scenario === 'forbidden'
       ? response({ code: '42501', message: 'Preview denied' }, 403)
-      : response(entryOptions);
+      : response({ ...entryOptions, issuers: activeIssuers() });
   }
   if (url.pathname.endsWith('/rpc/aps_save_letter_draft')) {
     const payload = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as MockEntrySave;
@@ -509,6 +549,57 @@ async function previewFetch(input: RequestInfo | URL, init?: RequestInit): Promi
     url.pathname.endsWith('/rpc/aps_can_create_letters')
   ) {
     return response(scenario !== 'forbidden');
+  }
+  /* The issuer register is a real table in the review harness too, so the
+     settings tab can add/rename/deactivate a code and the entry dropdown is
+     built from the same rows. Two letters are the identity: an update that
+     carried `code` would be refused by the UI, and is refused here as well. */
+  if (url.pathname.endsWith('/issuers')) {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const body =
+      typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+    const now = new Date().toISOString();
+    if (method === 'POST' || method === 'PATCH') {
+      if (method === 'PATCH' && ('id' in body || 'code' in body)) {
+        return response({ code: '42501', message: 'Preview: code is write-once' }, 403);
+      }
+      if (method === 'POST') {
+        const code = typeof body.code === 'string' ? body.code.trim().toUpperCase() : '';
+        if (!/^[A-Z]{2}$/.test(code))
+          return response({ code: '23514', message: 'issuers_code_format' }, 400);
+        if (issuers.some((row) => row.code === code))
+          return response({ code: '23505', message: 'issuers_code_upper_key' }, 400);
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        const row: PreviewIssuer = {
+          id: uid(700 + issuers.length + 1),
+          code,
+          name: name === '' ? code : name,
+          is_active: body.is_active !== false,
+          created_at: now,
+          updated_at: now,
+        };
+        issuers.push(row);
+        return response(row);
+      }
+      const idFilter = url.searchParams.get('id')?.replace(/^eq\./, '') ?? '';
+      const row = issuers.find((item) => item.id === idFilter);
+      if (!row) return response({ code: 'PGRST116', message: 'Preview: issuer not found' }, 404);
+      if ('name' in body) {
+        const name = typeof body.name === 'string' ? body.name.trim() : '';
+        if (name === '') return response({ code: '23514', message: 'issuers_name_not_blank' }, 400);
+        row.name = name;
+      }
+      if ('is_active' in body) row.is_active = body.is_active === true;
+      row.updated_at = now;
+      return response(row);
+    }
+    if (method === 'DELETE')
+      return response({ code: '42501', message: 'permission denied for table issuers' }, 403);
+    const idFilter = url.searchParams.get('id');
+    const rows = idFilter?.startsWith('eq.')
+      ? issuers.filter((row) => row.id === idFilter.slice(3))
+      : issuers;
+    return response([...rows].sort((a, b) => a.code.localeCompare(b.code, 'en')));
   }
   if (url.pathname.endsWith('/letters')) {
     if (scenario === 'empty') return response([]);

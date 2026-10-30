@@ -3,12 +3,17 @@ import ProjectSettings from '@/pages/settings/ProjectSettings';
 
 /**
  * Mounts the real Project Settings screen and opens General → Annual settings
- * before the first paint. Only the capability guard and Supabase transport are
- * substituted (see `vite.preview.config.ts` and `memorySupabase.ts`).
+ * (or the issuer register with `?tab=issuers`) before the first paint. Only the
+ * capability guard and Supabase transport are substituted (see
+ * `vite.preview.config.ts` and `memorySupabase.ts`).
  */
 export default function PreviewApp() {
   useLayoutEffect(() => {
-    document.getElementById('project-settings-tab-general')?.click();
+    /* `?tab=issuers` opens the issuer register; the general tab stays the
+       default so the existing review screenshots are unchanged. */
+    const requested = new URLSearchParams(window.location.search).get('tab');
+    const tab = requested === 'issuers' ? 'issuers' : 'general';
+    document.getElementById(`project-settings-tab-${tab}`)?.click();
   }, []);
 
   return (
