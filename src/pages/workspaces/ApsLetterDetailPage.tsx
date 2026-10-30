@@ -2,7 +2,11 @@ import { ArrowDownLeft, ArrowLeft, ArrowUpRight, Boxes, Layers3 } from 'lucide-r
 import { Link, useLocation, useParams } from 'react-router';
 import { useApsLetterDetail } from '@/hooks/useApsLetters';
 import { useAuthCapabilities } from '@/hooks/useAuthCapabilities';
-import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
+import {
+  APS_LETTER_CREATE_CAPABILITY,
+  APS_LETTER_NEW_PATH,
+  warehouseLabel,
+} from '@/lib/apsLetterEntry';
 import { useI18n } from '@/i18n/I18nContext';
 import { APS_LETTERS_PATH, isLetterId } from '@/lib/apsLetters';
 import {
@@ -106,6 +110,24 @@ export default function ApsLetterDetailPage() {
             </div>
           </div>
         </div>
+        <div className="border-border mt-4 grid min-w-0 grid-cols-1 gap-4 border-t pt-4 @md:grid-cols-3">
+          <div className="min-w-0">
+            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.epsNumber')}</p>
+            <p className="text-foreground text-sm font-semibold break-all">{letter.number}</p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.issuerCode')}</p>
+            <p className="text-foreground text-sm font-semibold">
+              {letter.issuerCode ?? t('aps.letters.notRecorded')}
+            </p>
+          </div>
+          <div className="min-w-0">
+            <p className="text-muted-foreground mb-2 text-xs">{t('aps.entry.issuerSequence')}</p>
+            <p className="text-foreground text-sm font-semibold" dir="ltr">
+              {letter.issuerSequence ?? t('aps.letters.notRecorded')}
+            </p>
+          </div>
+        </div>
         <div className="bg-muted/55 mt-5 grid min-w-0 grid-cols-2 gap-4 rounded-xl p-4">
           <div className="min-w-0">
             <p className="text-muted-foreground text-xs">{t('aps.letters.inTotal')}</p>
@@ -183,7 +205,10 @@ export default function ApsLetterDetailPage() {
                         {t('aps.letters.warehouse')}
                       </p>
                       <p className="text-foreground text-sm font-semibold break-words">
-                        {line.warehouseName}
+                        {warehouseLabel({
+                          name: line.warehouseName,
+                          stationName: line.stationName,
+                        })}
                       </p>
                     </div>
                   </div>

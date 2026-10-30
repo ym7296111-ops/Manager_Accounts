@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   entryHasReclassification,
+  entryPeriod,
   entryTotal,
   newEntryForm,
   normalizeEntryAmount,
+  searchIssuers,
+  searchWarehouses,
   validateEntry,
+  warehouseLabel,
   type EntryForm,
   type EntryOptions,
 } from '@/lib/apsLetterEntry';
@@ -22,7 +26,27 @@ const options: EntryOptions = {
       supplementsOpen: false,
     },
   ],
-  warehouses: [{ id: id(100), name: 'مخزن', code: 'WH-001' }],
+  months: [
+    {
+      id: id(300),
+      yearId: id(400),
+      monthNumber: 3,
+      name: 'مارس',
+      startDate: '2026-03-01',
+      endDate: '2026-03-31',
+      period: 2,
+      closed: false,
+    },
+  ],
+  warehouses: [
+    {
+      id: id(100),
+      name: 'احتياطي',
+      code: 'WH-001',
+      stationName: 'غرب القاهرة',
+      stationCode: 'ST-01',
+    },
+  ],
   classifications: [
     { id: id(201), name: 'حديد', code: 'CL-001' },
     { id: id(202), name: 'تشغيل', code: 'CL-002' },
@@ -32,6 +56,7 @@ const options: EntryOptions = {
     { id: id(502), name: 'منصرف', code: 'OUT-001', branch: 'outbound' },
   ],
   sisters: [{ id: id(601), name: 'شقيقة', code: 'SIS-001' }],
+  issuers: [{ id: id(701), code: 'YM', name: 'ياسر' }],
 };
 
 function validForm(patch: Partial<EntryForm> = {}): EntryForm {
@@ -150,6 +175,40 @@ describe('APS letter entry validation', () => {
         options,
       ),
     ).toEqual({ code: 'lineReference', line: 1 });
+  });
+
+  it('labels a warehouse with its station and searches both, plus the issuer list', () => {
+    expect(warehouseLabel(options.warehouses[0]!)).toBe('احتياطي - غرب القاهرة');
+    expect(warehouseLabel({ name: 'احتياطي', stationName: null })).toBe('احتياطي');
+    expect(searchWarehouses(options.warehouses, 'غرب').map((item) => item.id)).toEqual([id(100)]);
+    expect(searchWarehouses(options.warehouses, 'WH-001').map((item) => item.id)).toEqual([
+      id(100),
+    ]);
+    expect(searchWarehouses(options.warehouses, 'شرق')).toEqual([]);
+    expect(searchIssuers(options.issuers, 'ياسر').map((item) => item.code)).toEqual(['YM']);
+    expect(searchIssuers(options.issuers, 'ym').map((item) => item.code)).toEqual(['YM']);
+    expect(searchIssuers(options.issuers, 'AA')).toEqual([]);
+  });
+
+  it('reads the running period from the periodic settings instead of guessing it', () => {
+    expect(entryPeriod(validForm(), options)).toMatchObject({
+      month: { name: 'مارس', period: 2 },
+      year: { id: id(400) },
+    });
+    expect(entryPeriod(validForm({ date: '2026-07-01' }), options)).toBeNull();
+    expect(entryPeriod(validForm({ date: '' }), options)).toBeNull();
+    expect(entryPeriod(validForm({ yearId: '' }), options)).toBeNull();
+  });
+
+  it('accepts a listed issuer code and rejects anything else', () => {
+    expect(
+      validateEntry(validForm({ issuerCode: 'YM', issuerSequence: '0042' }), options),
+    ).toBeNull();
+    expect(validateEntry(validForm({ issuerCode: 'yy' }), options)).toEqual({ code: 'issuer' });
+    expect(validateEntry(validForm({ issuerCode: 'ZZ' }), options)).toEqual({ code: 'issuer' });
+    expect(validateEntry(validForm({ issuerSequence: 'x'.repeat(33) }), options)).toEqual({
+      code: 'issuerSequence',
+    });
   });
 
   it('rejects an empty list and a mismatched reference', () => {

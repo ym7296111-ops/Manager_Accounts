@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '@/i18n/I18nContext';
@@ -49,13 +49,37 @@ const options: EntryOptions = {
       supplementsOpen: false,
     },
   ],
-  warehouses: [{ id: id(100), name: 'المخزن الرئيسي', code: 'WH-001' }],
+  months: [
+    {
+      id: id(300),
+      yearId: id(400),
+      monthNumber: 3,
+      name: 'مارس',
+      startDate: '2026-03-01',
+      endDate: '2026-03-31',
+      period: 2,
+      closed: false,
+    },
+  ],
+  warehouses: [
+    {
+      id: id(100),
+      name: 'المخزن الرئيسي',
+      code: 'WH-001',
+      stationName: 'غرب القاهرة',
+      stationCode: 'ST-01',
+    },
+  ],
   classifications: [
     { id: id(201), name: 'حديد', code: 'CL-001' },
     { id: id(202), name: 'تشغيل', code: 'CL-002' },
   ],
   parties: [{ id: id(501), name: 'شركة النيل', code: 'IN-014', branch: 'inbound' }],
   sisters: [{ id: id(601), name: 'الشقيقة', code: 'SIS-001' }],
+  issuers: [
+    { id: id(701), code: 'YM', name: 'ياسر' },
+    { id: id(702), code: 'AA', name: 'أحمد عبد الله' },
+  ],
 };
 
 function mount() {
@@ -76,12 +100,22 @@ function choose(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
 }
 
+/**
+ * The warehouse and the issuer are searchable comboboxes: focus opens the list,
+ * typing filters it, and the option is a button.
+ */
+function pick(label: string, optionName: string) {
+  const input = screen.getByLabelText(label);
+  fireEvent.focus(input);
+  fireEvent.click(screen.getByRole('option', { name: optionName }));
+}
+
 function fillInbound() {
   fireEvent.click(screen.getByRole('button', { name: /^وارد/ }));
   fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
-  fireEvent.change(screen.getByLabelText('رقم الخطاب'), { target: { value: '2458' } });
+  fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
   choose('جهة الوارد', id(501));
-  choose('المخزن', id(100));
+  pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
   choose('التصنيف', id(201));
   fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '١٢٠٫٥٠' } });
 }
@@ -95,11 +129,13 @@ describe('APS letter entry screen', () => {
     window.localStorage.clear();
   });
 
-  it('offers exactly the four ordinary types and saves an exact inbound draft', async () => {
+  it('offers exactly the four ordinary types as one button group and saves an exact inbound draft', async () => {
     mount();
+    const group = screen.getByRole('group', { name: 'اختر نوع الخطاب' });
     for (const name of ['وارد', 'منصرف', 'تحويل داخلي', 'تحويل خارجي']) {
-      expect(screen.getByRole('button', { name: new RegExp(name) })).toBeTruthy();
+      expect(within(group).getByRole('button', { name: new RegExp(name) })).toBeTruthy();
     }
+    expect(within(group).getAllByRole('button')).toHaveLength(4);
     expect(screen.queryByRole('button', { name: /تسوية/ })).toBeNull();
     fillInbound();
     expect(screen.getByText('١٢٠٫٥٠')).toBeTruthy();
@@ -108,6 +144,7 @@ describe('APS letter entry screen', () => {
     const [, version, form] = save.mock.calls[0] as [string, string | null, EntryForm];
     expect(version).toBeNull();
     expect(form).toMatchObject({ type: 'inbound', number: '2458', partyId: id(501) });
+    expect(screen.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeTruthy();
     expect(await screen.findByText(/حُفظت المسودة بنجاح/)).toBeTruthy();
     expect(approve).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'حفظ التعديلات' })).toBeTruthy();
@@ -121,12 +158,12 @@ describe('APS letter entry screen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
     fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
-    fireEvent.change(screen.getByLabelText('رقم الخطاب'), { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '90' } });
     const selects = screen.getAllByRole('combobox');
     expect(selects.length).toBeGreaterThanOrEqual(4);
-    choose('المصدر — المخزن', id(100));
+    pick('المصدر — المخزن', 'المخزن الرئيسي - غرب القاهرة');
     choose('المصدر — التصنيف', id(201));
-    choose('الوجهة — المخزن', id(100));
+    pick('الوجهة — المخزن', 'المخزن الرئيسي - غرب القاهرة');
     choose('الوجهة — التصنيف', id(202));
     fireEvent.change(screen.getByLabelText('قيمة الزوج'), { target: { value: '10' } });
     expect(await screen.findByLabelText(/سبب إعادة التصنيف/)).toBeTruthy();
@@ -148,7 +185,7 @@ describe('APS letter entry screen', () => {
     fillInbound();
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
     expect(await screen.findByText(/رقم الخطاب مستخدم بالفعل/)).toBeTruthy();
-    expect(screen.getByLabelText<HTMLInputElement>('رقم الخطاب').value).toBe('2458');
+    expect(screen.getByLabelText<HTMLInputElement>('رقم النظام (EPS)').value).toBe('2458');
     expect(screen.getByLabelText<HTMLInputElement>('القيمة').value).toBe('١٢٠٫٥٠');
   });
 
@@ -161,6 +198,41 @@ describe('APS letter entry screen', () => {
     expect(await screen.findByText(/حُفظت المسودة، لكن تعذّر اعتمادها/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'عرض المسودة' })).toBeTruthy();
     expect(screen.queryByText('تم اعتماد الخطاب بنجاح.')).toBeNull();
+  });
+
+  it('shows the running period from the periodic settings above the screen', () => {
+    mount();
+    expect(screen.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-03-04' } });
+    expect(screen.getByText(/أنت تدخل خطاباً في: مارس 2026 — الفترة 2/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('تاريخ الخطاب'), { target: { value: '2026-09-04' } });
+    expect(screen.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeTruthy();
+  });
+
+  it('colours the header for the chosen type and prints its own title', () => {
+    mount();
+    expect(screen.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
+    expect(screen.getByRole('heading', { name: 'تحويل داخلي جديد' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل خارجي/ }));
+    expect(screen.getByRole('heading', { name: 'تحويل خارجي جديد' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /منصرف/ }));
+    expect(screen.getByRole('heading', { name: 'خطاب منصرف جديد' })).toBeTruthy();
+  });
+
+  it('searches the issuer by name and saves the code with the issuer sequence', async () => {
+    mount();
+    fillInbound();
+    const issuer = screen.getByLabelText('كود المُصدر');
+    fireEvent.focus(issuer);
+    fireEvent.change(issuer, { target: { value: 'ياسر' } });
+    fireEvent.click(screen.getByRole('option', { name: 'YM — ياسر' }));
+    expect(screen.getByLabelText<HTMLInputElement>('كود المُصدر').value).toBe('YM — ياسر');
+    fireEvent.change(screen.getByLabelText('رقم المُصدر'), { target: { value: '0042' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const [, , form] = save.mock.calls[0] as [string, string | null, EntryForm];
+    expect(form).toMatchObject({ issuerCode: 'YM', issuerSequence: '0042' });
   });
 
   it('shows the server refusal on a load error and offers a retry', () => {

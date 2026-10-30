@@ -7,10 +7,13 @@ import {
   newEntryLine,
   normalizeEntryAmount,
   type EntryForm,
+  type EntryIssuer,
   type EntryLine,
+  type EntryMonth,
   type EntryOption,
   type EntryOptions,
   type EntryParty,
+  type EntryWarehouse,
   type EntryYear,
 } from '@/lib/apsLetterEntry';
 import { isLetterDate, isLetterId, parseLetterAmount } from '@/lib/apsLetters';
@@ -90,6 +93,60 @@ function parseOption(value: unknown): EntryOption {
     throw new ApsEntryError('invalid');
   return { id: row.id, name, code };
 }
+function parseWarehouse(value: unknown): EntryWarehouse {
+  const option = parseOption(value);
+  const stationName = record(value)?.station_name;
+  const stationCode = record(value)?.station_code;
+  if (stationName !== null && stationName !== undefined && typeof stationName !== 'string')
+    throw new ApsEntryError('invalid');
+  if (stationCode !== null && stationCode !== undefined && typeof stationCode !== 'string')
+    throw new ApsEntryError('invalid');
+  return {
+    ...option,
+    stationName: typeof stationName === 'string' && stationName.trim() !== '' ? stationName : null,
+    stationCode: typeof stationCode === 'string' && stationCode.trim() !== '' ? stationCode : null,
+  };
+}
+function parseIssuer(value: unknown): EntryIssuer {
+  const option = parseOption(value);
+  if (!/^[A-Za-z]{2}$/.test(option.code)) throw new ApsEntryError('invalid');
+  return option;
+}
+function parseMonth(value: unknown): EntryMonth {
+  const row = record(value);
+  const name = text(row?.name);
+  const start = text(row?.start_date);
+  const end = text(row?.end_date);
+  if (
+    !isEntryOptionId(row?.id) ||
+    !isEntryOptionId(row?.fiscal_year_id) ||
+    name === null ||
+    start === null ||
+    end === null ||
+    !isLetterDate(start) ||
+    !isLetterDate(end) ||
+    start > end ||
+    typeof row?.month_number !== 'number' ||
+    !Number.isInteger(row.month_number) ||
+    row.month_number < 1 ||
+    row.month_number > 12 ||
+    typeof row?.current_period !== 'number' ||
+    !Number.isInteger(row.current_period) ||
+    row.current_period < 1 ||
+    typeof row?.is_closed !== 'boolean'
+  )
+    throw new ApsEntryError('invalid');
+  return {
+    id: row.id,
+    yearId: row.fiscal_year_id,
+    monthNumber: row.month_number,
+    name,
+    startDate: start,
+    endDate: end,
+    period: row.current_period,
+    closed: row.is_closed,
+  };
+}
 function parseParty(value: unknown): EntryParty {
   const option = parseOption(value);
   const branch = record(value)?.branch;
@@ -129,18 +186,22 @@ export function parseEntryOptions(value: unknown): EntryOptions {
   if (
     !row ||
     !Array.isArray(row.fiscal_years) ||
+    !Array.isArray(row.fiscal_months) ||
     !Array.isArray(row.warehouses) ||
     !Array.isArray(row.classifications) ||
     !Array.isArray(row.parties) ||
-    !Array.isArray(row.sister_companies)
+    !Array.isArray(row.sister_companies) ||
+    !Array.isArray(row.issuers)
   )
     throw new ApsEntryError('invalid');
   return {
     years: row.fiscal_years.map(parseYear),
-    warehouses: row.warehouses.map(parseOption),
+    months: row.fiscal_months.map(parseMonth),
+    warehouses: row.warehouses.map(parseWarehouse),
     classifications: row.classifications.map(parseOption),
     parties: row.parties.map(parseParty),
     sisters: row.sister_companies.map(parseOption),
+    issuers: row.issuers.map(parseIssuer),
   };
 }
 
@@ -194,6 +255,8 @@ export function parseEntryDraft(
 ): LoadedDraft {
   const header = record(headerValue);
   const number = text(header?.letter_number_raw) ?? text(header?.letter_number);
+  const issuerCode = header?.issuer_code == null ? '' : text(header?.issuer_code);
+  const issuerSequence = header?.issuer_sequence == null ? '' : text(header?.issuer_sequence);
   const date = text(header?.letter_date);
   const updatedAt = text(header?.updated_at);
   if (
@@ -203,6 +266,9 @@ export function parseEntryDraft(
     header?.status !== 'draft' ||
     !isEntryType(header?.letter_type) ||
     number === null ||
+    issuerCode === null ||
+    issuerSequence === null ||
+    (issuerCode !== '' && !/^[A-Za-z]{2}$/.test(issuerCode)) ||
     date === null ||
     !isLetterDate(date) ||
     updatedAt === null ||
@@ -263,6 +329,8 @@ export function parseEntryDraft(
     form: {
       type,
       number,
+      issuerCode,
+      issuerSequence,
       date,
       yearId: header.fiscal_year_id,
       partyId,
@@ -280,7 +348,7 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
   const header = await current
     .from('letters')
     .select(
-      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, letter_date, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
+      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, issuer_code, issuer_sequence, letter_date, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
     )
     .eq('id', id)
     .maybeSingle();
@@ -354,6 +422,8 @@ export async function saveEntryDraft(
     p_direction: form.type === 'external_transfer' ? form.direction : null,
     p_reclassification_reason: form.type === 'internal_transfer' ? form.reason : null,
     p_lines: lines,
+    p_issuer_code: form.issuerCode === '' ? null : form.issuerCode.toUpperCase(),
+    p_issuer_sequence: form.issuerSequence === '' ? null : form.issuerSequence,
   });
   assertResponse(response);
   const result = record(response.data);
