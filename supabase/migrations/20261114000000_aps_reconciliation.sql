@@ -1765,11 +1765,15 @@ create policy letters_read
     )
   );
 
--- Read only for API callers. Every write goes through the SECURITY DEFINER
--- functions above, because the computed numbers and the lifecycle stamps must
--- not be reachable by a direct table call.
-grant select on public.aps_reconciliation_sessions to authenticated;
-grant select on public.aps_reconciliation_items to authenticated;
+-- Read only for authenticated API callers. Supabase may grant broad default
+-- privileges to PUBLIC and client roles on new tables; SELECT alone does not
+-- revoke them, and RLS does not protect operations such as TRUNCATE. Keep the
+-- privileged service_role grants unchanged. All client writes use the guarded
+-- SECURITY DEFINER functions above.
+revoke all on table public.aps_reconciliation_sessions, public.aps_reconciliation_items
+  from public, anon, authenticated;
+grant select on table public.aps_reconciliation_sessions, public.aps_reconciliation_items
+  to authenticated;
 
 drop policy if exists aps_reconciliation_sessions_read on public.aps_reconciliation_sessions;
 create policy aps_reconciliation_sessions_read
@@ -1798,6 +1802,8 @@ create policy aps_reconciliation_items_read
 -- 14) Preconditions
 -- ---------------------------------------------------------------------------
 do $verify_aps_reconciliation$
+declare
+  v_reconciliation_table text;
 begin
   if not exists (select 1 from public.permissions where slug = 'aps.reconciliation:manage') then
     raise exception 'aps.reconciliation:manage is missing';
@@ -1910,11 +1916,27 @@ begin
     raise exception 'the reconciliation RLS policies are incomplete';
   end if;
 
-  if has_table_privilege('authenticated', 'public.aps_reconciliation_items', 'INSERT')
-     or has_table_privilege('authenticated', 'public.aps_reconciliation_items', 'UPDATE')
-     or has_table_privilege('authenticated', 'public.aps_reconciliation_items', 'DELETE') then
-    raise exception 'API callers must not write reconciliation items directly';
-  end if;
+  -- Check effective privileges, including grants inherited from other roles or
+  -- on individual columns. REVOKE above cannot remove those inherited grants.
+  foreach v_reconciliation_table in array array[
+    'public.aps_reconciliation_sessions', 'public.aps_reconciliation_items'
+  ] loop
+    if not has_table_privilege('authenticated', v_reconciliation_table, 'SELECT')
+       or has_table_privilege('authenticated', v_reconciliation_table, 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+       or has_any_column_privilege('authenticated', v_reconciliation_table, 'INSERT, UPDATE, REFERENCES')
+       or has_table_privilege('anon', v_reconciliation_table, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')
+       or has_any_column_privilege('anon', v_reconciliation_table, 'SELECT, INSERT, UPDATE, REFERENCES') then
+      raise exception 'API callers must have only authorized read access to %', v_reconciliation_table;
+    end if;
+
+    -- MAINTAIN is a table privilege from PostgreSQL 17 onward.
+    if current_setting('server_version_num')::integer >= 170000 then
+      if has_table_privilege('authenticated', v_reconciliation_table, 'MAINTAIN')
+         or has_table_privilege('anon', v_reconciliation_table, 'MAINTAIN') then
+        raise exception 'API callers must not maintain % directly', v_reconciliation_table;
+      end if;
+    end if;
+  end loop;
 
   if to_regprocedure('public.aps_open_reconciliation(uuid, uuid)') is null
      or to_regprocedure('public.aps_refresh_reconciliation(uuid)') is null
