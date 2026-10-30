@@ -26,6 +26,8 @@ import {
   type LoadedDraft,
 } from '@/hooks/useApsLetterEntry';
 import { SearchCombobox } from '@/components/ui/SearchCombobox';
+import { usePageHeaderOverride } from '@/context/PageHeaderContext';
+import type { PageHeaderTone } from '@/lib/pageHeader';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   APS_LETTER_NEW_PATH,
@@ -59,41 +61,46 @@ const TYPES: readonly {
   value: EntryLetterType;
   hint: TranslationKey;
   title: TranslationKey;
+  editTitle: TranslationKey;
   icon: typeof ArrowDownLeft;
   color: string;
-  banner: string;
+  tone: PageHeaderTone;
 }[] = [
   {
     value: 'inbound',
     hint: 'aps.entry.inboundHint',
     title: 'aps.entry.newTitle.inbound',
+    editTitle: 'aps.entry.editTitle.inbound',
     icon: ArrowDownLeft,
     color: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-    banner: 'border-emerald-500/25 bg-emerald-500/5 text-emerald-800 dark:text-emerald-200',
+    tone: 'emerald',
   },
   {
     value: 'outbound',
     hint: 'aps.entry.outboundHint',
     title: 'aps.entry.newTitle.outbound',
+    editTitle: 'aps.entry.editTitle.outbound',
     icon: ArrowUpRight,
     color: 'bg-orange-500/10 text-orange-700 dark:text-orange-300',
-    banner: 'border-orange-500/25 bg-orange-500/5 text-orange-800 dark:text-orange-200',
+    tone: 'orange',
   },
   {
     value: 'internal_transfer',
     hint: 'aps.entry.internalHint',
     title: 'aps.entry.newTitle.internal_transfer',
+    editTitle: 'aps.entry.editTitle.internal_transfer',
     icon: ArrowLeftRight,
     color: 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
-    banner: 'border-violet-500/25 bg-violet-500/5 text-violet-800 dark:text-violet-200',
+    tone: 'violet',
   },
   {
     value: 'external_transfer',
     hint: 'aps.entry.externalHint',
     title: 'aps.entry.newTitle.external_transfer',
+    editTitle: 'aps.entry.editTitle.external_transfer',
     icon: ArrowRight,
     color: 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
-    banner: 'border-sky-500/25 bg-sky-500/5 text-sky-800 dark:text-sky-200',
+    tone: 'sky',
   },
 ];
 
@@ -313,7 +320,13 @@ function EntryEditor({
   const year = options.years.find((item) => item.id === form.yearId);
   const period = entryPeriod(form, options);
   const activeType = TYPES.find((item) => item.value === form.type) ?? TYPES[0]!;
-  const ActiveIcon = activeType.icon;
+  /* The shell's sticky header is the only header: it carries the type name, its
+     colour and its arrow, and it changes the moment the type changes. */
+  usePageHeaderOverride({
+    titleKey: draft === null ? activeType.title : activeType.editTitle,
+    tone: activeType.tone,
+    icon: activeType.icon,
+  });
   const warehouses = warehouseOptions(options.warehouses);
   const issuers = options.issuers.map((issuer) => ({
     value: issuer.code,
@@ -452,27 +465,6 @@ function EntryEditor({
 
   return (
     <div className="min-w-0 space-y-5 pb-8">
-      <section className={`min-w-0 rounded-2xl border p-4 sm:p-5 ${activeType.banner}`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-3">
-            <span
-              className={`grid size-10 shrink-0 place-items-center rounded-xl ${activeType.color}`}
-            >
-              <ActiveIcon className="size-5" aria-hidden="true" />
-            </span>
-            <div className="min-w-0">
-              <p className="text-xs font-semibold opacity-80">
-                {t(draft === null ? 'aps.entry.title' : 'aps.entry.editTitle')}
-              </p>
-              <h2 className="mt-0.5 text-lg font-bold break-words">{t(activeType.title)}</h2>
-              <p className="mt-1 text-xs leading-relaxed opacity-90">{t(activeType.hint)}</p>
-            </div>
-          </div>
-          {dirty && !approved && (
-            <span className="text-xs font-semibold opacity-80">{t('aps.entry.unsaved')}</span>
-          )}
-        </div>
-      </section>
       <div
         role="status"
         className="border-border bg-muted/55 text-foreground flex flex-wrap items-center gap-2 rounded-xl border px-4 py-3 text-xs font-semibold"
@@ -493,6 +485,11 @@ function EntryEditor({
               <span className="text-destructive">— {t('aps.entry.periodClosed')}</span>
             )}
           </>
+        )}
+        {dirty && !approved && (
+          <span className="text-muted-foreground ms-auto font-normal">
+            {t('aps.entry.unsaved')}
+          </span>
         )}
       </div>
       {initial.restored && dirty && (
@@ -533,13 +530,14 @@ function EntryEditor({
             aria-label={t('aps.entry.typeTitle')}
             className="border-border bg-muted/45 mt-4 grid min-w-0 grid-cols-4 gap-1 rounded-xl border p-1"
           >
-            {TYPES.map(({ value, icon: Icon, color }) => {
+            {TYPES.map(({ value, hint, icon: Icon, color }) => {
               const selected = form.type === value;
               return (
                 <button
                   key={value}
                   type="button"
                   aria-pressed={selected}
+                  title={t(hint)}
                   onClick={() => {
                     if (!selected) patch({ type: value, partyId: '', sisterId: '' });
                   }}

@@ -44,6 +44,8 @@ export default tseslint.config(
             'useLocalization',
             'useAuthCapabilities',
             'useNotifications',
+            'usePageHeader',
+            'usePageHeaderOverride',
           ],
         },
       ],

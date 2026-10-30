@@ -15,6 +15,8 @@ import { NotificationBell } from '@/components/layout/NotificationBell';
 import { NotificationsProvider } from '@/components/layout/NotificationsProvider';
 import { useAuth } from '@/context/AuthContext';
 import { useBranding } from '@/context/BrandingContext';
+import { usePageHeader } from '@/context/PageHeaderContext';
+import { PAGE_HEADER_TONE_CLASSES } from '@/lib/pageHeader';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import { findNavLinkByPath, NAV_ITEMS } from '@/components/layout/nav-items';
 
@@ -69,9 +71,16 @@ export function Topbar({
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   const activeLink = findNavLinkByPath(NAV_ITEMS, location.pathname);
-  const pageTitle = activeLink
+  const navTitle = activeLink
     ? t(activeLink.labelKey)
     : t(STANDALONE_TITLES[location.pathname] ?? 'dashboard.title');
+  /* A screen may state a more precise title than its navigation leaf — the
+     letter entry screen says which type is being entered. One header only:
+     this one, sticky, with no second band below it. */
+  const pageHeader = usePageHeader();
+  const pageTitle = pageHeader ? t(pageHeader.titleKey) : navTitle;
+  const tone = pageHeader ? PAGE_HEADER_TONE_CLASSES[pageHeader.tone] : null;
+  const PageIcon = pageHeader?.icon;
   const displayName =
     (typeof session?.user.user_metadata?.full_name === 'string'
       ? session.user.user_metadata.full_name
@@ -138,7 +147,10 @@ export function Topbar({
           onClick={onToggleSidebar}
           aria-label={sidebarCollapsed ? t('topbar.expandSidebar') : t('topbar.collapseSidebar')}
           aria-pressed={sidebarCollapsed}
-          className={`${iconButtonClassName} hidden md:inline-flex`}
+          /* `iconButtonClassName` already sets `inline-flex`, which competes
+             with `hidden` at equal specificity; `max-md:hidden` is emitted
+             later, so the desktop-only toggle really is desktop-only. */
+          className={`${iconButtonClassName} hidden max-md:hidden md:inline-flex`}
         >
           {sidebarCollapsed ? (
             <PanelLeftOpen className="size-5" aria-hidden="true" />
@@ -148,8 +160,30 @@ export function Topbar({
         </button>
       )}
 
-      <div className="min-w-0 px-1">
-        <p className="text-foreground truncate text-sm font-semibold md:text-base">{pageTitle}</p>
+      {/* A colour is worth nothing on a phone if the title is cut to «خطاب …»,
+          so the title block takes the free space and shrinks the icon cluster
+          instead of being truncated first. */}
+      <div
+        className="min-w-0 flex-1 px-1 md:flex-none"
+        aria-live={pageHeader ? 'polite' : undefined}
+      >
+        <p
+          className={`flex min-w-0 items-center gap-1.5 text-sm font-semibold md:text-base ${tone ? tone.text : 'text-foreground'}`}
+        >
+          {/* Below `sm` the icon chip yields its space to the words: the colour
+              and the bar still state the type, and the title is never cut. */}
+          {PageIcon && (
+            <span
+              className={`hidden size-6 shrink-0 place-items-center rounded-md sm:grid ${tone?.chip ?? ''}`}
+            >
+              <PageIcon className="size-4" aria-hidden="true" />
+            </span>
+          )}
+          <span className="line-clamp-2 leading-tight sm:truncate">{pageTitle}</span>
+        </p>
+        {tone && (
+          <span aria-hidden="true" className={`mt-0.5 block h-0.5 w-8 rounded-full ${tone.bar}`} />
+        )}
       </div>
 
       <div className="ms-auto flex items-center gap-1.5">

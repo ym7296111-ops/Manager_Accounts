@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router';
 import { SidebarNav } from '@/components/layout/SidebarNav';
 import { NAV_ITEMS } from '@/components/layout/nav-items';
 import { MobileDrawer, SidebarBrand, Topbar } from '@/components/layout/Topbar';
+import { PageHeaderProvider } from '@/context/PageHeaderContext';
 import { useI18n } from '@/i18n/I18nContext';
 import { isDashboardOnlyActor, useAuthCapabilities } from '@/hooks/useAuthCapabilities';
 
@@ -116,63 +117,65 @@ export default function DashboardLayout() {
   }, [drawerOpen]);
 
   return (
-    <div className="bg-background flex min-h-dvh">
-      {/* ---------------------------------------------------- desktop sidebar */}
-      {!dashboardOnly && (
-        <aside
-          inert={drawerOpen}
-          className={`border-sidebar-border bg-sidebar text-sidebar-foreground sticky top-0 hidden h-dvh shrink-0 flex-col border-e transition-[width] duration-300 ease-out md:flex ${
-            collapsed ? 'w-[4.5rem]' : 'w-72'
-          }`}
-        >
-          <SidebarBrand compact={collapsed} />
-
-          <nav
-            aria-label={t('sidebar.label')}
-            className="flex-1 scrollbar-thin overflow-x-hidden overflow-y-auto px-3 py-4"
+    <PageHeaderProvider>
+      <div className="bg-background flex min-h-dvh">
+        {/* ---------------------------------------------------- desktop sidebar */}
+        {!dashboardOnly && (
+          <aside
+            inert={drawerOpen}
+            className={`border-sidebar-border bg-sidebar text-sidebar-foreground sticky top-0 hidden h-dvh shrink-0 flex-col border-e transition-[width] duration-300 ease-out md:flex ${
+              collapsed ? 'w-[4.5rem]' : 'w-72'
+            }`}
           >
-            <SidebarNav
-              idPrefix={desktopNavId}
-              nodes={NAV_ITEMS}
-              collapsed={collapsed}
-              onRequestExpand={() => setCollapsed(false)}
-            />
-          </nav>
+            <SidebarBrand compact={collapsed} />
 
-          <div className="border-sidebar-border text-sidebar-foreground/50 border-t px-4 py-3 text-[11px]">
-            {collapsed ? 'v0.1' : 'v0.1.0 · Cloud-Only'}
-          </div>
-        </aside>
-      )}
+            <nav
+              aria-label={t('sidebar.label')}
+              className="flex-1 scrollbar-thin overflow-x-hidden overflow-y-auto px-3 py-4"
+            >
+              <SidebarNav
+                idPrefix={desktopNavId}
+                nodes={NAV_ITEMS}
+                collapsed={collapsed}
+                onRequestExpand={() => setCollapsed(false)}
+              />
+            </nav>
 
-      {/* ------------------------------------------------------------ content */}
-      <div inert={drawerOpen} className="flex min-w-0 flex-1 flex-col">
-        <Topbar
-          mobileOpen={drawerOpen}
-          onOpenMobileMenu={openMobileMenu}
-          sidebarCollapsed={collapsed}
-          onToggleSidebar={() => setCollapsed((previous) => !previous)}
-          dashboardOnly={dashboardOnly}
-        />
+            <div className="border-sidebar-border text-sidebar-foreground/50 border-t px-4 py-3 text-[11px]">
+              {collapsed ? 'v0.1' : 'v0.1.0 · Cloud-Only'}
+            </div>
+          </aside>
+        )}
 
-        <main className="w-full max-w-full min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
-          <div className="mx-auto w-full max-w-7xl min-w-0">
-            <Outlet />
-          </div>
-        </main>
-      </div>
-
-      {/* --------------------------------------------------------- mobile drawer */}
-      {!dashboardOnly && (
-        <MobileDrawer open={drawerOpen} onClose={closeMobileMenu}>
-          <SidebarNav
-            idPrefix={mobileNavId}
-            nodes={NAV_ITEMS}
-            collapsed={false}
-            onNavigate={closeMobileMenu}
+        {/* ------------------------------------------------------------ content */}
+        <div inert={drawerOpen} className="flex min-w-0 flex-1 flex-col">
+          <Topbar
+            mobileOpen={drawerOpen}
+            onOpenMobileMenu={openMobileMenu}
+            sidebarCollapsed={collapsed}
+            onToggleSidebar={() => setCollapsed((previous) => !previous)}
+            dashboardOnly={dashboardOnly}
           />
-        </MobileDrawer>
-      )}
-    </div>
+
+          <main className="w-full max-w-full min-w-0 flex-1 px-4 py-6 md:px-6 md:py-8">
+            <div className="mx-auto w-full max-w-7xl min-w-0">
+              <Outlet />
+            </div>
+          </main>
+        </div>
+
+        {/* --------------------------------------------------------- mobile drawer */}
+        {!dashboardOnly && (
+          <MobileDrawer open={drawerOpen} onClose={closeMobileMenu}>
+            <SidebarNav
+              idPrefix={mobileNavId}
+              nodes={NAV_ITEMS}
+              collapsed={false}
+              onNavigate={closeMobileMenu}
+            />
+          </MobileDrawer>
+        )}
+      </div>
+    </PageHeaderProvider>
   );
 }

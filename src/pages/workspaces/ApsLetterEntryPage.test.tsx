@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { I18nProvider } from '@/i18n/I18nContext';
+import { PageHeaderProvider, usePageHeader } from '@/context/PageHeaderContext';
+import { I18nProvider, useI18n } from '@/i18n/I18nContext';
 import { ApsEntryError } from '@/hooks/useApsLetterEntry';
 import type { EntryForm, EntryOptions } from '@/lib/apsLetterEntry';
 import ApsLetterEntryPage from './ApsLetterEntryPage';
@@ -82,15 +83,33 @@ const options: EntryOptions = {
   ],
 };
 
+/**
+ * Stands in for the shell's sticky top bar: it prints exactly what the page
+ * publishes, so the test asserts the header the user actually sees without
+ * mounting the whole shell.
+ */
+function ShellHeaderProbe() {
+  const { t } = useI18n();
+  const header = usePageHeader();
+  return (
+    <p data-testid="shell-header" data-tone={header?.tone ?? 'none'}>
+      {header ? t(header.titleKey) : '—'}
+    </p>
+  );
+}
+
 function mount() {
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <I18nProvider defaultLocale="ar">
-        <MemoryRouter initialEntries={['/workspaces/aps/letters/new']}>
-          <ApsLetterEntryPage />
-        </MemoryRouter>
+        <PageHeaderProvider>
+          <ShellHeaderProbe />
+          <MemoryRouter initialEntries={['/workspaces/aps/letters/new']}>
+            <ApsLetterEntryPage />
+          </MemoryRouter>
+        </PageHeaderProvider>
       </I18nProvider>
     </QueryClientProvider>,
   );
@@ -144,7 +163,7 @@ describe('APS letter entry screen', () => {
     const [, version, form] = save.mock.calls[0] as [string, string | null, EntryForm];
     expect(version).toBeNull();
     expect(form).toMatchObject({ type: 'inbound', number: '2458', partyId: id(501) });
-    expect(screen.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeTruthy();
+    expect(screen.getByTestId('shell-header').textContent).toBe('خطاب وارد جديد');
     expect(await screen.findByText(/حُفظت المسودة بنجاح/)).toBeTruthy();
     expect(approve).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'حفظ التعديلات' })).toBeTruthy();
@@ -209,15 +228,21 @@ describe('APS letter entry screen', () => {
     expect(screen.getByText(/تاريخ الخطاب لا يقع في شهر مهيأ/)).toBeTruthy();
   });
 
-  it('colours the header for the chosen type and prints its own title', () => {
+  it('drives the shell header from the chosen type without a second title', () => {
     mount();
-    expect(screen.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeTruthy();
+    expect(screen.getByTestId('shell-header').textContent).toBe('خطاب وارد جديد');
+    expect(screen.getByTestId('shell-header').dataset.tone).toBe('emerald');
     fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
-    expect(screen.getByRole('heading', { name: 'تحويل داخلي جديد' })).toBeTruthy();
+    expect(screen.getByTestId('shell-header').textContent).toBe('تحويل داخلي جديد');
+    expect(screen.getByTestId('shell-header').dataset.tone).toBe('violet');
     fireEvent.click(screen.getByRole('button', { name: /تحويل خارجي/ }));
-    expect(screen.getByRole('heading', { name: 'تحويل خارجي جديد' })).toBeTruthy();
+    expect(screen.getByTestId('shell-header').textContent).toBe('تحويل خارجي جديد');
+    expect(screen.getByTestId('shell-header').dataset.tone).toBe('sky');
     fireEvent.click(screen.getByRole('button', { name: /منصرف/ }));
-    expect(screen.getByRole('heading', { name: 'خطاب منصرف جديد' })).toBeTruthy();
+    expect(screen.getByTestId('shell-header').textContent).toBe('خطاب منصرف جديد');
+    expect(screen.getByTestId('shell-header').dataset.tone).toBe('orange');
+    // No heading of its own: the sticky header is the only title on the page.
+    expect(screen.queryAllByRole('heading', { name: /جديد/ })).toHaveLength(0);
   });
 
   it('searches the issuer by name and saves the code with the issuer sequence', async () => {

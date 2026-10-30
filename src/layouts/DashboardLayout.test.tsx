@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { ArrowLeftRight } from 'lucide-react';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as AuthCapabilitiesModule from '@/hooks/useAuthCapabilities';
 
@@ -24,6 +25,7 @@ vi.mock('@/hooks/useAuthCapabilities', async (importOriginal) => {
 });
 import { AuthProvider } from '@/context/AuthContext';
 import { BrandingProvider } from '@/context/BrandingContext';
+import { usePageHeaderOverride } from '@/context/PageHeaderContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { I18nProvider, LOCALE_STORAGE_KEY } from '@/i18n/I18nContext';
 import DashboardLayout from '@/layouts/DashboardLayout';
@@ -221,6 +223,60 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
       const target = control.getAttribute('aria-controls') ?? '';
       expect(document.querySelectorAll(`[id="${target}"]`)).toHaveLength(1);
     }
+  });
+
+  it('shows a screen-specific tone in the sticky header and restores the nav title on leave', () => {
+    function Publisher() {
+      const navigate = useNavigate();
+      usePageHeaderOverride({
+        titleKey: 'aps.entry.newTitle.internal_transfer',
+        tone: 'violet',
+        icon: ArrowLeftRight,
+      });
+      return (
+        <button type="button" onClick={() => void navigate('/')}>
+          leave
+        </button>
+      );
+    }
+    render(
+      <ThemeProvider>
+        <I18nProvider>
+          <AuthProvider>
+            <QueryClientProvider client={new QueryClient()}>
+              <BrandingProvider>
+                <MemoryRouter initialEntries={['/probe']}>
+                  <Routes>
+                    <Route element={<DashboardLayout />}>
+                      <Route index element={<DashboardPage />} />
+                      <Route path="probe" element={<Publisher />} />
+                    </Route>
+                  </Routes>
+                </MemoryRouter>
+              </BrandingProvider>
+            </QueryClientProvider>
+          </AuthProvider>
+        </I18nProvider>
+      </ThemeProvider>,
+    );
+
+    const topbar = document.querySelector('header');
+    if (!topbar) {
+      throw new Error('Top bar not found');
+    }
+    /* Sticky, and it is the only header carrying the page title. */
+    expect(topbar.className).toContain('sticky');
+    expect(topbar.className).toContain('top-0');
+    const title = within(topbar).getByText('تحويل داخلي جديد');
+    expect(title).toBeTruthy();
+    /* Colour carries the type, together with the icon and the words. */
+    expect(title.closest('p')?.className).toContain('text-violet-700');
+    expect(screen.queryByRole('heading', { name: 'تحويل داخلي جديد' })).toBeNull();
+
+    /* Leaving the screen clears the override, so the nav label comes back. */
+    fireEvent.click(screen.getByRole('button', { name: 'leave' }));
+    expect(within(topbar).queryByText('تحويل داخلي جديد')).toBeNull();
+    expect(within(topbar).getByText('الشاشة الرئيسية')).toBeTruthy();
   });
 
   it('locks scroll and makes the shell inert only while the mobile drawer is open', () => {

@@ -142,6 +142,11 @@ test('English switches the document direction and keeps details readable', async
   await expectNoHorizontalOverflow(page);
 });
 
+/** The type lives in the shell's sticky header; there is no second band. */
+function pageHeader(page: Page) {
+  return page.getByRole('banner').filter({ hasText: /خطاب|تحويل|letter|transfer/i });
+}
+
 async function fillHeader(page: Page, number: string) {
   await page.getByLabel('تاريخ الخطاب').fill('2026-03-04');
   await page.getByLabel('رقم النظام (EPS)').fill(number);
@@ -158,7 +163,7 @@ test('entry creates an inbound draft and approves it through the existing transi
 }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeVisible();
+  await expect(pageHeader(page).getByText('خطاب وارد جديد')).toBeVisible();
   for (const name of [/وارد/, /منصرف/, /تحويل داخلي/, /تحويل خارجي/]) {
     await expect(page.getByRole('button', { name })).toBeVisible();
   }
@@ -206,7 +211,7 @@ test('internal entry pairs source and destination and requires a reclassificatio
 test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'خطاب وارد جديد' })).toBeVisible();
+  await expect(pageHeader(page).getByText('خطاب وارد جديد')).toBeVisible();
   await expect(page.getByRole('button', { name: /وارد/ })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
@@ -227,6 +232,27 @@ test('entry options refusal and lost results are reported honestly', async ({ pa
   await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
   await expect(page.getByRole('alert')).toContainText('قد يكون الحفظ اكتمل');
   await expect(page.getByRole('link', { name: 'عرض المسودة' })).toBeVisible();
+});
+
+test('the sticky header states the letter type and does not duplicate the title', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/workspaces/aps/letters/new');
+  const header = pageHeader(page);
+  await expect(header.getByText('خطاب وارد جديد')).toBeVisible();
+  await page.getByRole('button', { name: /منصرف/ }).click();
+  await expect(header.getByText('خطاب منصرف جديد')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /جديد/ })).toHaveCount(0);
+  await page.getByRole('button', { name: /تحويل داخلي/ }).click();
+  await expect(header.getByText('تحويل داخلي جديد')).toBeVisible();
+  await page.getByRole('button', { name: /تحويل خارجي/ }).click();
+  await expect(header.getByText('تحويل خارجي جديد')).toBeVisible();
+  /* Still the shell header, still pinned: scrolling must not take the type away. */
+  await expect(header).toHaveCSS('position', 'sticky');
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await expect(header.getByText('تحويل خارجي جديد')).toBeInViewport();
+  await expectNoHorizontalOverflow(page);
 });
 
 test('entry reads the running period, the issuer list and the station label', async ({ page }) => {
@@ -258,7 +284,7 @@ test('entry reads the running period, the issuer list and the station label', as
 test('English entry screen renders left to right', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('admin-system:locale', 'en'));
   await page.goto('/workspaces/aps/letters/new');
-  await expect(page.getByRole('heading', { name: 'New inbound letter' })).toBeVisible();
+  await expect(pageHeader(page).getByText('New inbound letter')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
   await expect(page.getByRole('button', { name: /Inbound/ })).toBeVisible();
   await expectNoHorizontalOverflow(page);
