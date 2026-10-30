@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 57);
+    assert.equal(migrations.length, 58);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2001,6 +2001,7 @@ try {
     assert.ok(migrations.includes('20261115000000_aps_letter_line_name_snapshots.sql'));
     assert.ok(migrations.includes('20261116000000_aps_letter_entry.sql'));
     assert.ok(migrations.includes('20261117000000_aps_issuers.sql'));
+    assert.ok(migrations.includes('20261118000000_aps_letter_reference.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2977,21 +2978,22 @@ try {
   const saveApsEntry = (actor, entry) =>
     asRole('authenticated', actor, (c) =>
       c.query(
-        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13) as result`,
+        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12) as result`,
         [
           entry.id,
           entry.version ?? null,
           entry.yearId,
           entry.type,
           entry.number,
-          entry.date,
           entry.partyId ?? null,
           entry.sisterId ?? null,
           entry.direction ?? null,
           entry.reason ?? null,
           JSON.stringify(entry.lines),
-          entry.issuerCode ?? null,
-          entry.issuerSequence ?? null,
+          entry.issuerReference ?? null,
+          // Explicit only where a fixture needs an accounting date; the screen
+          // omits it and lets the database default to today.
+          entry.date ?? null,
         ],
       ),
     );
@@ -3089,7 +3091,7 @@ try {
       }
       const functionFlags = (
         await db.query(
-          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,date,uuid,uuid,text,text,jsonb,text,text)'::regprocedure) order by proname`,
+          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,uuid,uuid,text,text,jsonb,text,date)'::regprocedure) order by proname`,
         )
       ).rows;
       assert.deepEqual(functionFlags, [
@@ -3342,22 +3344,23 @@ try {
         number: '311',
         date: '2040-08-15',
         partyId: fixture.party.id,
-        issuerCode: fixture.issuerCode.toLowerCase(),
-        issuerSequence: '0042',
+        issuerReference: `${fixture.issuerCode.toLowerCase()}:0042`,
         lines: [
           { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '10.25' },
         ],
       };
-      await expectCode('22023', () => saveApsEntry(E, { ...entry, issuerCode: 'ZZ' }));
-      await expectCode('22023', () =>
-        saveApsEntry(E, { ...entry, issuerSequence: 'x'.repeat(33) }),
-      );
+      await expectCode('22023', () => saveApsEntry(E, { ...entry, issuerReference: 'ZZ:1' }));
+      await expectCode('22023', () => saveApsEntry(E, { ...entry, issuerReference: 'YM' }));
+      await expectCode('22023', () => saveApsEntry(E, { ...entry, issuerReference: 'YM:12a' }));
       const created = (await saveApsEntry(E, entry)).rows[0].result;
       const header = (
-        await db.query('select issuer_code, issuer_sequence from public.letters where id=$1', [id])
+        await db.query(
+          "select issuer_reference, to_char(letter_date,'YYYY-MM-DD') as letter_date from public.letters where id=$1",
+          [id],
+        )
       ).rows[0];
-      assert.equal(header.issuer_code, fixture.issuerCode);
-      assert.equal(header.issuer_sequence, '0042');
+      assert.equal(header.issuer_reference, `${fixture.issuerCode}:0042`);
+      assert.equal(header.letter_date, '2040-08-15');
       // The station travels with the line as a snapshot, like the two names.
       const line = (
         await db.query(
@@ -3371,17 +3374,95 @@ try {
         c.query('select public.aps_approve_letter($1)', [id]),
       );
       const frozen = await captureApsError(() =>
-        db.query('update public.letters set issuer_sequence=$2 where id=$1', [id, '9999']),
+        db.query('update public.letters set issuer_reference=$2 where id=$1', [id, 'YM:9999']),
       );
       assert.equal(frozen.code, '23514');
       assert.match(frozen.message, /issuer of a approved letter is immutable/);
       assert.equal(
-        (await db.query('select issuer_sequence from public.letters where id=$1', [id])).rows[0]
-          .issuer_sequence,
-        '0042',
+        (await db.query('select issuer_reference from public.letters where id=$1', [id])).rows[0]
+          .issuer_reference,
+        `${fixture.issuerCode}:0042`,
       );
       assert.ok(created.updated_at);
     });
+  });
+
+  await test('APS letter code: one series per fiscal year', async () => {
+    await withApsEntryFixture(async (fixture, ids) => {
+      const build = (id, yearId, date, number) => {
+        ids.push(id);
+        return {
+          id,
+          yearId,
+          type: 'inbound',
+          number,
+          date,
+          partyId: fixture.party.id,
+          issuerReference: `${fixture.issuerCode}:1`,
+          lines: [
+            { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '5.00' },
+          ],
+        };
+      };
+      await saveApsEntry(E, build(randomUUID(), fixture.firstYear.id, '2040-08-15', '901'));
+      // Same code, same fiscal year: refused by the per-year key, with a code
+      // the client can tell apart from a duplicate EPS number.
+      const duplicate = await captureApsError(() =>
+        saveApsEntry(E, build(randomUUID(), fixture.firstYear.id, '2040-08-16', '902')),
+      );
+      assert.equal(duplicate.code, 'P0001');
+      assert.match(duplicate.message, /aps_entry_duplicate_letter_code/);
+      // The same code in the next fiscal year is a different series.
+      await saveApsEntry(E, build(randomUUID(), fixture.secondYear.id, '2041-08-15', '902'));
+    });
+  });
+
+  await test('APS letter code: the table enforces the shape, the key, the index and the date default', async () => {
+    const yearId = randomUUID();
+    const partyId = randomUUID();
+    const letterId = randomUUID();
+    try {
+      await db.query(
+        'insert into public.fiscal_years(id,start_date,end_date) values ($1,current_date - 900,current_date + 900)',
+        [yearId],
+      );
+      await db.query("insert into public.parties(id,branch,name) values ($1,'inbound',$2)", [
+        partyId,
+        `APS audit code party ${randomUUID()}`,
+      ]);
+      // A draft written without a date is dated today by the column default.
+      const inserted = await db.query(
+        `insert into public.letters
+           (id,fiscal_year_id,letter_type,letter_number,party_id,issuer_reference,created_by)
+         values ($1,$2,'inbound','91',$3,'YM:7',$4)
+         returning to_char(letter_date,'YYYY-MM-DD') as letter_date, issuer_reference`,
+        [letterId, yearId, partyId, A],
+      );
+      const today = (await db.query("select to_char(current_date,'YYYY-MM-DD') as today")).rows[0]
+        .today;
+      assert.deepEqual(inserted.rows[0], { letter_date: today, issuer_reference: 'YM:7' });
+      for (const bad of ['YM', 'ym:7', 'YM:', 'YM:7a', 'YM7', 'YMM:7', 'YM:-1', 'YM: 7']) {
+        const refused = await captureApsError(() =>
+          db.query('update public.letters set issuer_reference=$2 where id=$1', [letterId, bad]),
+        );
+        assert.equal(refused.code, '23514', `${bad} must be refused by the CHECK`);
+      }
+      // The per-year key and the code index are both installed.
+      const indexes = await db.query(
+        `select indexname from pg_indexes
+          where schemaname='public' and tablename='letters'
+            and indexname in ('letters_year_issuer_reference_key','letters_issuer_reference_idx')
+          order by indexname`,
+      );
+      assert.deepEqual(
+        indexes.rows.map((row) => row.indexname),
+        ['letters_issuer_reference_idx', 'letters_year_issuer_reference_key'],
+      );
+    } finally {
+      await db.query('delete from public.letters where id=$1', [letterId]);
+      await db.query('delete from public.parties where id=$1', [partyId]);
+      await db.query('delete from public.fiscal_years where id=$1', [yearId]);
+    }
   });
 
   await test('APS entry: all letter types, paired transfers and reclassification reasons', async () => {
@@ -3905,8 +3986,13 @@ try {
         'cancelled_at',
         'cancelled_by',
         'cancel_reason',
+        'issuer_reference',
       ]) {
         assert.ok(names.includes(column), `letters.${column} is missing`);
+      }
+      // The retired pair must be gone: one manual code replaced it.
+      for (const column of ['issuer_code', 'issuer_sequence']) {
+        assert.ok(!names.includes(column), `letters.${column} must be retired`);
       }
       assert.deepEqual(
         (

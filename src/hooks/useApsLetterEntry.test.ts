@@ -96,9 +96,7 @@ function draftHeader(overrides: Record<string, unknown> = {}) {
     letter_type: 'inbound',
     letter_number: '7',
     letter_number_raw: '007',
-    issuer_code: 'YM',
-    issuer_sequence: '0042',
-    letter_date: '2026-03-04',
+    issuer_reference: 'YM:42',
     party_id: id(501),
     sister_company_id: null,
     reclassification_reason: null,
@@ -169,8 +167,7 @@ describe('APS letter entry transport', () => {
     expect(draft.form).toMatchObject({
       type: 'inbound',
       number: '007',
-      issuerCode: 'YM',
-      issuerSequence: '0042',
+      letterCode: 'YM:42',
       partyId: id(501),
       lines: [{ amount: '10.00' }, { amount: '2.50' }],
     });
@@ -179,7 +176,8 @@ describe('APS letter entry transport', () => {
     expect(header.url.searchParams.get('select')).not.toContain('classifications(');
     const lines = requests.find(({ url }) => url.pathname.endsWith('/letter_lines'))!;
     expect(lines.url.searchParams.get('select')).toContain('amount::text');
-    expect(header.url.searchParams.get('select')).toContain('issuer_code');
+    expect(header.url.searchParams.get('select')).toContain('issuer_reference');
+    expect(header.url.searchParams.get('select')).not.toContain('letter_date');
     expect(lines.url.searchParams.get('letter_id')).toBe(`eq.${id(900)}`);
   });
 
@@ -244,6 +242,9 @@ describe('APS letter entry transport', () => {
     expect(classifyEntryError({ code: '23505', message: 'duplicate key' })).toBe('duplicate');
     expect(classifyEntryError({ code: 'P0001', message: 'aps_entry_stale_draft' })).toBe('stale');
     expect(classifyEntryError({ code: 'P0001', message: 'aps_entry_id_exists' })).toBe('existing');
+    expect(classifyEntryError({ code: 'P0001', message: 'aps_entry_duplicate_letter_code' })).toBe(
+      'duplicateLetterCode',
+    );
     expect(classifyEntryError({ code: '42501' })).toBe('forbidden');
     expect(classifyEntryError({ code: '22023' })).toBe('invalid');
     expect(classifyEntryError(new TypeError('Failed to fetch'))).toBe('network');
@@ -254,7 +255,6 @@ describe('APS letter entry transport', () => {
     const form: EntryForm = {
       ...newEntryForm(),
       number: '7',
-      date: '2026-03-04',
       yearId: id(400),
       partyId: id(501),
       lines: [
@@ -279,7 +279,7 @@ describe('APS letter entry transport', () => {
       ...newEntryForm(),
       type: 'external_transfer',
       number: '007',
-      date: '2026-03-04',
+      letterCode: 'YM:7',
       yearId: id(400),
       partyId: id(501),
       sisterId: id(601),
@@ -304,8 +304,7 @@ describe('APS letter entry transport', () => {
     expect(requests[0]!.url.pathname).toBe('/rest/v1/rpc/aps_save_letter_draft');
     expect(body).toMatchObject({
       p_letter_id: id(900),
-      p_issuer_code: null,
-      p_issuer_sequence: null,
+      p_issuer_reference: 'YM:7',
       p_expected_updated_at: '2026-03-04T10:00:00+00:00',
       p_letter_type: 'external_transfer',
       p_party_id: null,
@@ -325,16 +324,14 @@ describe('APS letter entry transport', () => {
     });
   });
 
-  it('sends the issuer code in upper case and keeps the sequence exactly as typed', async () => {
+  it('sends the letter code as one field and never sends the letter date', async () => {
     const requests = setupTransport(() =>
       json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' }),
     );
     const form: EntryForm = {
       ...newEntryForm(),
       number: '7',
-      issuerCode: 'ym',
-      issuerSequence: '0042',
-      date: '2026-03-04',
+      letterCode: 'YM:0042',
       yearId: id(400),
       partyId: id(501),
       lines: [
@@ -349,10 +346,11 @@ describe('APS letter entry transport', () => {
       ],
     };
     await saveEntryDraft(id(900), null, form);
-    expect(JSON.parse(requests[0]!.body)).toMatchObject({
-      p_issuer_code: 'YM',
-      p_issuer_sequence: '0042',
-    });
+    const body = JSON.parse(requests[0]!.body) as Record<string, unknown>;
+    expect(body).toMatchObject({ p_issuer_reference: 'YM:0042' });
+    // The accounting date is the database's answer now: the screen never sends it.
+    expect(body).not.toHaveProperty('p_letter_date');
+    expect(body).not.toHaveProperty('p_issuer_code');
   });
 
   it('reads the station beside the warehouse and requires a two-letter issuer code', () => {

@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   entryHasReclassification,
-  entryPeriod,
   entryTotal,
+  fiscalYearLabel,
+  isLetterCode,
+  letterCodeIncomplete,
   newEntryForm,
   normalizeEntryAmount,
-  searchIssuers,
+  normalizeLetterCode,
+  runningEntryPeriod,
   searchWarehouses,
   validateEntry,
   warehouseLabel,
@@ -63,7 +66,7 @@ function validForm(patch: Partial<EntryForm> = {}): EntryForm {
   return {
     ...newEntryForm(),
     number: '2458',
-    date: '2026-03-04',
+    letterCode: 'YM:63',
     yearId: id(400),
     partyId: id(501),
     lines: [
@@ -133,15 +136,14 @@ describe('APS letter entry validation', () => {
     ).toEqual({ code: 'total' });
   });
 
-  it('requires a number, a date inside the chosen year, and the matching party branch', () => {
+  it('requires a numeric EPS number, the configured year and the matching party branch', () => {
     expect(validateEntry(validForm({ number: '  ' }), options)).toEqual({ code: 'number' });
-    expect(validateEntry(validForm({ number: 'a\u0007' }), options)).toEqual({ code: 'number' });
-    expect(validateEntry(validForm({ number: 'x'.repeat(65) }), options)).toEqual({
+    expect(validateEntry(validForm({ number: 'A12' }), options)).toEqual({ code: 'number' });
+    expect(validateEntry(validForm({ number: '1'.repeat(65) }), options)).toEqual({
       code: 'number',
     });
-    expect(validateEntry(validForm({ yearId: id(999) }), options)).toEqual({ code: 'year' });
-    expect(validateEntry(validForm({ date: '2027-01-01' }), options)).toEqual({ code: 'date' });
-    expect(validateEntry(validForm({ date: '2026-02-30' }), options)).toEqual({ code: 'date' });
+    expect(validateEntry(validForm({ yearId: id(999) }), options)).toEqual({ code: 'period' });
+    expect(validateEntry(validForm({ yearId: '' }), options)).toEqual({ code: 'period' });
     expect(validateEntry(validForm({ partyId: id(502) }), options)).toEqual({ code: 'party' });
     expect(validateEntry(validForm({ type: 'external_transfer', partyId: '' }), options)).toEqual({
       code: 'sister',
@@ -177,7 +179,7 @@ describe('APS letter entry validation', () => {
     ).toEqual({ code: 'lineReference', line: 1 });
   });
 
-  it('labels a warehouse with its station and searches both, plus the issuer list', () => {
+  it('labels a warehouse with its station and searches both', () => {
     expect(warehouseLabel(options.warehouses[0]!)).toBe('احتياطي - غرب القاهرة');
     expect(warehouseLabel({ name: 'احتياطي', stationName: null })).toBe('احتياطي');
     expect(searchWarehouses(options.warehouses, 'غرب').map((item) => item.id)).toEqual([id(100)]);
@@ -185,29 +187,54 @@ describe('APS letter entry validation', () => {
       id(100),
     ]);
     expect(searchWarehouses(options.warehouses, 'شرق')).toEqual([]);
-    expect(searchIssuers(options.issuers, 'ياسر').map((item) => item.code)).toEqual(['YM']);
-    expect(searchIssuers(options.issuers, 'ym').map((item) => item.code)).toEqual(['YM']);
-    expect(searchIssuers(options.issuers, 'AA')).toEqual([]);
   });
 
   it('reads the running period from the periodic settings instead of guessing it', () => {
-    expect(entryPeriod(validForm(), options)).toMatchObject({
+    expect(runningEntryPeriod(options, '2026-03-04')).toMatchObject({
       month: { name: 'مارس', period: 2 },
       year: { id: id(400) },
     });
-    expect(entryPeriod(validForm({ date: '2026-07-01' }), options)).toBeNull();
-    expect(entryPeriod(validForm({ date: '' }), options)).toBeNull();
-    expect(entryPeriod(validForm({ yearId: '' }), options)).toBeNull();
+    expect(runningEntryPeriod(options, '2026-07-01')).toBeNull();
+    expect(
+      runningEntryPeriod(
+        { ...options, years: options.years.map((year) => ({ ...year, active: false })) },
+        '2026-07-01',
+      ),
+    ).toBeNull();
   });
 
-  it('accepts a listed issuer code and rejects anything else', () => {
-    expect(
-      validateEntry(validForm({ issuerCode: 'YM', issuerSequence: '0042' }), options),
-    ).toBeNull();
-    expect(validateEntry(validForm({ issuerCode: 'yy' }), options)).toEqual({ code: 'issuer' });
-    expect(validateEntry(validForm({ issuerCode: 'ZZ' }), options)).toEqual({ code: 'issuer' });
-    expect(validateEntry(validForm({ issuerSequence: 'x'.repeat(33) }), options)).toEqual({
-      code: 'issuerSequence',
+  it('writes the fiscal year the way the paper does', () => {
+    expect(fiscalYearLabel('2026-2027')).toBe('2026/2027');
+    expect(fiscalYearLabel(' السنة المالية 2026 ')).toBe('السنة المالية 2026');
+  });
+
+  it('builds the letter code as YM:63 from whatever the keyboard sends', () => {
+    expect(normalizeLetterCode('ym')).toBe('YM');
+    expect(normalizeLetterCode('ym63')).toBe('YM:63');
+    expect(normalizeLetterCode('YM:63')).toBe('YM:63');
+    expect(normalizeLetterCode('y m : 6 3')).toBe('YM:63');
+    expect(normalizeLetterCode('٦٣')).toBe('');
+    expect(normalizeLetterCode('يم63')).toBe('');
+    expect(normalizeLetterCode('y1')).toBe('Y');
+    expect(normalizeLetterCode('ymm63')).toBe('YM:63');
+    expect(normalizeLetterCode('ym63aa')).toBe('YM:63');
+    expect(isLetterCode('YM:63')).toBe(true);
+    expect(isLetterCode('YM:')).toBe(false);
+    expect(isLetterCode('YM63')).toBe(false);
+    expect(isLetterCode('ym:63')).toBe(false);
+    expect(letterCodeIncomplete('')).toBe(false);
+    expect(letterCodeIncomplete('YM')).toBe(true);
+  });
+
+  it('accepts a registered issuer prefix and rejects anything else', () => {
+    expect(validateEntry(validForm({ letterCode: 'YM:63' }), options)).toBeNull();
+    expect(validateEntry(validForm({ letterCode: '' }), options)).toBeNull();
+    expect(validateEntry(validForm({ letterCode: 'YM' }), options)).toEqual({
+      code: 'letterCode',
+    });
+    expect(validateEntry(validForm({ letterCode: 'YM:0063' }), options)).toBeNull();
+    expect(validateEntry(validForm({ letterCode: 'ZZ:1' }), options)).toEqual({
+      code: 'issuerCode',
     });
   });
 

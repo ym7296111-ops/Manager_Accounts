@@ -421,28 +421,27 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.newTitle.outbound': 'New outbound letter',
   'aps.entry.newTitle.internal_transfer': 'New internal transfer',
   'aps.entry.newTitle.external_transfer': 'New external transfer',
-  'aps.entry.periodBar': 'You are entering a letter in: {month} {year} — period {period}',
+  'aps.entry.periodLine': 'Period {period} — {month} {year} — fiscal year {fiscalYear}',
+  'aps.entry.periodOutside': 'Letter within fiscal year {fiscalYear} — outside the running period.',
   'aps.entry.periodUnknown':
-    'The letter date falls outside every configured month of the selected fiscal year. Check the date or the periodic settings.',
+    'No running period in the periodic settings covers today. Check the fiscal-month settings.',
   'aps.entry.periodClosed': 'Period closed',
   'aps.entry.epsNumber': 'System number (EPS)',
-  'aps.entry.issuerCode': 'Issuer code',
-  'aps.entry.chooseIssuer': 'Choose the issuer code',
-  'aps.entry.searchIssuer': 'Search by code or name',
-  'aps.entry.noIssuerMatches': 'No matching issuer',
-  'aps.entry.clearIssuer': 'Clear the issuer code',
-  'aps.entry.unavailableIssuer': 'The saved code is unavailable — choose an active issuer',
-  'aps.entry.issuerSequence': 'Issuer number',
+  'aps.entry.letterCode': 'Letter code',
+  'aps.entry.letterCodePlaceholder': 'YM:63',
+  'aps.entry.letterCodeHint': 'Two Latin letters, the colon added for you, then digits.',
+  'aps.entry.letterCodeInvalid':
+    'The required shape is two Latin letters, a colon, then digits (for example YM:63), with a registered issuer prefix.',
   'aps.entry.searchWarehouse': 'Search by warehouse or station',
   'aps.entry.noWarehouseMatches': 'No matching warehouse',
   'aps.entry.clearWarehouse': 'Clear the warehouse',
   'aps.entry.externalHint': 'With a sister company',
   'aps.entry.headerTitle': 'Letter information',
-  'aps.entry.headerHint': 'The number is unique within the selected fiscal year.',
-  'aps.entry.year': 'Fiscal year',
-  'aps.entry.chooseYear': 'Choose a fiscal year',
+  'aps.entry.headerHint':
+    'The period comes from the periodic settings; the number and the letter code are unique within the fiscal year.',
+  'aps.entry.counterpartyTitle': 'Counterparty',
+  'aps.entry.counterpartyHint': 'One counterparty per letter type; not asked for a transfer.',
   'aps.entry.yearClosed': 'Closed',
-  'aps.entry.yearSupplement': 'Supplements open',
   'aps.entry.partyInbound': 'Inbound party',
   'aps.entry.partyOutbound': 'Purpose of issue',
   'aps.entry.sister': 'Sister company',
@@ -506,6 +505,8 @@ export const en: Record<TranslationKey, string> = {
     'This draft cannot be edited safely because its lines are incomplete or unpaired.',
   'aps.entry.errorDuplicate':
     'This letter number is already used in the selected fiscal year. Choose another.',
+  'aps.entry.errorDuplicateCode':
+    'This letter code is already used in this fiscal year. Choose another number after the colon.',
   'aps.entry.errorExisting':
     'The draft may already have been saved. Open it before entering it again.',
   'aps.entry.errorStale':
@@ -516,11 +517,12 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.errorInvalid':
     'Could not save the letter. Check its values, fiscal year, classifications and period.',
   'aps.entry.errorUnknown': 'Could not save. Try again or contact your administrator.',
-  'aps.entry.validate.issuer': 'Choose an active issuer code from the list.',
-  'aps.entry.validate.issuerSequence': 'Enter an issuer number of at most 32 characters.',
-  'aps.entry.validate.number': 'Enter a valid letter number of 1 to 64 characters.',
-  'aps.entry.validate.year': 'Choose the fiscal year.',
-  'aps.entry.validate.date': 'Enter a date within the selected fiscal year.',
+  'aps.entry.validate.number': 'Enter the system number (EPS) in digits only, 1 to 64 digits.',
+  'aps.entry.validate.letterCode':
+    'Enter the letter code in the required shape: two Latin letters, a colon, then digits (for example YM:63).',
+  'aps.entry.validate.issuerCode': 'The letter code prefix is not a registered, active issuer.',
+  'aps.entry.validate.period':
+    'No running period is configured. Check the periodic settings before entering a letter.',
   'aps.entry.validate.party': 'Choose an active party from the correct branch.',
   'aps.entry.validate.sister': 'Choose an active sister company.',
   'aps.entry.validate.lines': 'Add at least one line within the allowed limit.',
