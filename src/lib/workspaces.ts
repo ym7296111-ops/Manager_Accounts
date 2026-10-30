@@ -60,5 +60,13 @@ export function getWorkspaceBySlug(slug: string | undefined): Workspace | null {
 /** Resolve only canonical workspace URLs; legacy URLs are redirected by the router. */
 export function getWorkspaceByPath(pathname: string): Workspace | null {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname;
-  return WORKSPACES.find((workspace) => workspace.path === normalized) ?? null;
+  return (
+    WORKSPACES.find(
+      (workspace) =>
+        workspace.path === normalized ||
+        (workspace.slug === 'aps' &&
+          (normalized === `${workspace.path}/letters` ||
+            normalized.startsWith(`${workspace.path}/letters/`))),
+    ) ?? null
+  );
 }

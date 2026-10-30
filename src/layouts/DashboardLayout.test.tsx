@@ -152,7 +152,7 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
     );
   });
 
-  it('opens a workspace group into its empty, prepared state', () => {
+  it('opens the APS workspace group to its read-only letters link', () => {
     renderLayout();
     const nav = within(sidebar());
 
@@ -163,7 +163,10 @@ describe('DashboardLayout (responsive shell + tree navigation)', () => {
     expect(chevron.getAttribute('aria-expanded')).toBe('true');
     const panel = panelOf(chevron);
     expect(panel?.getAttribute('data-open')).toBe('true');
-    expect(panel?.textContent).toContain('لا توجد عناصر بعد — جاهزة للتعبئة');
+    expect(panel?.textContent).toContain('استعراض الخطابات');
+    expect(
+      within(panel!).getByRole('link', { name: 'استعراض الخطابات' }).getAttribute('href'),
+    ).toBe('/workspaces/aps/letters');
   });
 
   it('navigates to a workspace screen when its header is clicked', () => {

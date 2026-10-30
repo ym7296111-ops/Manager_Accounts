@@ -1,0 +1,3 @@
+/* Tailwind's preview root is here; scan the real screens and app shell too. */
+@import '../../styles/globals.css';
+@source '../../';

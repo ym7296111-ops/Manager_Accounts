@@ -52,7 +52,7 @@ describe('App workspace routes', () => {
   });
 
   it.each([
-    ['/workspaces/1', '/workspaces/aps', 'APS'],
+    ['/workspaces/1', '/workspaces/aps/letters', 'الخطابات'],
     ['/workspaces/2', '/workspaces/workshops-10th', 'المنتج التام — ورش العاشر'],
     ['/workspaces/3', '/workspaces/reports', 'التقارير والاستعلامات'],
   ] as const)('redirects legacy workspace %s to %s', async (legacyPath, canonicalPath, title) => {

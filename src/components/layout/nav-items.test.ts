@@ -4,6 +4,8 @@ import {
   NAV_ITEMS,
   PROJECT_SETTINGS_CAPABILITY,
   filterNavByCapability,
+  findNavLinkByPath,
+  getGroupChainForPath,
   type NavGroupNode,
   type NavNode,
 } from './nav-items';
@@ -42,6 +44,28 @@ describe('sidebar capability filter', () => {
     for (const id of [...SYSTEM_LEAVES, ...APP_LEAVES, 'settings-project']) {
       expect(ids).toContain(id);
     }
+  });
+
+  it.each([
+    'aps.letters:read',
+    'aps.letters:create',
+    'aps.reconciliation:manage',
+    'aps.reconciliation:approve',
+  ])('shows APS letter browsing for the server-recognised %s capability', (capability) => {
+    expect(visibleLeafIds([capability])).toContain('aps-letters');
+  });
+
+  it('does not expose APS browsing for unrelated capabilities', () => {
+    expect(visibleLeafIds(['aps.letters:cancel', 'aps.letters:approve'])).not.toContain(
+      'aps-letters',
+    );
+  });
+
+  it('keeps the APS navigation active on detail routes, without matching unrelated paths', () => {
+    const detail = '/workspaces/aps/letters/00000000-0000-4000-8000-000000000001';
+    expect(findNavLinkByPath(NAV_ITEMS, detail)?.id).toBe('aps-letters');
+    expect(getGroupChainForPath(NAV_ITEMS, detail)).toEqual(['workspace-aps']);
+    expect(findNavLinkByPath(NAV_ITEMS, '/workspaces/aps/letters-other')).toBeNull();
   });
 
   it('places project settings last under settings with its dedicated capability', () => {
