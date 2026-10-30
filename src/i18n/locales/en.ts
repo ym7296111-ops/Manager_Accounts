@@ -421,7 +421,10 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.newTitle.outbound': 'New outbound letter',
   'aps.entry.newTitle.internal_transfer': 'New internal transfer',
   'aps.entry.newTitle.external_transfer': 'New external transfer',
-  'aps.entry.periodLine': 'Period {period} — {month} {year} — fiscal year {fiscalYear}',
+  /* See `ar.ts`: the badge, the month and the fiscal year — the month's own
+     year is implied by the fiscal year and is not repeated. */
+  'aps.entry.periodBadge': 'Period {period}',
+  'aps.entry.periodFiscalYear': 'Fiscal year {fiscalYear}',
   'aps.entry.periodOutside': 'Letter within fiscal year {fiscalYear} — outside the running period.',
   'aps.entry.periodUnknown':
     'No running period in the periodic settings covers today. Check the fiscal-month settings.',

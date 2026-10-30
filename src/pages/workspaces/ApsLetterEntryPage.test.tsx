@@ -237,7 +237,23 @@ describe('APS letter entry screen', () => {
 
   it('states the running period above two fields and asks for no date', () => {
     mount();
-    expect(screen.getByText(new RegExp(`فترة 2 — مارس ${calendarYear} — عام مالي`))).toBeTruthy();
+    // The period is a badge, the month is the emphasis, and the fiscal year is
+    // quiet. The month's own year is not printed twice: `أكتوبر` inside
+    // `2026/2027` already says which October it is.
+    const periodBar = screen
+      .getByText('بيانات الخطاب')
+      .closest('section')!
+      .querySelector('[role="status"]')!;
+    expect(within(periodBar as HTMLElement).getByText('فترة 2')).toBeTruthy();
+    expect(within(periodBar as HTMLElement).getByText('مارس')).toBeTruthy();
+    expect(
+      within(periodBar as HTMLElement).getByText(
+        `عام مالي ${calendarYear}/${Number(calendarYear) + 1}`,
+      ),
+    ).toBeTruthy();
+    // The month's own year is not repeated: the fiscal year already says it.
+    expect(periodBar.textContent).not.toContain('مارس ');
+    expect(periodBar.textContent).toContain('مارسعام مالي');
     // The three retired controls are gone: the date, the year and the issuer
     // picker. Only the EPS number and the letter-code number are typed; the
     // issuer is chosen from the register.

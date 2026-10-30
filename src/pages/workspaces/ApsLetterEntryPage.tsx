@@ -148,8 +148,10 @@ interface CachedEntry {
 // No financial data is placed in localStorage or sessionStorage.
 const unsavedEntries = new Map<string, CachedEntry>();
 
+/* Field labels are dark and one step larger than the hints under them: the
+   label is read first, and at `text-xs` it competed with the help text. */
 function labelClass() {
-  return 'text-foreground block min-w-0 space-y-2 text-xs font-semibold';
+  return 'text-foreground block min-w-0 space-y-2 text-sm font-semibold';
 }
 function SectionHeading({
   number,
@@ -563,33 +565,45 @@ function EntryEditor({
             hint={t('aps.entry.headerHint')}
           />
           {/* Line 1 — the running period, read from the periodic settings. It is
-              the only period statement on the screen: nothing is typed here. */}
+              the only period statement on the screen: nothing is typed here.
+              Three weights, not one sentence: the period is a badge, the month
+              is the emphasis, and the fiscal year is quiet — and the month's
+              own year is left out because the fiscal year already states it. */}
           <div
             role="status"
-            className="border-border bg-muted/55 text-foreground mt-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold"
+            className="border-border bg-muted/55 mt-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2.5"
           >
-            <CalendarDays className="text-primary size-4 shrink-0" aria-hidden="true" />
             {period !== null ? (
               <>
-                <span>
-                  {t('aps.entry.periodLine', {
-                    period: period.month.period,
-                    month: period.month.name,
-                    year: period.month.startDate.slice(0, 4),
+                <span className="bg-primary/10 text-primary inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-[11px] font-bold">
+                  {t('aps.entry.periodBadge', { period: period.month.period })}
+                </span>
+                <span className="inline-flex min-w-0 items-center gap-1.5">
+                  <CalendarDays className="text-primary size-4 shrink-0" aria-hidden="true" />
+                  <span className="text-foreground truncate text-sm font-semibold">
+                    {period.month.name}
+                  </span>
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {t('aps.entry.periodFiscalYear', {
                     fiscalYear: fiscalYearLabel(period.year.name),
                   })}
                 </span>
                 {period.month.closed && (
-                  <span className="text-destructive">— {t('aps.entry.periodClosed')}</span>
+                  <span className="text-destructive inline-flex items-center gap-1.5 text-xs font-semibold">
+                    <span aria-hidden="true" className="bg-destructive size-1.5 rounded-full" />
+                    {t('aps.entry.periodClosed')}
+                  </span>
                 )}
               </>
-            ) : activeYear !== null ? (
-              <span className="text-muted-foreground font-normal">
-                {t('aps.entry.periodOutside', { fiscalYear: fiscalYearLabel(activeYear.name) })}
-              </span>
             ) : (
-              <span className="text-muted-foreground font-normal">
-                {t('aps.entry.periodUnknown')}
+              <span className="text-muted-foreground inline-flex min-w-0 items-center gap-2 text-xs leading-relaxed">
+                <CalendarDays className="size-4 shrink-0" aria-hidden="true" />
+                {activeYear !== null
+                  ? t('aps.entry.periodOutside', {
+                      fiscalYear: fiscalYearLabel(activeYear.name),
+                    })
+                  : t('aps.entry.periodUnknown')}
               </span>
             )}
           </div>
@@ -612,7 +626,7 @@ function EntryEditor({
               />
             </label>
             <div className="min-w-0 space-y-2">
-              <span id={letterCodeId} className="text-foreground block text-xs font-semibold">
+              <span id={letterCodeId} className="text-foreground block text-sm font-semibold">
                 {t('aps.entry.letterCode')}
               </span>
               <div

@@ -222,8 +222,9 @@ test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   await expect(page.getByLabel('المصدر — المخزن')).toBeVisible();
   await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
-  // The two-line header still fits: the period line and the two inputs.
-  await expect(page.getByText(/عام مالي /)).toBeVisible();
+  // The two-line header still fits: the period bar, the two inputs and the
+  // yellow code group all stay inside 390px.
+  await expect(page.getByText(/عام مالي \d{4}\/\d{4}/)).toBeVisible();
   await expect(page.getByLabel('المُصدر')).toBeVisible();
   await expect(page.getByLabel('الرقم', { exact: true })).toBeVisible();
   await expectNoHorizontalOverflow(page);
@@ -271,9 +272,19 @@ test('the letter header is a period line and two typed numbers, nothing else', a
   const headerSection = page.locator('section', {
     has: page.getByRole('heading', { name: 'بيانات الخطاب' }),
   });
-  // Line 1: the running period, read from the periodic settings.
-  await expect(headerSection.getByText(/فترة \d+ — /)).toBeVisible();
-  await expect(headerSection.getByText(/عام مالي /)).toBeVisible();
+  // Line 1: the running period, read from the periodic settings. It is three
+  // weights, not one sentence — a badge, the month, then a quiet fiscal year —
+  // and the month's own year is not printed twice.
+  const periodBar = headerSection.locator('[role="status"]');
+  await expect(periodBar.getByText(/^فترة \d+$/)).toBeVisible();
+  await expect(
+    periodBar.getByText(
+      /^(يناير|فبراير|مارس|أبريل|مايو|يونيو|يوليو|أغسطس|سبتمبر|أكتوبر|نوفمبر|ديسمبر)$/,
+    ),
+  ).toBeVisible();
+  await expect(periodBar.getByText(/عام مالي \d{4}\/\d{4}$/)).toBeVisible();
+  /* One year statement only: `أكتوبر 2026 — عام مالي 2026/2027` used to repeat it. */
+  await expect(periodBar).not.toHaveText(/\d{4} — /);
 
   // The date and the fiscal year are gone from the screen.
   await expect(page.getByLabel('تاريخ الخطاب')).toHaveCount(0);
