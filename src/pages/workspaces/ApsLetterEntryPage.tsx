@@ -181,34 +181,48 @@ function SectionHeading({
     </div>
   );
 }
+/**
+ * A name-only picker for the flat editors. The registry code rides along as
+ * search keywords — typed `CLS-009` still finds the row — but is never
+ * printed next to the name: the same rule the tree's pickers follow, so the
+ * entry screen keeps one widget and one label style across letter types.
+ */
 function OptionSelect({
   label,
   value,
   options,
   placeholder,
+  searchPlaceholder,
+  noMatches,
+  clearLabel,
   onChange,
 }: {
   readonly label: string;
   readonly value: string;
   readonly options: readonly EntryOption[];
   readonly placeholder: string;
+  readonly searchPlaceholder: string;
+  readonly noMatches: string;
+  readonly clearLabel: string;
   readonly onChange: (value: string) => void;
 }) {
   const { t } = useI18n();
-  const missing = value !== '' && !options.some((option) => option.id === value);
   return (
-    <label className={labelClass()}>
-      <span>{label}</span>
-      <select className={CONTROL} value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">{placeholder}</option>
-        {missing && <option value={value}>{t('aps.entry.unavailableOption')}</option>}
-        {options.map((item) => (
-          <option key={item.id} value={item.id}>
-            {item.name} — {item.code}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SearchCombobox
+      label={label}
+      value={value}
+      options={options.map((item) => ({
+        value: item.id,
+        label: item.name,
+        keywords: `${item.name} ${item.code}`,
+      }))}
+      placeholder={placeholder}
+      searchPlaceholder={searchPlaceholder}
+      noMatches={noMatches}
+      clearLabel={clearLabel}
+      missingLabel={t('aps.entry.unavailableOption')}
+      onChange={onChange}
+    />
   );
 }
 function Alert({
@@ -791,6 +805,9 @@ function EntryEditor({
                   value={form.sisterId}
                   options={options.sisters}
                   placeholder={t('aps.entry.chooseSister')}
+                  searchPlaceholder={t('aps.entry.searchSister')}
+                  noMatches={t('aps.entry.noSisterMatches')}
+                  clearLabel={t('aps.entry.clearSister')}
                   onChange={(sisterId) => patch({ sisterId })}
                 />
               )}
@@ -903,6 +920,9 @@ function EntryEditor({
                           value={line.classificationId}
                           options={options.classifications}
                           placeholder={t('aps.entry.chooseClassification')}
+                          searchPlaceholder={t('aps.entry.searchClassification')}
+                          noMatches={t('aps.entry.noClassificationMatches')}
+                          clearLabel={t('aps.entry.clearClassification')}
                           onChange={(classificationId) =>
                             updateLine(line.key, { classificationId })
                           }
@@ -931,6 +951,9 @@ function EntryEditor({
                           value={line.destinationClassificationId}
                           options={options.classifications}
                           placeholder={t('aps.entry.chooseClassification')}
+                          searchPlaceholder={t('aps.entry.searchClassification')}
+                          noMatches={t('aps.entry.noClassificationMatches')}
+                          clearLabel={t('aps.entry.clearClassification')}
                           onChange={(destinationClassificationId) =>
                             updateLine(line.key, { destinationClassificationId })
                           }
@@ -955,6 +978,9 @@ function EntryEditor({
                         value={line.classificationId}
                         options={options.classifications}
                         placeholder={t('aps.entry.chooseClassification')}
+                        searchPlaceholder={t('aps.entry.searchClassification')}
+                        noMatches={t('aps.entry.noClassificationMatches')}
+                        clearLabel={t('aps.entry.clearClassification')}
                         onChange={(classificationId) => updateLine(line.key, { classificationId })}
                       />
                       <label className={labelClass()}>
