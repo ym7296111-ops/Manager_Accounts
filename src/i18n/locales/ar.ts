@@ -395,8 +395,6 @@ export const ar = {
   'aps.entry.title': 'إنشاء خطاب جديد',
   'aps.entry.editTitle': 'إكمال مسودة خطاب',
   'aps.entry.description': 'أدخل البيانات كما وردت في الخطاب الورقي، ثم احفظها مسودة أو اعتمدها.',
-  'aps.entry.typeHint':
-    'النوع يحدد الحقول المطلوبة: جهة الوارد أو الصرف، أو الشركة الشقيقة، أو زوج المصدر والوجهة.',
   'aps.entry.typeTitle': 'اختر نوع الخطاب',
   'aps.entry.inboundHint': 'استلام مواد أو قيمة',
   'aps.entry.outboundHint': 'صرف مواد أو قيمة',
@@ -437,7 +435,7 @@ export const ar = {
   'aps.entry.clearWarehouse': 'مسح المخزن',
   'aps.entry.headerTitle': 'بيانات الخطاب',
   'aps.entry.headerHint':
-    'الفترة تُقرأ من الضبط الدوري، والرقم وكود الخطاب فريدان داخل السنة المالية.',
+    'النوع يحدد الحقول المطلوبة، والفترة تُقرأ من الضبط الدوري؛ الرقم وكود الخطاب فريدان داخل السنة المالية.',
   'aps.entry.counterpartyTitle': 'الجهة',
   'aps.entry.counterpartyHint': 'جهة واحدة حسب نوع الخطاب؛ لا تُطلب في التحويل الداخلي.',
   'aps.entry.yearClosed': 'مغلقة',

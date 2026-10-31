@@ -222,8 +222,14 @@ test('entry stays usable at 390px with the paired layout', async ({ page }) => {
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   await expect(page.getByLabel('المصدر — المخزن')).toBeVisible();
   await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
-  // The two-line header still fits: the period bar, the two inputs and the
-  // yellow code group all stay inside 390px.
+  // The merged header still fits: the four type labels in one row, the period
+  // bar, then EPS above the letter code — all inside 390px, no sideways scroll.
+  const typeSwitch = page.getByRole('group', { name: 'اختر نوع الخطاب' });
+  await expect(typeSwitch.getByRole('button')).toHaveCount(4);
+  const labels = await typeSwitch
+    .getByRole('button')
+    .evaluateAll((nodes) => nodes.map((node) => Math.round(node.getBoundingClientRect().height)));
+  expect(new Set(labels).size).toBe(1);
   await expect(page.getByText(/عام مالي \d{4}\/\d{4}/)).toBeVisible();
   await expect(page.getByLabel('المُصدر')).toBeVisible();
   await expect(page.getByLabel('الرقم', { exact: true })).toBeVisible();
@@ -265,14 +271,22 @@ test('the sticky header states the letter type and does not duplicate the title'
   await expectNoHorizontalOverflow(page);
 });
 
-test('the letter header is a period line and two typed numbers, nothing else', async ({ page }) => {
+test('type, period and numbers share one «بيانات الخطاب» paragraph', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto('/workspaces/aps/letters/new');
 
   const headerSection = page.locator('section', {
     has: page.getByRole('heading', { name: 'بيانات الخطاب' }),
   });
-  // Line 1: the running period, read from the periodic settings. It is three
+  await expect(headerSection).toHaveCount(1);
+  /* The type used to be a paragraph of its own, headed «اختر نوع الخطاب» right
+     under a sticky header that already names the type. It is a switch now. */
+  await expect(page.getByRole('heading', { name: 'اختر نوع الخطاب' })).toHaveCount(0);
+  const typeSwitch = headerSection.getByRole('group', { name: 'اختر نوع الخطاب' });
+  await expect(typeSwitch).toBeVisible();
+  await expect(typeSwitch.getByRole('button')).toHaveCount(4);
+
+  // Line 2: the running period, read from the periodic settings. It is three
   // weights, not one sentence — a badge, the month, then a quiet fiscal year —
   // and the month's own year is not printed twice.
   const periodBar = headerSection.locator('[role="status"]');
@@ -286,11 +300,22 @@ test('the letter header is a period line and two typed numbers, nothing else', a
   /* One year statement only: `أكتوبر 2026 — عام مالي 2026/2027` used to repeat it. */
   await expect(periodBar).not.toHaveText(/\d{4} — /);
 
+  /* Reading order inside the paragraph: the switch, then the period, then the
+     two typed numbers — the order the clerk works in. */
+  const switchBox = await typeSwitch.boundingBox();
+  const periodBox = await periodBar.boundingBox();
+  const epsBox = await page.getByLabel('رقم النظام (EPS)').boundingBox();
+  expect(switchBox!.y).toBeLessThan(periodBox!.y);
+  expect(periodBox!.y).toBeLessThan(epsBox!.y);
+  /* The switch is a row of labels, not four cards: one band, icon + text. */
+  expect(switchBox!.height).toBeLessThan(60);
+  expect(switchBox!.width).toBeLessThan(periodBox!.width);
+
   // The date and the fiscal year are gone from the screen.
   await expect(page.getByLabel('تاريخ الخطاب')).toHaveCount(0);
   await expect(page.getByLabel('السنة المالية')).toHaveCount(0);
-  // Two lines only: the read-only period, the EPS number and the two controls
-  // of the letter code.
+  // Three lines only: the switch, the read-only period, the EPS number and the
+  // two controls of the letter code.
   await expect(headerSection.getByRole('textbox')).toHaveCount(2);
   await expect(headerSection.getByRole('combobox')).toHaveCount(1);
 

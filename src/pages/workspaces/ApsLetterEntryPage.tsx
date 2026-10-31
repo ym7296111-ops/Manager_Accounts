@@ -519,17 +519,22 @@ function EntryEditor({
         disabled={busy !== null || approved || approvalUnknown}
         className="min-w-0 space-y-5 disabled:opacity-75"
       >
+        {/* One paragraph, three answers: which type, in which period, under which
+            numbers. The type used to be a paragraph of its own with a heading
+            that restated the sticky header — the four buttons are a switch that
+            belongs with the rest of the header data. */}
         <section className={CARD}>
           <SectionHeading
             number="01"
-            title={t('aps.entry.typeTitle')}
-            hint={t('aps.entry.typeHint')}
+            title={t('aps.entry.headerTitle')}
+            hint={t('aps.entry.headerHint')}
           />
-          {/* One row, four buttons: the type is a switch, not a page. */}
+          {/* 1 — the type. One row of four labels, sized to their text: a switch
+              inside the paragraph, not four cards of their own. */}
           <div
             role="group"
             aria-label={t('aps.entry.typeTitle')}
-            className="border-border bg-muted/45 mt-4 grid min-w-0 grid-cols-4 gap-1 rounded-xl border p-1"
+            className="border-border bg-muted/45 mt-4 grid min-w-0 grid-cols-4 gap-1 rounded-xl border p-1 @2xl:inline-grid @2xl:auto-cols-max @2xl:grid-flow-col @2xl:grid-cols-none"
           >
             {TYPES.map(({ value, hint, icon: Icon, color }) => {
               const selected = form.type === value;
@@ -542,36 +547,29 @@ function EntryEditor({
                   onClick={() => {
                     if (!selected) patch({ type: value, partyId: '', sisterId: '' });
                   }}
-                  className={`focus-visible:ring-ring flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1 py-2 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none @xl:flex-row @xl:gap-2 @xl:px-3 ${selected ? 'bg-card text-foreground border-border border shadow-sm' : 'text-muted-foreground hover:bg-card/60 border border-transparent'}`}
+                  className={`focus-visible:ring-ring flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none @xl:flex-row @xl:gap-2 @xl:px-3 @xl:py-2 ${selected ? 'bg-card text-foreground border-border border shadow-sm' : 'text-muted-foreground hover:bg-card/60 border border-transparent'}`}
                 >
                   <span
                     className={`hidden size-7 shrink-0 place-items-center rounded-md @xl:grid ${color}`}
                   >
                     <Icon className="size-4" aria-hidden="true" />
                   </span>
-                  <span className="text-[11px] leading-tight font-bold break-words @xl:text-sm">
+                  <span className="text-[10px] leading-tight font-bold break-words @xl:text-sm">
                     {t(`aps.letters.type.${value}`)}
                   </span>
                 </button>
               );
             })}
           </div>
-        </section>
 
-        <section className={CARD}>
-          <SectionHeading
-            number="02"
-            title={t('aps.entry.headerTitle')}
-            hint={t('aps.entry.headerHint')}
-          />
-          {/* Line 1 — the running period, read from the periodic settings. It is
-              the only period statement on the screen: nothing is typed here.
+          {/* 2 — the running period, read from the periodic settings. It is the
+              only period statement on the screen: nothing is typed here.
               Three weights, not one sentence: the period is a badge, the month
               is the emphasis, and the fiscal year is quiet — and the month's
               own year is left out because the fiscal year already states it. */}
           <div
             role="status"
-            className="border-border bg-muted/55 mt-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2.5"
+            className="border-border bg-muted/55 mt-3 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2.5"
           >
             {period !== null ? (
               <>
@@ -607,11 +605,12 @@ function EntryEditor({
               </span>
             )}
           </div>
-          {/* Line 2 — the EPS number is typed, and the letter code is answered
-              by a dropdown of the registered issuers plus a digits-only field.
-              No date, no fiscal-year picker, no period field: all three are
-              answered above or by the database. */}
-          <div className="mt-4 grid min-w-0 gap-4 @2xl:grid-cols-2">
+          {/* 3 — one row: the EPS number is typed, and the letter code is
+              answered by a dropdown of the registered issuers plus a digits-only
+              field. No date, no fiscal-year picker, no period field: all three
+              are answered above or by the database. The row splits in two only
+              when the width cannot hold both fields side by side. */}
+          <div className="mt-4 grid min-w-0 gap-4 @xl:grid-cols-2">
             <label className={labelClass()}>
               <span>{t('aps.entry.epsNumber')}</span>
               <input
@@ -708,13 +707,14 @@ function EntryEditor({
           </div>
         </section>
 
-        {/* The counterparty is not header data any more, but it is still one
-            answer: a single row beside its own label, not a whole card of air. */}
+        {/* The counterparty is not header data, but it is still one answer: a
+            single row beside its own label, not a whole card of air. It follows
+            the merged header paragraph, so it is the second number. */}
         {!transfer && (
           <section className={`${CARD} flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end`}>
             <div className="flex min-w-0 items-start gap-2 sm:w-60 sm:shrink-0">
               <span className="bg-primary/10 text-primary grid size-7 shrink-0 place-items-center rounded-lg text-xs font-bold">
-                03
+                02
               </span>
               <div className="min-w-0">
                 <h3 className="text-foreground text-sm font-bold">
@@ -773,7 +773,7 @@ function EntryEditor({
         <section className="min-w-0 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <SectionHeading
-              number={transfer ? '03' : '04'}
+              number={transfer ? '02' : '03'}
               title={t(transfer ? 'aps.entry.pairsTitle' : 'aps.entry.linesTitle')}
               hint={t(transfer ? 'aps.entry.pairsHint' : 'aps.entry.linesHint')}
             />
