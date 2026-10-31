@@ -2,11 +2,13 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { classifyPostgrestReadError } from '@/hooks/postgrestReadError';
 import {
+  centsToSignedAmount,
   isEntryOptionId,
   isEntryType,
   isLetterCode,
   newEntryLine,
   normalizeEntryAmount,
+  signedAmountToCents,
   type EntryForm,
   type EntryIssuer,
   type EntryLine,
@@ -26,6 +28,7 @@ export type EntryErrorCode =
   | 'network'
   | 'duplicate'
   | 'duplicateLetterCode'
+  | 'duplicatePartyLine'
   | 'existing'
   | 'stale'
   | 'invalid'
@@ -61,6 +64,8 @@ export function classifyEntryError(error: unknown, status?: number): EntryErrorC
   if (code === '23505') return 'duplicate';
   if (code === 'P0001' && message.includes('aps_entry_duplicate_letter_code'))
     return 'duplicateLetterCode';
+  if (code === 'P0001' && message.includes('aps_entry_duplicate_party_line'))
+    return 'duplicatePartyLine';
   if (code === 'P0001' && message.includes('aps_entry_id_exists')) return 'existing';
   if (code === 'P0001' && message.includes('aps_entry_stale_draft')) return 'stale';
   if (
@@ -218,6 +223,7 @@ export async function fetchEntryOptions(): Promise<EntryOptions> {
 interface RawDraftLine {
   readonly id: string;
   readonly direction: 'in' | 'out';
+  readonly partyId: string | null;
   readonly warehouseId: string;
   readonly classificationId: string;
   readonly amount: string;
@@ -240,6 +246,7 @@ function parseDraftLine(value: unknown): RawDraftLine {
   return {
     id: row.id,
     direction: row.direction,
+    partyId: nullableId(row.party_id ?? null),
     warehouseId: row.warehouse_id,
     classificationId: row.classification_id,
     amount,
@@ -250,6 +257,8 @@ function parseDraftLine(value: unknown): RawDraftLine {
 export interface LoadedDraft {
   readonly id: string;
   readonly updatedAt: string;
+  /** The accounting date the draft was written with; null when unreadable. */
+  readonly letterDate: string | null;
   readonly form: EntryForm;
 }
 export function parseEntryDraft(
@@ -275,6 +284,8 @@ export function parseEntryDraft(
   )
     throw new ApsEntryError('notFound');
   const type = header.letter_type;
+  const partyId = nullableId(header.party_id) ?? '';
+  const sisterId = nullableId(header.sister_company_id) ?? '';
   const rows = lineValues.map(parseDraftLine);
   let lines: EntryLine[];
   if (type === 'internal_transfer') {
@@ -296,6 +307,7 @@ export function parseEntryDraft(
       claimed.add(destination.id);
       return {
         key: source.id,
+        partyId: '',
         warehouseId: source.warehouseId,
         classificationId: source.classificationId,
         destinationWarehouseId: destination.warehouseId,
@@ -309,6 +321,9 @@ export function parseEntryDraft(
       throw new ApsEntryError('invalid');
     lines = rows.map((row) => ({
       key: row.id,
+      // A line written before the party moved onto it keeps the header party:
+      // that is who the whole letter belonged to, line by line.
+      partyId: row.partyId ?? partyId,
       warehouseId: row.warehouseId,
       classificationId: row.classificationId,
       destinationWarehouseId: '',
@@ -317,14 +332,14 @@ export function parseEntryDraft(
     }));
   }
   if (lines.length === 0) lines = [newEntryLine()];
-  const partyId = nullableId(header.party_id) ?? '';
-  const sisterId = nullableId(header.sister_company_id) ?? '';
   if ((type === 'inbound' || type === 'outbound') && partyId === '')
     throw new ApsEntryError('invalid');
   if (type === 'external_transfer' && sisterId === '') throw new ApsEntryError('invalid');
+  const rawDate = text(header.letter_date);
   return {
     id: header.id,
     updatedAt,
+    letterDate: rawDate !== null && isLetterDate(rawDate) ? rawDate : null,
     form: {
       type,
       number,
@@ -345,7 +360,7 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
   const header = await current
     .from('letters')
     .select(
-      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, issuer_reference, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
+      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, letter_date, issuer_reference, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
     )
     .eq('id', id)
     .maybeSingle();
@@ -360,7 +375,9 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
     throw new ApsEntryError('notFound');
   const lines = await current
     .from('letter_lines')
-    .select('id, direction, warehouse_id, classification_id, amount::text, paired_line_id')
+    .select(
+      'id, direction, party_id, warehouse_id, classification_id, amount::text, paired_line_id',
+    )
     .eq('letter_id', id)
     .order('line_number', { ascending: true })
     .limit(500);
@@ -405,7 +422,14 @@ export async function saveEntryDraft(
           destination_classification_id: line.destinationClassificationId,
           amount,
         }
-      : { warehouse_id: line.warehouseId, classification_id: line.classificationId, amount };
+      : {
+          warehouse_id: line.warehouseId,
+          classification_id: line.classificationId,
+          amount,
+          ...(form.type === 'inbound' || form.type === 'outbound'
+            ? { party_id: line.partyId }
+            : {}),
+        };
   });
   const response = await client().rpc('aps_save_letter_draft', {
     p_letter_id: id,
@@ -413,7 +437,12 @@ export async function saveEntryDraft(
     p_fiscal_year_id: form.yearId,
     p_letter_type: form.type,
     p_letter_number: form.number,
-    p_party_id: form.type === 'inbound' || form.type === 'outbound' ? form.partyId : null,
+    // The header keeps the primary party: the first line's. The database
+    // re-derives the same value from the lines, so the two cannot drift.
+    p_party_id:
+      form.type === 'inbound' || form.type === 'outbound'
+        ? form.lines[0]?.partyId || form.partyId || null
+        : null,
     p_sister_company_id: form.type === 'external_transfer' ? form.sisterId : null,
     p_direction: form.type === 'external_transfer' ? form.direction : null,
     p_reclassification_reason: form.type === 'internal_transfer' ? form.reason : null,
@@ -432,4 +461,45 @@ export async function saveEntryDraft(
 export async function approveEntryLetter(id: string): Promise<void> {
   const response = await client().rpc('aps_approve_letter', { p_letter_id: id });
   assertResponse(response);
+}
+
+/**
+ * Physical balances for the tree badges, keyed `warehouseId:classificationId`.
+ * A missing key means the pair has never moved: its balance is zero. The map
+ * is a display aid only — a read failure hides the badges, never the letter.
+ */
+export async function fetchLetterBalances(
+  yearId: string,
+  asOfDate: string,
+): Promise<ReadonlyMap<string, string>> {
+  const response = await client().rpc('aps_letter_balances', {
+    p_fiscal_year_id: yearId,
+    p_as_of_date: asOfDate,
+  });
+  assertResponse(response);
+  if (!Array.isArray(response.data)) throw new ApsEntryError('invalid');
+  const balances = new Map<string, string>();
+  for (const value of response.data) {
+    const row = record(value);
+    const cents = typeof row?.balance === 'string' ? signedAmountToCents(row.balance) : null;
+    if (
+      !isEntryOptionId(row?.warehouse_id) ||
+      !isEntryOptionId(row?.classification_id) ||
+      cents === null
+    )
+      throw new ApsEntryError('invalid');
+    balances.set(`${row.warehouse_id}:${row.classification_id}`, centsToSignedAmount(cents));
+  }
+  return balances;
+}
+
+export function useLetterBalances(yearId: string, asOfDate: string | null) {
+  const { session } = useAuth();
+  const actor = session?.user.id ?? null;
+  return useQuery({
+    queryKey: ['aps', 'letter-balances', actor, yearId, asOfDate],
+    queryFn: () => fetchLetterBalances(yearId, asOfDate ?? ''),
+    enabled: actor !== null && yearId !== '' && asOfDate !== null,
+    retry: false,
+  });
 }

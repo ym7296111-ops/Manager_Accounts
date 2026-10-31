@@ -183,8 +183,10 @@ const entryOptions = {
   ],
   parties: [
     { id: uid(501), name: 'شركة النيل للمستلزمات', code: 'IN-014', branch: 'inbound' },
+    { id: uid(504), name: 'المشتريات المحلية', code: 'IN-002', branch: 'inbound' },
     { id: uid(502), name: 'إدارة التشغيل والصيانة', code: 'OUT-006', branch: 'outbound' },
     { id: uid(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
+    { id: uid(505), name: 'صرف عام', code: 'OUT-001', branch: 'outbound' },
   ],
   sister_companies: [{ id: uid(601), name: 'الشركة الشقيقة — فرع القاهرة', code: 'SIS-002' }],
 };
@@ -249,6 +251,7 @@ interface PreviewLetter {
   issuer_reference: string | null;
   fiscal_year_id: string;
   party_id: string | null;
+  party_count: number;
   sister_company_id: string | null;
   reclassification_reason: string | null;
   created_by: string;
@@ -257,6 +260,7 @@ interface PreviewLetter {
 const letters: PreviewLetter[] = sampleLetters.map((item) => ({
   ...item,
   fiscal_year_id: uid(401),
+  party_count: item.letter_type === 'inbound' || item.letter_type === 'outbound' ? 1 : 0,
   party_id:
     item.letter_type === 'inbound'
       ? uid(501)
@@ -322,6 +326,9 @@ interface PreviewLine {
   letter_id: string;
   line_number: number;
   direction: Direction;
+  party_id: string | null;
+  party_code: string | null;
+  party_name: string | null;
   warehouse_id: string;
   classification_id: string;
   warehouse_name: string;
@@ -330,13 +337,21 @@ interface PreviewLine {
   amount: string;
   paired_line_id: string | null;
 }
-const lines: PreviewLine[] = sampleLines.map((item) => ({
-  ...item,
-  paired_line_id: item.id === uid(305) ? uid(304) : null,
-}));
+const lines: PreviewLine[] = sampleLines.map((item) => {
+  const letter = letters.find((row) => row.id === item.letter_id);
+  const party = entryOptions.parties.find((row) => row.id === letter?.party_id);
+  return {
+    ...item,
+    party_id: letter?.party_id ?? null,
+    party_code: party?.code ?? null,
+    party_name: party?.name ?? null,
+    paired_line_id: item.id === uid(305) ? uid(304) : null,
+  };
+});
 
 interface MockEntryLine {
   amount: string;
+  party_id?: string;
   warehouse_id?: string;
   classification_id?: string;
   source_warehouse_id?: string;
@@ -413,18 +428,23 @@ function saveMockDraft(input: MockEntrySave): Response {
     classificationId: string | undefined,
     amount: string,
     pair: string | null = null,
+    partyId: string | null = null,
   ) {
     const store = entryOptions.warehouses.find((item) => item.id === warehouseId);
     const classification = entryOptions.classifications.find(
       (item) => item.id === classificationId,
     );
     if (!store || !classification) throw new Error('Invalid preview option');
+    const lineParty = entryOptions.parties.find((item) => item.id === partyId);
     const id = crypto.randomUUID();
     created.push({
       id,
       letter_id: input.p_letter_id,
       line_number: created.length + 1,
       direction,
+      party_id: partyId,
+      party_code: lineParty?.code ?? null,
+      party_name: lineParty?.name ?? null,
       warehouse_id: store.id,
       classification_id: classification.id,
       warehouse_name: store.name,
@@ -453,7 +473,14 @@ function saveMockDraft(input: MockEntrySave): Response {
             ? 'out'
             : input.p_direction;
       if (direction === null) throw new Error('Invalid preview direction');
-      add(direction, item.warehouse_id, item.classification_id, item.amount);
+      add(
+        direction,
+        item.warehouse_id,
+        item.classification_id,
+        item.amount,
+        null,
+        item.party_id ?? input.p_party_id,
+      );
     }
   }
   const totalOut = monetary(
@@ -466,7 +493,20 @@ function saveMockDraft(input: MockEntrySave): Response {
       .filter((line) => line.direction === 'in')
       .reduce((sum, line) => sum + cents(line.amount), 0n),
   );
-  const party = entryOptions.parties.find((item) => item.id === input.p_party_id);
+  if (input.p_letter_type === 'inbound' || input.p_letter_type === 'outbound') {
+    const triples = new Set<string>();
+    for (const createdLine of created) {
+      const triple = `${createdLine.party_id}:${createdLine.warehouse_id}:${createdLine.classification_id}`;
+      if (triples.has(triple))
+        return response({ code: 'P0001', message: 'aps_entry_duplicate_party_line' }, 400);
+      triples.add(triple);
+    }
+  }
+  const primaryPartyId =
+    input.p_letter_type === 'inbound' || input.p_letter_type === 'outbound'
+      ? (created[0]?.party_id ?? input.p_party_id)
+      : input.p_party_id;
+  const party = entryOptions.parties.find((item) => item.id === primaryPartyId);
   const sister = entryOptions.sister_companies.find(
     (item) => item.id === input.p_sister_company_id,
   );
@@ -487,7 +527,8 @@ function saveMockDraft(input: MockEntrySave): Response {
     cancel_reason: null,
     settlement_reason: null,
     fiscal_year_id: input.p_fiscal_year_id,
-    party_id: input.p_party_id,
+    party_id: primaryPartyId,
+    party_count: new Set(created.map((item) => item.party_id).filter((id) => id !== null)).size,
     sister_company_id: input.p_sister_company_id,
     reclassification_reason: input.p_reclassification_reason,
     issuer_reference: issuerReference,
@@ -528,6 +569,35 @@ async function previewFetch(input: RequestInfo | URL, init?: RequestInit): Promi
     if (saved.ok && scenario === 'save-unknown')
       throw new TypeError('Preview response lost after save');
     return saved;
+  }
+  if (url.pathname.endsWith('/rpc/aps_letter_balances')) {
+    const payload = JSON.parse(typeof init?.body === 'string' ? init.body : '{}') as {
+      p_as_of_date?: string;
+    };
+    const asOf = payload.p_as_of_date ?? '9999-12-31';
+    const opening: Record<string, string> = {
+      [`${uid(101)}:${uid(201)}`]: '500000.00',
+      [`${uid(101)}:${uid(202)}`]: '80000.00',
+      [`${uid(102)}:${uid(202)}`]: '25000.00',
+      [`${uid(103)}:${uid(203)}`]: '60000.00',
+    };
+    const totals = new Map<string, bigint>();
+    for (const [key, amount] of Object.entries(opening)) totals.set(key, cents(amount));
+    for (const previewLine of lines) {
+      const letter = letters.find((item) => item.id === previewLine.letter_id);
+      if (!letter || letter.status !== 'approved' || letter.letter_date > asOf) continue;
+      const key = `${previewLine.warehouse_id}:${previewLine.classification_id}`;
+      const delta = cents(previewLine.amount) * (previewLine.direction === 'in' ? 1n : -1n);
+      totals.set(key, (totals.get(key) ?? 0n) + delta);
+    }
+    return response(
+      [...totals.entries()].map(([key, value]) => {
+        const [warehouse_id, classification_id] = key.split(':');
+        const sign = value < 0n ? '-' : '';
+        const absolute = value < 0n ? -value : value;
+        return { warehouse_id, classification_id, balance: `${sign}${monetary(absolute)}` };
+      }),
+    );
   }
   if (url.pathname.endsWith('/rpc/aps_approve_letter')) {
     if (scenario === 'approval-fails')
