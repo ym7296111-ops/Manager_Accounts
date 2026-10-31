@@ -35,6 +35,12 @@ export interface SearchComboboxProps {
   readonly clearLabel: string;
   /** Shown when a saved value is no longer in the active list. */
   readonly missingLabel?: string;
+  /**
+   * Keeps the label as the field's accessible name but hides it visually —
+   * for dense repeated rows (the letter tree) where the same word above
+   * every group is noise, not information.
+   */
+  readonly hideLabel?: boolean;
   readonly onChange: (value: string) => void;
 }
 
@@ -47,6 +53,7 @@ export function SearchCombobox({
   noMatches,
   clearLabel,
   missingLabel,
+  hideLabel = false,
   onChange,
 }: SearchComboboxProps) {
   const inputId = useId();
@@ -103,7 +110,7 @@ export function SearchCombobox({
 
   return (
     <div className="relative z-30 block min-w-0 space-y-2 text-xs font-semibold" ref={containerRef}>
-      <label htmlFor={inputId} className="text-foreground block">
+      <label htmlFor={inputId} className={hideLabel ? 'sr-only' : 'text-foreground block'}>
         {label}
       </label>
       <div className="relative min-w-0">

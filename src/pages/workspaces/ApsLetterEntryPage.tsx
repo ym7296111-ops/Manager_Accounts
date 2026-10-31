@@ -13,7 +13,7 @@ import {
   Save,
   Trash2,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -129,6 +129,8 @@ function warehouseOptions(
     keywords: `${warehouse.name} ${warehouse.stationName ?? ''} ${warehouse.code}`,
   }));
 }
+const NO_HIGHLIGHTED_LINES: ReadonlySet<string> = new Set();
+
 const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   unavailable: 'aps.entry.errorUnknown',
   forbidden: 'aps.entry.errorForbidden',
@@ -338,6 +340,27 @@ function EntryEditor({
   const total = entryTotal(form);
   const parties = options.parties.filter((party) => party.branch === form.type);
   const counterpartyTree = form.type === 'inbound' || form.type === 'outbound';
+  /* Validation names a line by its 1-based position; the tree wants keys.
+     A duplicate triple blames both of its rows, not just the repeat. */
+  const highlightedKeys = useMemo<ReadonlySet<string>>(() => {
+    if (!counterpartyTree || validation === null || validation.line === undefined) {
+      return NO_HIGHLIGHTED_LINES;
+    }
+    const target = form.lines[validation.line - 1];
+    if (target === undefined) return NO_HIGHLIGHTED_LINES;
+    const keys = new Set<string>([target.key]);
+    if (validation.code === 'duplicateLine') {
+      const first = form.lines.find(
+        (line, index) =>
+          index < validation.line! - 1 &&
+          line.partyId === target.partyId &&
+          line.warehouseId === target.warehouseId &&
+          line.classificationId === target.classificationId,
+      );
+      if (first !== undefined) keys.add(first.key);
+    }
+    return keys;
+  }, [counterpartyTree, form.lines, validation]);
   /* The badges read the physical balance as of the day this letter carries:
      today for a new letter, the draft's own accounting date when resuming. */
   const balances = useLetterBalances(form.yearId, draft?.letterDate ?? localToday());
@@ -821,6 +844,7 @@ function EntryEditor({
               lines={form.lines}
               balances={balances.data ?? null}
               maxLines={500}
+              highlightedKeys={highlightedKeys}
               onLinesChange={(lines) => patch({ lines })}
             />
           ) : (

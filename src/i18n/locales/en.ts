@@ -478,6 +478,15 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.tree.noPartiesInbound': 'No active inbound parties yet.',
   'aps.entry.tree.noPartiesOutbound': 'No active issue purposes yet.',
   'aps.entry.tree.goAddParty': 'Add a {kind} in project settings',
+  'aps.entry.tree.deletePartyTitle': 'Remove “{name}” from the tree?',
+  'aps.entry.tree.deletePartyBody':
+    'This removes the {kind} “{name}” and everything under it: {warehouses} warehouse(s) and {lines} classification(s) totalling {total}. Nothing is deleted on the server until you save this draft.',
+  'aps.entry.tree.deleteWarehouseTitle': 'Remove the warehouse from the tree?',
+  'aps.entry.tree.deleteWarehouseBody':
+    'This removes the warehouse “{name}” and its {lines} classification(s) totalling {total} from this letter. Nothing is deleted on the server until you save this draft.',
+  'aps.entry.tree.deleteConfirm': 'Remove',
+  'aps.entry.tree.deleteCancel': 'Cancel',
+  'aps.entry.tree.deleteClose': 'Close',
   'aps.entry.choosePurpose': 'Choose an issue purpose',
   'aps.entry.balance.positive': 'Positive balance',
   'aps.entry.balance.zero': 'Balance reaches zero after this letter',
