@@ -136,13 +136,26 @@ function choose(label: string, value: string) {
 }
 
 /**
- * The warehouse is a searchable combobox: focus opens the list, typing filters
- * it, and the option is a button.
+ * The pickers are searchable comboboxes: focus opens the list, typing filters
+ * it, and the option is a button. Options show the name alone; the code is
+ * search keywords, never part of the option's accessible name. The option is
+ * looked up inside the field's own listbox (`aria-controls`): the tree's
+ * reveal-on-add/error focuses fields too, so another row's list may still be
+ * open in jsdom, where `fireEvent.focus` never fires the outside-mousedown
+ * that would close it in a browser.
  */
-function pick(label: string, optionName: string) {
-  const input = screen.getByLabelText(label);
+function pickOption(input: HTMLElement, optionName: string) {
   fireEvent.focus(input);
-  fireEvent.click(screen.getByRole('option', { name: optionName }));
+  const listbox = document.getElementById(input.getAttribute('aria-controls')!);
+  fireEvent.click(within(listbox!).getByRole('option', { name: optionName }));
+}
+
+function pick(label: string, optionName: string) {
+  pickOption(screen.getByLabelText(label), optionName);
+}
+
+function pickAt(label: string, index: number, optionName: string) {
+  pickOption(screen.getAllByLabelText(label)[index]!, optionName);
 }
 
 function fillInbound() {
@@ -150,9 +163,9 @@ function fillInbound() {
   fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
   choose('المُصدر', 'YM');
   fireEvent.change(screen.getByLabelText('الرقم'), { target: { value: '63' } });
-  choose('اختر الجهة', id(501));
+  pick('اختر الجهة', 'شركة النيل');
   pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
-  choose('التصنيف', id(201));
+  pick('التصنيف', 'حديد');
   fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '١٢٠٫٥٠' } });
 }
 
@@ -174,8 +187,9 @@ describe('APS letter entry screen', () => {
     expect(within(group).getAllByRole('button')).toHaveLength(4);
     expect(screen.queryByRole('button', { name: /تسوية/ })).toBeNull();
     fillInbound();
-    // The amount echoes in the party and warehouse subtotals and the summary.
-    expect(screen.getAllByText('١٢٠٫٥٠').length).toBeGreaterThanOrEqual(3);
+    // The amount echoes in the party and warehouse subtotals and the summary —
+    // always in Latin digits, even though it was typed in Arabic ones.
+    expect(screen.getAllByText('120.50').length).toBeGreaterThanOrEqual(3);
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     const [, version, form] = save.mock.calls[0] as [string, string | null, EntryForm];
@@ -204,9 +218,9 @@ describe('APS letter entry screen', () => {
     const selects = screen.getAllByRole('combobox');
     expect(selects.length).toBeGreaterThanOrEqual(4);
     pick('المصدر — المخزن', 'المخزن الرئيسي - غرب القاهرة');
-    choose('المصدر — التصنيف', id(201));
+    pick('المصدر — التصنيف', 'حديد');
     pick('الوجهة — المخزن', 'المخزن الرئيسي - غرب القاهرة');
-    choose('الوجهة — التصنيف', id(202));
+    pick('الوجهة — التصنيف', 'تشغيل');
     fireEvent.change(screen.getByLabelText('قيمة الزوج'), { target: { value: '10' } });
     expect(await screen.findByLabelText(/سبب إعادة التصنيف/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
@@ -245,23 +259,24 @@ describe('APS letter entry screen', () => {
   it('opens a new outbound tree with the smallest-code purpose already present', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: /^منصرف/ }));
-    // OUT-001 wins over OUT-003: the comparison is numeric, never textual.
-    expect(screen.getByLabelText<HTMLSelectElement>('اختر غرض الصرف').value).toBe(id(505));
+    // OUT-001 («صرف عام») wins over OUT-003: the comparison is numeric, never
+    // textual — and the closed field prints the name, never the code.
+    expect(screen.getByLabelText<HTMLInputElement>('اختر غرض الصرف').value).toBe('صرف عام');
   });
 
   it('saves one inbound letter carrying two parties in the tree', async () => {
     mount();
     fillInbound();
     fireEvent.click(screen.getByRole('button', { name: 'إضافة جهة الوارد' }));
-    const partySelects = screen.getAllByLabelText<HTMLSelectElement>('اختر الجهة');
-    expect(partySelects).toHaveLength(2);
-    // The new group arrives holding the first still-unused party.
-    expect(partySelects[1]?.value).toBe(id(504));
+    const partyFields = screen.getAllByLabelText<HTMLInputElement>('اختر الجهة');
+    expect(partyFields).toHaveLength(2);
+    // The new group arrives holding the first still-unused party (IN-002),
+    // shown by name alone.
+    expect(partyFields[1]?.value).toBe('المشتريات المحلية');
     const warehouses = screen.getAllByLabelText('المخزن');
     fireEvent.focus(warehouses[1]!);
     fireEvent.click(screen.getByRole('option', { name: 'المخزن الرئيسي - غرب القاهرة' }));
-    const classifications = screen.getAllByLabelText('التصنيف');
-    fireEvent.change(classifications[1]!, { target: { value: id(202) } });
+    pickAt('التصنيف', 1, 'تشغيل');
     const amounts = screen.getAllByLabelText('القيمة');
     fireEvent.change(amounts[1]!, { target: { value: '30' } });
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
@@ -277,7 +292,7 @@ describe('APS letter entry screen', () => {
     const warehouses = screen.getAllByLabelText('المخزن');
     fireEvent.focus(warehouses[1]!);
     fireEvent.click(screen.getByRole('option', { name: 'المخزن الرئيسي - غرب القاهرة' }));
-    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(202) } });
+    pickAt('التصنيف', 1, 'تشغيل');
     fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '30' } });
 
     // Removing the whole party is a group act: it asks, with the counts.
@@ -298,9 +313,9 @@ describe('APS letter entry screen', () => {
     expect(screen.getByLabelText<HTMLInputElement>('القيمة').value).toBe('');
 
     // Refill and save so the suite's unsaved-entry cache is left clean.
-    choose('اختر الجهة', id(501));
+    pick('اختر الجهة', 'شركة النيل');
     pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
-    choose('التصنيف', id(201));
+    pick('التصنيف', 'حديد');
     fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
@@ -310,7 +325,7 @@ describe('APS letter entry screen', () => {
     const view = mount();
     fillInbound();
     fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف' }));
-    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(201) } });
+    pickAt('التصنيف', 1, 'حديد');
     fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '5' } });
 
     // Fold the party away, then let validation fail: the tree must unfold
@@ -327,7 +342,7 @@ describe('APS letter entry screen', () => {
     expect(painted).toHaveLength(2);
 
     // Fix the repeat and save, so no dirty entry leaks into the next test.
-    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(202) } });
+    pickAt('التصنيف', 1, 'تشغيل');
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   });
@@ -336,15 +351,13 @@ describe('APS letter entry screen', () => {
     const view = mount();
     fillInbound(); // one party, one warehouse, one row of 120.50
     const card = view.container.querySelector('.aps-tree');
-    const folded = () =>
-      (card?.textContent ?? '')
-        .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-        .replace(/٬/g, ',')
-        .replace(/٫/g, '.');
-    const occurrences = (needle: string) => folded().split(needle).length - 1;
+    /* No digit folding on purpose: the totals must print Latin digits as-is
+       (`120.50`), matching the raw amounts in the inputs — never `١٢٠٫٥٠`. */
+    const occurrences = (needle: string) => (card?.textContent ?? '').split(needle).length - 1;
     // Root, party and warehouse each carry the same running total; the row's
     // own input value is a property, not text, so it cannot inflate the count.
     expect(occurrences('120.50')).toBe(3);
+    expect(card?.textContent).not.toMatch(/[٠-٩]/);
 
     fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '200' } });
     expect(occurrences('120.50')).toBe(0);
@@ -376,7 +389,7 @@ describe('APS letter entry screen', () => {
     fireEvent.click(screen.getByRole('option', { name: 'مخزن فرعي - شرق القاهرة' }));
     // Same classification as the first row, but a different warehouse: the
     // duplicate rule is the (party, warehouse, classification) triple.
-    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(201) } });
+    pickAt('التصنيف', 1, 'حديد');
     fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '50' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
@@ -389,6 +402,51 @@ describe('APS letter entry screen', () => {
     const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
     expect(form.lines.map((line) => line.warehouseId)).toEqual([id(100), id(101)]);
     expect(form.lines.every((line) => line.classificationId === id(201))).toBe(true);
+  });
+
+  it('prints picker names without codes, yet a typed code still finds its row', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /^وارد/ }));
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
+    choose('المُصدر', 'YM');
+    fireEvent.change(screen.getByLabelText('الرقم'), { target: { value: '63' } });
+
+    // The code is searchable but is no part of the option's printed name, in
+    // each of the three pickers: party, warehouse and classification. The
+    // fields are re-queried after each choice: picking a party or warehouse
+    // re-keys (and remounts) its tree block, orphaning the old input node.
+    const partyField = screen.getByLabelText<HTMLInputElement>('اختر الجهة');
+    fireEvent.focus(partyField);
+    fireEvent.change(partyField, { target: { value: 'IN-014' } });
+    expect(screen.queryByRole('option', { name: /IN-014/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'شركة النيل' }));
+    expect(screen.getByLabelText<HTMLInputElement>('اختر الجهة').value).toBe('شركة النيل');
+
+    const warehouseField = screen.getByLabelText<HTMLInputElement>('المخزن');
+    fireEvent.focus(warehouseField);
+    fireEvent.change(warehouseField, { target: { value: 'WH-001' } });
+    expect(screen.queryByRole('option', { name: /WH-001/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'المخزن الرئيسي - غرب القاهرة' }));
+    expect(screen.getByLabelText<HTMLInputElement>('المخزن').value).toBe(
+      'المخزن الرئيسي - غرب القاهرة',
+    );
+
+    const classificationField = screen.getByLabelText<HTMLInputElement>('التصنيف');
+    fireEvent.focus(classificationField);
+    fireEvent.change(classificationField, { target: { value: 'CL-002' } });
+    expect(screen.queryByRole('option', { name: /CL-002/ })).toBeNull();
+    fireEvent.click(screen.getByRole('option', { name: 'تشغيل' }));
+    expect(classificationField.value).toBe('تشغيل');
+
+    fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '40' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines[0]).toMatchObject({
+      partyId: id(501),
+      warehouseId: id(100),
+      classificationId: id(202),
+    });
   });
 
   it('states the running period above two fields and asks for no date', () => {

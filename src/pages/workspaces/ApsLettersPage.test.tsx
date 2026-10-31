@@ -145,7 +145,8 @@ describe('APS letters read-only screens', () => {
     expect(await screen.findByRole('link', { name: 'عرض التفاصيل 027' })).toBeTruthy();
     expect(screen.getByText('شركة تجريبية')).toBeTruthy();
     expect(screen.getByText('IN-007')).toBeTruthy();
-    expect(screen.getByText('١٬٢٣٤٫٥٠')).toBeTruthy();
+    // Latin digits everywhere, including the register card amounts.
+    expect(screen.getByText('1,234.50')).toBeTruthy();
     const request = requests.find((url) => url.pathname.endsWith('/letters'))!;
     expect(request.searchParams.get('letter_type')).toBe('eq.inbound');
     expect(request.searchParams.get('status')).toBe('eq.approved');
@@ -272,7 +273,7 @@ describe('APS letters read-only screens', () => {
     expect(await screen.findByRole('heading', { name: 'سطور الخطاب' })).toBeTruthy();
     expect(screen.getByText('المخزن الرئيسي')).toBeTruthy();
     expect(screen.getByText('حديد')).toBeTruthy();
-    expect(screen.getAllByText('١٬٢٣٤٫٥٠').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1,234.50').length).toBeGreaterThan(0);
     expect(requests.some((url) => /\/(warehouses|classifications)$/.test(url.pathname))).toBe(
       false,
     );
