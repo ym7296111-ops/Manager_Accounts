@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 58);
+    assert.equal(migrations.length, 61);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2002,6 +2002,12 @@ try {
     assert.ok(migrations.includes('20261116000000_aps_letter_entry.sql'));
     assert.ok(migrations.includes('20261117000000_aps_issuers.sql'));
     assert.ok(migrations.includes('20261118000000_aps_letter_reference.sql'));
+    // The multi-party letter tree lands in three additive steps: the party
+    // columns and backfill, the per-line rules, then the balances RPC. All
+    // three must survive a clean replay ahead of their behaviour tests below.
+    assert.ok(migrations.includes('20261119000000_aps_inbound_multi_party_columns.sql'));
+    assert.ok(migrations.includes('20261119010000_aps_inbound_multi_party_rules.sql'));
+    assert.ok(migrations.includes('20261119020000_aps_letter_balances.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2904,12 +2910,15 @@ try {
       ),
     );
 
+  // Since the multi-party tree, a counterparty line carries its own party and
+  // the line guard refuses a direct insert without one; transfer and
+  // settlement lines keep passing none.
   const insertApsLine = (letterId, line) =>
     asRole('authenticated', A, (c) =>
       c.query(
         `insert into public.letter_lines
-           (letter_id, direction, warehouse_id, classification_id, amount, paired_line_id)
-         values ($1,$2,$3,$4,$5,$6) returning id`,
+           (letter_id, direction, warehouse_id, classification_id, amount, paired_line_id, party_id)
+         values ($1,$2,$3,$4,$5,$6,$7) returning id`,
         [
           letterId,
           line.direction,
@@ -2917,6 +2926,7 @@ try {
           line.classificationId,
           line.amount,
           line.pairedLineId ?? null,
+          line.partyId ?? null,
         ],
       ),
     );
@@ -3212,6 +3222,151 @@ try {
         'approved',
       );
       await expectCode('42501', () => saveApsEntry(E, { ...entry, version: updated.updated_at }));
+    });
+  });
+
+  await test('APS multi-party letters: lines carry parties, the header derives the first, balances stay physical', async () => {
+    await withApsEntryFixture(async (fixture, ids) => {
+      let partySecond = null;
+      try {
+        partySecond = (
+          await asRole('authenticated', A, (c) =>
+            c.query(
+              "insert into public.parties(branch,name) values ('inbound',$1) returning id,code",
+              [`APS audit tree supplier ${randomUUID()}`],
+            ),
+          )
+        ).rows[0];
+
+        // Two parties share one (warehouse, classification) pair on one letter;
+        // the header party is derived, so none is sent at the head.
+        const inboundId = randomUUID();
+        ids.push(inboundId);
+        const inbound = {
+          id: inboundId,
+          yearId: fixture.firstYear.id,
+          type: 'inbound',
+          number: '701',
+          date: '2040-08-15',
+          lines: [
+            {
+              warehouse_id: fixture.warehouseId,
+              classification_id: fixture.leafA,
+              amount: '10.00',
+              party_id: fixture.party.id,
+            },
+            {
+              warehouse_id: fixture.warehouseId,
+              classification_id: fixture.leafA,
+              amount: '5.00',
+              party_id: partySecond.id,
+            },
+          ],
+        };
+        await saveApsEntry(E, inbound);
+        assert.deepEqual(
+          (
+            await db.query(
+              'select party_id from public.letter_lines where letter_id=$1 order by line_number',
+              [inboundId],
+            )
+          ).rows.map((row) => row.party_id),
+          [fixture.party.id, partySecond.id],
+        );
+        // The header keeps the first line's party and counts the distinct ones.
+        assert.deepEqual(
+          (
+            await db.query('select party_id, party_count from public.letters where id=$1', [
+              inboundId,
+            ])
+          ).rows[0],
+          { party_id: fixture.party.id, party_count: 2 },
+        );
+
+        // The same party may not take the same pair twice on one letter.
+        const duplicateId = randomUUID();
+        ids.push(duplicateId);
+        const duplicate = await captureApsError(() =>
+          saveApsEntry(E, {
+            ...inbound,
+            id: duplicateId,
+            number: '702',
+            lines: [inbound.lines[0], { ...inbound.lines[0], amount: '7.00' }],
+          }),
+        );
+        assert.equal(duplicate.code, 'P0001');
+        assert.match(duplicate.message, /aps_entry_duplicate_party_line/);
+        assert.equal(
+          (await db.query('select id from public.letters where id=$1', [duplicateId])).rowCount,
+          0,
+        );
+
+        // The balance is physical: both parties' lines land in one figure, and
+        // an over-issue still approves while the audit records the negative.
+        await asRole('authenticated', E, (c) =>
+          c.query('select public.aps_approve_letter($1)', [inboundId]),
+        );
+        const balancesAt = (c) =>
+          c.query(
+            'select warehouse_id, classification_id, balance from public.aps_letter_balances($1,$2::date,$3::uuid[])',
+            [fixture.firstYear.id, '2040-08-15', [fixture.warehouseId]],
+          );
+        await expectCode('42501', () => asRole('authenticated', V, balancesAt));
+        assert.deepEqual((await asRole('authenticated', E, balancesAt)).rows, [
+          {
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafA,
+            balance: '15.00',
+          },
+        ]);
+
+        const outboundId = randomUUID();
+        ids.push(outboundId);
+        await saveApsEntry(E, {
+          id: outboundId,
+          yearId: fixture.firstYear.id,
+          type: 'outbound',
+          number: '703',
+          date: '2040-08-15',
+          lines: [
+            {
+              warehouse_id: fixture.warehouseId,
+              classification_id: fixture.leafA,
+              amount: '20.00',
+              party_id: fixture.partyOut.id,
+            },
+          ],
+        });
+        await asRole('authenticated', E, (c) =>
+          c.query('select public.aps_approve_letter($1)', [outboundId]),
+        );
+        assert.deepEqual((await asRole('authenticated', E, balancesAt)).rows, [
+          {
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafA,
+            balance: '-5.00',
+          },
+        ]);
+        assert.equal(
+          (
+            await db.query(
+              `select count(*)::int as n from public.audit_logs
+                where entity_id=$1
+                  and jsonb_array_length(coalesce(metadata->'negative_balance_pairs','[]'::jsonb)) = 1
+                  and (metadata->'negative_balance_pairs'->0->>'balance_after')::numeric = -5`,
+              [outboundId],
+            )
+          ).rows[0].n,
+          1,
+        );
+      } finally {
+        // The wrapper deletes `ids` and the seeded parties; the second party
+        // is local to this test, and its lines must go first.
+        await db.query('delete from public.letters where id=any($1::uuid[])', [ids]);
+        if (partySecond) {
+          await db.query('delete from public.parties where id=$1', [partySecond.id]);
+        }
+      }
     });
   });
 
@@ -3632,6 +3787,7 @@ try {
     const createdIds = [];
     const creatorRole = randomUUID();
     const readerRole = randomUUID();
+    let partySecond = null;
     try {
       for (const [roleId, slug, permission, actor] of [
         [creatorRole, `audit_snapshot_creator_${creatorRole}`, 'aps.letters:create', E],
@@ -3670,6 +3826,17 @@ try {
         );
         assert.equal(hidden.rowCount, 0, `${table} must remain hidden from the create-only actor`);
       }
+      // The plain and forged lines below share one warehouse+classification
+      // pair, so under the multi-party rules they must sit under two parties;
+      // the header keeps the first line's party as its primary.
+      partySecond = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            "insert into public.parties(branch,name) values ('inbound',$1) returning id,code",
+            [`APS audit second supplier ${randomUUID()}`],
+          ),
+        )
+      ).rows[0];
       const letter = (
         await asRole('authenticated', E, (c) =>
           c.query(
@@ -3683,9 +3850,9 @@ try {
       const plain = (
         await asRole('authenticated', E, (c) =>
           c.query(
-            `insert into public.letter_lines(letter_id,direction,warehouse_id,classification_id,amount)
-         values ($1,'in',$2,$3,10) returning id, warehouse_name, classification_name`,
-            [letter.id, fixture.warehouseId, fixture.leafA],
+            `insert into public.letter_lines(letter_id,direction,warehouse_id,classification_id,amount,party_id)
+         values ($1,'in',$2,$3,10,$4) returning id, warehouse_name, classification_name`,
+            [letter.id, fixture.warehouseId, fixture.leafA, fixture.party.id],
           ),
         )
       ).rows[0];
@@ -3695,10 +3862,10 @@ try {
         await asRole('authenticated', E, (c) =>
           c.query(
             `insert into public.letter_lines
-          (letter_id,direction,warehouse_id,classification_id,amount,warehouse_name,classification_name)
-         values ($1,'in',$2,$3,5,'forged warehouse','forged classification')
+          (letter_id,direction,warehouse_id,classification_id,amount,warehouse_name,classification_name,party_id)
+         values ($1,'in',$2,$3,5,'forged warehouse','forged classification',$4)
          returning id, warehouse_name, classification_name`,
-            [letter.id, fixture.warehouseId, fixture.leafA],
+            [letter.id, fixture.warehouseId, fixture.leafA, partySecond.id],
           ),
         )
       ).rows[0];
@@ -3833,7 +4000,7 @@ try {
       await db.query('delete from public.warehouses where id=$1', [fixture.warehouseId]);
       await db.query('delete from public.stations where id=$1', [fixture.stationId]);
       await db.query('delete from public.parties where id=any($1::uuid[])', [
-        [fixture.party.id, fixture.partyOut.id],
+        [fixture.party.id, fixture.partyOut.id, ...(partySecond ? [partySecond.id] : [])],
       ]);
       await db.query('delete from public.sister_companies where id=$1', [fixture.sister.id]);
       await db.query('delete from public.issuers where code=$1', [fixture.issuerCode]);
@@ -3858,6 +4025,7 @@ try {
           warehouseId: fixture.warehouseId,
           classificationId: fixture.leafA,
           amount: 7,
+          partyId: fixture.party.id,
         })
       ).rows[0].id;
       const original = (
@@ -3987,6 +4155,8 @@ try {
         'cancelled_by',
         'cancel_reason',
         'issuer_reference',
+        // The multi-party tree counts the distinct line parties on the header.
+        'party_count',
       ]) {
         assert.ok(names.includes(column), `letters.${column} is missing`);
       }
@@ -4015,6 +4185,10 @@ try {
           'warehouse_name',
           'classification_name',
           'station_name',
+          // The per-line party and its printed snapshots (multi-party tree).
+          'party_id',
+          'party_code',
+          'party_name',
         ],
       );
 
@@ -4221,6 +4395,7 @@ try {
         warehouseId: fixture.warehouseId,
         classificationId: fixture.leafA,
         amount: 125.5,
+        partyId: fixture.party.id,
       });
       assert.deepEqual(
         (
@@ -4436,6 +4611,7 @@ try {
         warehouseId: fixture.warehouseId,
         classificationId: fixture.leafA,
         amount: 40,
+        partyId: fixture.partyOut.id,
       });
       // ...but it cannot post.
       assert.match(
@@ -4724,7 +4900,10 @@ try {
   const apsApprovedLetter = async (fixture, number, input) => {
     const letter = (await insertApsLetter(fixture, { number, ...input })).rows[0];
     for (const line of input.lines) {
-      await insertApsLine(letter.id, line);
+      await insertApsLine(letter.id, {
+        ...line,
+        partyId: line.partyId ?? input.partyId ?? null,
+      });
     }
     if (input.approve !== false) {
       await approveApsLetter(letter.id);
@@ -5227,9 +5406,9 @@ try {
         await asRole('authenticated', E, (c) =>
           c.query(
             `insert into public.letter_lines
-               (letter_id,direction,warehouse_id,classification_id,amount)
-             values ($1,'in',$2,$3,2) returning id`,
-            [ordinaryDrafts[0], fixture.warehouseId, fixture.leafA],
+               (letter_id,direction,warehouse_id,classification_id,amount,party_id)
+             values ($1,'in',$2,$3,2,$4) returning id`,
+            [ordinaryDrafts[0], fixture.warehouseId, fixture.leafA, fixture.partyIn.id],
           ),
         )
       ).rows[0].id;
