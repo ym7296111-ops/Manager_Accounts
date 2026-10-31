@@ -148,7 +148,10 @@ export function parseLetterAmount(value: unknown): string | null {
 /** Format arbitrary numeric(18,2) amounts without ever converting them to Number. */
 export function formatLetterAmount(amount: string, locale: Locale): string {
   const [whole = '0', cents = '00'] = amount.split('.');
-  const language = locale === 'ar' ? 'ar-EG' : 'en-US';
+  /* Arabic grouping with Latin digits (`8,900.00`, not `٨٬٩٠٠٫٠٠`): the same
+     numbering the dashboard adopted, so every printed total matches the raw
+     digits the clerk types into the amount fields. */
+  const language = locale === 'ar' ? 'ar-EG-u-nu-latn' : 'en-US';
   const integer = new Intl.NumberFormat(language, { maximumFractionDigits: 0 }).format(
     BigInt(whole),
   );
@@ -161,7 +164,7 @@ export function formatLetterAmount(amount: string, locale: Locale): string {
 }
 
 export function formatLetterDate(value: string, locale: Locale): string {
-  return new Intl.DateTimeFormat(locale === 'ar' ? 'ar-EG' : 'en-GB', {
+  return new Intl.DateTimeFormat(locale === 'ar' ? 'ar-EG-u-nu-latn' : 'en-GB', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',

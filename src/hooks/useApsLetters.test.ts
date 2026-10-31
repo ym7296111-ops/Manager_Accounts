@@ -247,7 +247,9 @@ describe('APS letter reads', () => {
   it('keeps numeric(18,2) amounts exact even beyond the JavaScript safe integer limit', () => {
     expect(parseLetterAmount('9999999999999999.99')).toBe('9999999999999999.99');
     expect(formatLetterAmount('9999999999999999.99', 'en')).toBe('9,999,999,999,999,999.99');
-    expect(formatLetterAmount('9999999999999999.99', 'ar')).toBe('٩٬٩٩٩٬٩٩٩٬٩٩٩٬٩٩٩٬٩٩٩٫٩٩');
+    /* Arabic prints Latin digits too (`ar-EG-u-nu-latn`), so a total always
+       matches the raw digits in the amount fields. */
+    expect(formatLetterAmount('9999999999999999.99', 'ar')).toBe('9,999,999,999,999,999.99');
     expect(parseLetterAmount(123.45)).toBeNull();
     expect(() => parseApsLetter({ ...header(), source_total: 123.45 })).toThrow(ApsLettersError);
   });

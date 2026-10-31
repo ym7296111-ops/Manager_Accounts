@@ -109,7 +109,13 @@ export function SearchCombobox({
   const shown = open ? query : (selected?.label ?? (missing ? (missingLabel ?? '') : ''));
 
   return (
-    <div className="relative z-30 block min-w-0 space-y-2 text-xs font-semibold" ref={containerRef}>
+    /* Only the open combobox elevates. Closed roots stay at z-0 so a sticky
+       group header (z-10) keeps its own open list above the closed fields
+       below it, instead of the next field painting over the dropdown. */
+    <div
+      className={`relative block min-w-0 space-y-2 text-xs font-semibold ${open ? 'z-50' : 'z-0'}`}
+      ref={containerRef}
+    >
       <label htmlFor={inputId} className={hideLabel ? 'sr-only' : 'text-foreground block'}>
         {label}
       </label>

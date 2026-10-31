@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from '
 import { Link } from 'react-router';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { MODAL_BUTTON_CLASS, useEscapeKey } from '@/components/ui/modalStyles';
-import { SearchCombobox } from '@/components/ui/SearchCombobox';
+import { SearchCombobox, type SearchComboboxOption } from '@/components/ui/SearchCombobox';
 import { useI18n } from '@/i18n/I18nContext';
 import {
   centsToSignedAmount,
@@ -64,34 +64,48 @@ export interface ApsLetterTreeProps {
   readonly onLinesChange: (lines: EntryLine[]) => void;
 }
 
+/**
+ * The party picker shows the name alone; the registry code (`IN-014`) rides
+ * along as search keywords, so typing the code still finds the party without
+ * printing it next to every name. A native `<select>` cannot do that — its
+ * typeahead only ever sees the visible label — hence the combobox, the same
+ * control the warehouse header already uses.
+ */
 function PartySelect({
   value,
   parties,
   placeholder,
+  searchPlaceholder,
+  noMatches,
+  clearLabel,
   onChange,
 }: {
   readonly value: string;
   readonly parties: readonly EntryParty[];
   readonly placeholder: string;
+  readonly searchPlaceholder: string;
+  readonly noMatches: string;
+  readonly clearLabel: string;
   readonly onChange: (partyId: string) => void;
 }) {
   const { t } = useI18n();
-  const missing = value !== '' && !parties.some((party) => party.id === value);
   return (
-    <select
-      className={CONTROL}
+    <SearchCombobox
+      label={placeholder}
+      hideLabel
       value={value}
-      onChange={(event) => onChange(event.target.value)}
-      aria-label={placeholder}
-    >
-      <option value="">{placeholder}</option>
-      {missing && <option value={value}>{t('aps.entry.unavailableOption')}</option>}
-      {parties.map((party) => (
-        <option key={party.id} value={party.id}>
-          {party.name} — {party.code}
-        </option>
-      ))}
-    </select>
+      options={parties.map((party) => ({
+        value: party.id,
+        label: party.name,
+        keywords: `${party.name} ${party.code}`,
+      }))}
+      placeholder={placeholder}
+      searchPlaceholder={searchPlaceholder}
+      noMatches={noMatches}
+      clearLabel={clearLabel}
+      missingLabel={t('aps.entry.unavailableOption')}
+      onChange={onChange}
+    />
   );
 }
 
@@ -285,7 +299,8 @@ function DeleteGroupDialog({
 
 interface ClassificationRowProps {
   readonly line: EntryLine;
-  readonly classifications: readonly EntryOption[];
+  /** Combobox options derived once by the tree: name labels, code keywords. */
+  readonly classificationOptions: readonly SearchComboboxOption[];
   readonly balanceCurrent: string | null;
   readonly balanceProjected: string | null;
   readonly repeated: boolean;
@@ -302,7 +317,7 @@ interface ClassificationRowProps {
  */
 const ClassificationRow = memo(function ClassificationRow({
   line,
-  classifications,
+  classificationOptions,
   balanceCurrent,
   balanceProjected,
   repeated,
@@ -311,9 +326,6 @@ const ClassificationRow = memo(function ClassificationRow({
   onRemove,
 }: ClassificationRowProps) {
   const { t } = useI18n();
-  const missingClass =
-    line.classificationId !== '' &&
-    !classifications.some((item) => item.id === line.classificationId);
   return (
     <div
       data-line-key={line.key}
@@ -321,24 +333,20 @@ const ClassificationRow = memo(function ClassificationRow({
         highlighted ? 'bg-destructive/5 ring-destructive/70 ring-2 ring-inset' : ''
       }`}
     >
-      <label className="min-w-[10rem] flex-1">
-        <span className="sr-only">{t('aps.letters.classification')}</span>
-        <select
-          className={CONTROL}
+      <div className="min-w-[10rem] flex-1">
+        <SearchCombobox
+          label={t('aps.letters.classification')}
+          hideLabel
           value={line.classificationId}
-          onChange={(event) => onUpdate(line.key, { classificationId: event.target.value })}
-        >
-          <option value="">{t('aps.entry.chooseClassification')}</option>
-          {missingClass && (
-            <option value={line.classificationId}>{t('aps.entry.unavailableOption')}</option>
-          )}
-          {classifications.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name} — {item.code}
-            </option>
-          ))}
-        </select>
-      </label>
+          options={classificationOptions}
+          placeholder={t('aps.entry.chooseClassification')}
+          searchPlaceholder={t('aps.entry.searchClassification')}
+          noMatches={t('aps.entry.noClassificationMatches')}
+          clearLabel={t('aps.entry.clearClassification')}
+          missingLabel={t('aps.entry.unavailableOption')}
+          onChange={(classificationId) => onUpdate(line.key, { classificationId })}
+        />
+      </div>
       <label className="w-36 shrink-0">
         <span className="sr-only">{t('aps.letters.amount')}</span>
         <input
@@ -441,6 +449,17 @@ export function ApsLetterTree({
   }, []);
 
   const groups = useMemo(() => groupEntryLines(lines), [lines]);
+  /* Name-only labels; the classification code stays findable through the
+     combobox keywords — see PartySelect. One stable array for every row. */
+  const classificationOptions = useMemo(
+    () =>
+      classifications.map((item) => ({
+        value: item.id,
+        label: item.name,
+        keywords: `${item.name} ${item.code}`,
+      })),
+    [classifications],
+  );
   const kindLabel = t(type === 'inbound' ? 'aps.entry.partyInbound' : 'aps.entry.partyOutbound');
   const atCapacity = lines.length >= maxLines;
   const sign = type === 'inbound' ? 1n : -1n;
@@ -637,11 +656,9 @@ export function ApsLetterTree({
             ? t('aps.entry.summaryLineOne')
             : t('aps.entry.summaryLines', { count: lines.length })}
         </span>
-        <span className="ms-auto shrink-0 text-xs">
-          <span className="text-muted-foreground">
-            {t(type === 'inbound' ? 'aps.letters.inTotal' : 'aps.letters.outTotal')}:{' '}
-          </span>
-          <bdi dir="ltr" className="text-foreground text-sm font-bold">
+        <span className="text-foreground ms-auto shrink-0 text-sm font-semibold">
+          {t(type === 'inbound' ? 'aps.letters.inTotal' : 'aps.letters.outTotal')}:{' '}
+          <bdi dir="ltr" className="font-bold">
             {letterTotal === null
               ? t('aps.entry.waitingAmount')
               : formatLetterAmount(letterTotal, locale)}
@@ -662,31 +679,46 @@ export function ApsLetterTree({
             <div key={group.partyId || 'unassigned'} className="aps-tree-node">
               {/* Sticky: while this party's warehouses scroll by, its name and
                   subtotal stay pinned under the shell's top bar (h-16). */}
-              <div className="border-border/60 bg-card sticky top-16 z-10 flex min-w-0 items-start gap-2 border-b pt-2 pb-1">
+              <div className="border-border/60 bg-card sticky top-16 z-10 flex min-w-0 items-start gap-2 border-b pt-2 pb-1 max-sm:flex-wrap">
                 <CollapseButton
                   collapsed={isPartyCollapsed}
                   onToggle={() => toggleParty(group.partyId)}
                 />
-                <div className="min-w-0 flex-1">
+                {/* The subtotal sits between the chevron and the picker, beside
+                    the party name the field prints at its start edge — not at
+                    the far end of a stretched input, small and muted. On phones
+                    the picker wraps to its own full-width line (as the
+                    warehouse header does) so the name is never squeezed to a
+                    stub between the subtotal and the trash. */}
+                <span className="text-foreground inline-flex min-h-11 shrink-0 items-center gap-1 text-sm font-semibold">
+                  <span className="hidden sm:inline">{t('aps.entry.tree.subtotal')}:</span>
+                  <bdi dir="ltr" className="font-bold">
+                    {partyTotal === null
+                      ? t('aps.entry.waitingAmount')
+                      : formatLetterAmount(partyTotal, locale)}
+                  </bdi>
+                </span>
+                <div className="min-w-0 flex-1 max-sm:order-3 max-sm:basis-full">
                   <PartySelect
                     value={group.partyId}
                     parties={partyChoices}
                     placeholder={t(
                       type === 'inbound' ? 'aps.entry.chooseParty' : 'aps.entry.choosePurpose',
                     )}
+                    searchPlaceholder={t(
+                      type === 'inbound' ? 'aps.entry.searchParty' : 'aps.entry.searchPurpose',
+                    )}
+                    noMatches={t(
+                      type === 'inbound'
+                        ? 'aps.entry.noPartyMatches'
+                        : 'aps.entry.noPurposeMatches',
+                    )}
+                    clearLabel={t(
+                      type === 'inbound' ? 'aps.entry.clearParty' : 'aps.entry.clearPurpose',
+                    )}
                     onChange={(partyId) => setGroupParty(group.partyId, partyId)}
                   />
                 </div>
-                <span className="shrink-0 pt-3 text-xs">
-                  <span className="text-muted-foreground hidden sm:inline">
-                    {t('aps.entry.tree.subtotal')}:{' '}
-                  </span>
-                  <bdi dir="ltr" className="text-foreground font-bold">
-                    {partyTotal === null
-                      ? t('aps.entry.waitingAmount')
-                      : formatLetterAmount(partyTotal, locale)}
-                  </bdi>
-                </span>
                 <button
                   type="button"
                   aria-label={t('aps.entry.tree.removeParty', {
@@ -702,7 +734,7 @@ export function ApsLetterTree({
                       total: partyTotal,
                     })
                   }
-                  className={ICON_BUTTON}
+                  className={`${ICON_BUTTON} max-sm:ms-auto`}
                 >
                   <Trash2 className="size-4" aria-hidden="true" />
                 </button>
@@ -730,6 +762,19 @@ export function ApsLetterTree({
                               toggleWarehouse(group.partyId, warehouseGroup.warehouseId)
                             }
                           />
+                          {/* The subtotal hugs the chevron, beside the warehouse
+                              name at the field's start edge (and directly above
+                              it once the field wraps on phones). */}
+                          <span className="text-foreground inline-flex min-h-11 shrink-0 items-center gap-1 text-sm font-semibold">
+                            <span className="hidden sm:inline">
+                              {t('aps.entry.tree.subtotal')}:
+                            </span>
+                            <bdi dir="ltr" className="font-bold">
+                              {warehouseTotal === null
+                                ? t('aps.entry.waitingAmount')
+                                : formatLetterAmount(warehouseTotal, locale)}
+                            </bdi>
+                          </span>
                           {/* On phones the combobox drops to its own full-width
                               line under chevron/total/trash so the warehouse
                               name stays readable; the stub still lands on the
@@ -754,13 +799,6 @@ export function ApsLetterTree({
                               }
                             />
                           </div>
-                          <span className="shrink-0 pt-3 text-xs max-sm:ms-auto">
-                            <bdi dir="ltr" className="text-foreground font-bold">
-                              {warehouseTotal === null
-                                ? t('aps.entry.waitingAmount')
-                                : formatLetterAmount(warehouseTotal, locale)}
-                            </bdi>
-                          </span>
                           <button
                             type="button"
                             aria-label={t('aps.entry.tree.removeParty', {
@@ -776,7 +814,7 @@ export function ApsLetterTree({
                                 total: warehouseTotal,
                               })
                             }
-                            className={ICON_BUTTON}
+                            className={`${ICON_BUTTON} max-sm:ms-auto`}
                           >
                             <Trash2 className="size-4" aria-hidden="true" />
                           </button>
@@ -791,7 +829,7 @@ export function ApsLetterTree({
                                 <ClassificationRow
                                   key={line.key}
                                   line={line}
-                                  classifications={classifications}
+                                  classificationOptions={classificationOptions}
                                   balanceCurrent={balance?.current ?? null}
                                   balanceProjected={balance?.projected ?? null}
                                   repeated={(pairParties.get(pairKey)?.size ?? 0) > 1}
