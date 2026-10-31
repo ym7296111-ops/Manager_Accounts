@@ -121,17 +121,33 @@ comment on column public.letters.party_count is
 -- backfill below sets a derived counter, not user content, so bumping the
 -- token would make a draft that somebody has open in a browser tab fail its
 -- next save with «the draft changed elsewhere» — a false conflict caused by a
--- migration. The `set_updated_at` triggers are therefore disabled for the two
--- statements, with a hard guarantee that they are re-enabled even on failure
--- (the `exception` branch re-enables and re-raises; and the whole block is one
--- transaction, so a rollback restores the trigger regardless).
+-- migration.
 --
--- The line snapshots are written the same way: they are captured values the
--- clerk never sees as an edit.
+-- The whole letter write path is therefore paused for the three statements:
+--
+--   * `set_updated_at` — the token above, on both tables.
+--   * `aps_letter_lines_before_write` — the line guard refuses to touch the
+--     lines of an approved letter, and history is exactly what is being
+--     annotated here. The values written are server-derived from the header,
+--     the same class of values the guard itself assigns.
+--   * `aps_letter_lines_station_snapshot` / `aps_letter_lines_recalc_totals` —
+--     per-row derived work the counter UPDATE below recomputes wholesale.
+--   * `aps_letters_before_write` — the header guard re-derives the counterparty
+--     snapshot from the live party on every update; a mass `party_count`
+--     refresh must not silently reprint renamed parties onto approved letters.
+--
+-- Every trigger is re-enabled on both exits (the `exception` branch re-enables
+-- and re-raises), and the block is one transaction, so a rollback restores the
+-- triggers regardless. The line snapshots are captured values the clerk never
+-- sees as an edit.
 do $backfill_aps_letter_parties$
 begin
   execute 'alter table public.letter_lines disable trigger letter_lines_set_updated_at';
   execute 'alter table public.letters disable trigger letters_set_updated_at';
+  execute 'alter table public.letter_lines disable trigger letter_lines_aps_before_write';
+  execute 'alter table public.letter_lines disable trigger letter_lines_aps_station_snapshot';
+  execute 'alter table public.letter_lines disable trigger letter_lines_aps_recalc_totals';
+  execute 'alter table public.letters disable trigger letters_aps_before_write';
 
   begin
     -- The `left join` supplies a fallback for a header whose snapshot is
@@ -195,11 +211,19 @@ begin
            );
   exception
     when others then
+      execute 'alter table public.letters enable trigger letters_aps_before_write';
+      execute 'alter table public.letter_lines enable trigger letter_lines_aps_recalc_totals';
+      execute 'alter table public.letter_lines enable trigger letter_lines_aps_station_snapshot';
+      execute 'alter table public.letter_lines enable trigger letter_lines_aps_before_write';
       execute 'alter table public.letters enable trigger letters_set_updated_at';
       execute 'alter table public.letter_lines enable trigger letter_lines_set_updated_at';
       raise;
   end;
 
+  execute 'alter table public.letters enable trigger letters_aps_before_write';
+  execute 'alter table public.letter_lines enable trigger letter_lines_aps_recalc_totals';
+  execute 'alter table public.letter_lines enable trigger letter_lines_aps_station_snapshot';
+  execute 'alter table public.letter_lines enable trigger letter_lines_aps_before_write';
   execute 'alter table public.letters enable trigger letters_set_updated_at';
   execute 'alter table public.letter_lines enable trigger letter_lines_set_updated_at';
 end
