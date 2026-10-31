@@ -1,4 +1,8 @@
--- APS inbound tree, phase 1: the party moves onto the line (columns + backfill).
+-- APS party tree, phase 1: the party moves onto the line (columns + backfill).
+--
+-- Both counterparty letter types share the tree: an inbound letter groups its
+-- lines under suppliers (جهات الوارد), an outbound letter under issue purposes
+-- (أغراض الصرف). Transfers and settlements have no party on a line at all.
 --
 -- This migration is intentionally **additive**: it changes no behaviour, calls no
 -- trigger and replaces no function. A deployed client that knows nothing about
@@ -40,9 +44,9 @@
 -- ---------------------------------------------------------------------------
 -- 1) The party on the line, with its printed snapshots
 -- ---------------------------------------------------------------------------
--- `party_id` is nullable on purpose: only an inbound letter has one. Making it
--- mandatory per type is the line guard's job (phase 2), not a column CHECK,
--- because a CHECK cannot see the letter type.
+-- `party_id` is nullable on purpose: only inbound and outbound letters have
+-- one. Making it mandatory per type is the line guard's job (phase 2), not a
+-- column CHECK, because a CHECK cannot see the letter type.
 alter table public.letter_lines
   add column if not exists party_id uuid;
 
@@ -53,7 +57,7 @@ alter table public.letter_lines
   add column if not exists party_name text;
 
 comment on column public.letter_lines.party_id is
-  'Inbound letters only: the party (supplier / local purchase) this line was received from. Null on every other letter type.';
+  'Inbound and outbound letters only: for inbound the supplier this line was received from, for outbound the issue purpose it was issued to. Null on transfers and settlements.';
 
 comment on column public.letter_lines.party_code is
   'Party code captured when the draft was last saved; never rewritten by a later rename.';
@@ -100,12 +104,15 @@ comment on column public.letters.party_count is
   'Derived: number of distinct parties among the letter lines (0 when the letter has no party, e.g. an internal transfer or a settlement). Maintained by aps_letter_lines_recalc_totals().';
 
 -- ---------------------------------------------------------------------------
--- 3) Backfill: every inbound line takes its letter's party and snapshots
+-- 3) Backfill: every counterparty line takes its letter's party and snapshots
 -- ---------------------------------------------------------------------------
 -- A letter written before this change has exactly one party, on its header, so
 -- every one of its lines belongs to that party. Giving the party to the first
 -- line only would produce a document where the remaining lines have no supplier
--- at all — a state the approval step (phase 2) refuses.
+-- (or no issue purpose) at all — a state the approval step (phase 2) refuses.
+-- `letters_counterparty_matches_type` already guarantees both types carry a
+-- header party, so the backfill below can never meet a letter without one; the
+-- `party_id is not null` predicate stays as a belt-and-braces guard.
 --
 -- `updated_at` is NOT touched by this migration, and that is deliberate.
 --
@@ -130,8 +137,8 @@ begin
     -- The `left join` supplies a fallback for a header whose snapshot is
     -- missing (only possible for rows written before the header guard captured
     -- it): the live party name is better than a nameless line, and the
-    -- verification below still guarantees every inbound line ends up with a
-    -- party.
+    -- verification below still guarantees every counterparty line ends up with
+    -- a party.
     update public.letter_lines as line
        set party_id = letter.party_id,
            party_code = coalesce(letter.counterparty_code, party.code),
@@ -139,7 +146,7 @@ begin
       from public.letters as letter
       left join public.parties as party on party.id = letter.party_id
      where letter.id = line.letter_id
-       and letter.letter_type = 'inbound'
+       and letter.letter_type in ('inbound', 'outbound')
        and letter.party_id is not null
        and (
          line.party_id is distinct from letter.party_id
@@ -148,7 +155,7 @@ begin
        );
 
     -- The mirror rule, so a re-run after a manual correction cannot leave a
-    -- party on an outbound or transfer line. On a fresh run this matches
+    -- party on a transfer or settlement line. On a fresh run this matches
     -- nothing.
     update public.letter_lines as line
        set party_id = null,
@@ -156,7 +163,7 @@ begin
            party_name = null
       from public.letters as letter
      where letter.id = line.letter_id
-       and letter.letter_type <> 'inbound'
+       and letter.letter_type in ('internal_transfer', 'external_transfer', 'settlement')
        and (
          line.party_id is not null
          or line.party_code is not null
@@ -223,14 +230,14 @@ begin
     into v_missing
     from public.letter_lines as line
     join public.letters as letter on letter.id = line.letter_id
-   where letter.letter_type = 'inbound'
+   where letter.letter_type in ('inbound', 'outbound')
      and (line.party_id is null or line.party_code is null or line.party_name is null);
 
   select count(*)
     into v_stray
     from public.letter_lines as line
     join public.letters as letter on letter.id = line.letter_id
-   where letter.letter_type <> 'inbound'
+   where letter.letter_type in ('internal_transfer', 'external_transfer', 'settlement')
      and (line.party_id is not null or line.party_code is not null or line.party_name is not null);
 
   select count(*)
@@ -249,15 +256,15 @@ begin
   select count(*)
     into v_inbound_draft
     from public.letters as letter
-   where letter.letter_type = 'inbound'
+   where letter.letter_type in ('inbound', 'outbound')
      and letter.status = 'draft';
 
   if v_missing > 0 then
-    raise exception 'aps letter parties: % inbound line(s) still have no party', v_missing;
+    raise exception 'aps letter parties: % counterparty line(s) still have no party', v_missing;
   end if;
 
   if v_stray > 0 then
-    raise exception 'aps letter parties: % non-inbound line(s) still carry a party', v_stray;
+    raise exception 'aps letter parties: % transfer/settlement line(s) still carry a party', v_stray;
   end if;
 
   if v_counter > 0 then
@@ -281,7 +288,7 @@ begin
            0
          );
 
-  raise notice 'aps letter parties: % letter(s), % line(s) inspected; % inbound draft(s) ready to open in the tree; pre-existing total drift on % letter(s)',
+  raise notice 'aps letter parties: % letter(s), % line(s) inspected; % counterparty draft(s) ready to open in the tree; pre-existing total drift on % letter(s)',
     v_letters, v_lines, v_inbound_draft, v_drift;
 end
 $verify_aps_letter_parties$;
