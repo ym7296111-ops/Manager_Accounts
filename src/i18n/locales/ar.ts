@@ -410,7 +410,12 @@ export const ar = {
   'aps.entry.newTitle.outbound': 'خطاب منصرف جديد',
   'aps.entry.newTitle.internal_transfer': 'تحويل داخلي جديد',
   'aps.entry.newTitle.external_transfer': 'تحويل خارجي جديد',
-  'aps.entry.periodLine': 'فترة {period} — {month} {year} — عام مالي {fiscalYear}',
+  /* The period bar states three things in two lines of type: a badge, the
+     month, and the fiscal year. The month's own year is not printed — the
+     fiscal year already says it, and `أكتوبر 2026` inside `2026/2027` read as a
+     repetition. */
+  'aps.entry.periodBadge': 'فترة {period}',
+  'aps.entry.periodFiscalYear': 'عام مالي {fiscalYear}',
   'aps.entry.periodOutside': 'خطاب ضمن السنة المالية {fiscalYear} — خارج الفترة الجارية.',
   'aps.entry.periodUnknown':
     'لا توجد فترة جارية في الضبط الدوري تغطي اليوم. راجع إعدادات الأشهر المالية.',
