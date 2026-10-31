@@ -407,8 +407,6 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.editTitle': 'Continue letter draft',
   'aps.entry.description':
     'Enter the information from the paper letter, then save a draft or approve it.',
-  'aps.entry.typeHint':
-    'The type decides the fields: the inbound or outbound party, the sister company, or a source/destination pair.',
   'aps.entry.typeTitle': 'Choose the letter type',
   'aps.entry.inboundHint': 'Receive materials or value',
   'aps.entry.outboundHint': 'Issue materials or value',
@@ -448,7 +446,7 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.externalHint': 'With a sister company',
   'aps.entry.headerTitle': 'Letter information',
   'aps.entry.headerHint':
-    'The period comes from the periodic settings; the number and the letter code are unique within the fiscal year.',
+    'The type decides the fields; the period comes from the periodic settings, and the number and the letter code are unique within the fiscal year.',
   'aps.entry.counterpartyTitle': 'Counterparty',
   'aps.entry.counterpartyHint': 'One counterparty per letter type; not asked for a transfer.',
   'aps.entry.yearClosed': 'Closed',

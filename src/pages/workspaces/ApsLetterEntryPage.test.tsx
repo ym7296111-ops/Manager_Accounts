@@ -266,6 +266,48 @@ describe('APS letter entry screen', () => {
     expect(issuerSelect[0]?.getAttribute('aria-label')).toBe('المُصدر');
   });
 
+  it('merges the type, the period and the numbers into one «بيانات الخطاب» paragraph', () => {
+    mount();
+    // The type is not a paragraph of its own any more: its heading only
+    // restated the sticky header, which already names the type.
+    expect(screen.queryByRole('heading', { name: 'اختر نوع الخطاب' })).toBeNull();
+
+    const header = screen.getByRole('heading', { name: 'بيانات الخطاب' }).closest('section')!;
+    // One paragraph, read top to bottom: the switch, the read-only period, the
+    // two typed numbers.
+    const typeGroup = within(header).getByRole('group', { name: 'اختر نوع الخطاب' });
+    const periodBar = header.querySelector('[role="status"]')!;
+    const eps = within(header).getByLabelText('رقم النظام (EPS)');
+    const code = within(header).getByLabelText('المُصدر');
+    const follows = (first: Node, second: Node) =>
+      (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(follows(typeGroup, periodBar)).toBe(true);
+    expect(follows(periodBar, eps)).toBe(true);
+    // EPS and the letter code share one row: neither is a paragraph of its own.
+    const row = eps.closest('label')!.parentElement!;
+    expect(row.children).toHaveLength(2);
+    expect(row.lastElementChild!.contains(code)).toBe(true);
+
+    // A segmented control, not four cards: one bordered row of four pressed
+    // buttons, exactly one of them the current type.
+    const buttons = within(typeGroup).getAllByRole('button');
+    expect(buttons).toHaveLength(4);
+    expect(buttons.map((button) => button.getAttribute('aria-pressed'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
+    ]);
+    expect(typeGroup.className).toContain('grid-cols-4');
+
+    // The paragraph numbers are sequential and never repeated.
+    expect(screen.getAllByText(/^0\d$/).map((node) => node.textContent)).toEqual([
+      '01',
+      '02',
+      '03',
+    ]);
+  });
+
   it('builds the letter code from the issuer dropdown and a digits-only number', () => {
     mount();
     const issuer = screen.getByLabelText<HTMLSelectElement>('المُصدر');
