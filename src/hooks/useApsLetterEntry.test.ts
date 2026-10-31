@@ -96,6 +96,7 @@ function draftHeader(overrides: Record<string, unknown> = {}) {
     letter_type: 'inbound',
     letter_number: '7',
     letter_number_raw: '007',
+    letter_date: '2026-03-02',
     issuer_reference: 'YM:42',
     party_id: id(501),
     sister_company_id: null,
@@ -160,24 +161,35 @@ describe('APS letter entry transport', () => {
     const requests = setupTransport((url) =>
       url.pathname.endsWith('/letters')
         ? json(draftHeader())
-        : json([draftLine(), draftLine({ id: id(951), amount: '2.50' })]),
+        : json([
+            draftLine({ party_id: id(502) }),
+            draftLine({ id: id(951), amount: '2.50', party_id: null }),
+          ]),
     );
     const draft = await fetchEntryDraft(id(900), actor);
     expect(draft).toMatchObject({ id: id(900), updatedAt: '2026-03-04T10:00:00+00:00' });
+    // The date is read (never written) so the balance badges can be read as
+    // of the day the draft carries.
+    expect(draft.letterDate).toBe('2026-03-02');
     expect(draft.form).toMatchObject({
       type: 'inbound',
       number: '007',
       letterCode: 'YM:42',
       partyId: id(501),
-      lines: [{ amount: '10.00' }, { amount: '2.50' }],
+      // The party now travels on each line; a null one keeps the header party.
+      lines: [
+        { amount: '10.00', partyId: id(502) },
+        { amount: '2.50', partyId: id(501) },
+      ],
     });
     const header = requests.find(({ url }) => url.pathname.endsWith('/letters'))!;
     expect(header.url.searchParams.get('select')).not.toContain('warehouses(');
     expect(header.url.searchParams.get('select')).not.toContain('classifications(');
     const lines = requests.find(({ url }) => url.pathname.endsWith('/letter_lines'))!;
     expect(lines.url.searchParams.get('select')).toContain('amount::text');
+    expect(lines.url.searchParams.get('select')).toContain('party_id');
     expect(header.url.searchParams.get('select')).toContain('issuer_reference');
-    expect(header.url.searchParams.get('select')).not.toContain('letter_date');
+    expect(header.url.searchParams.get('select')).toContain('letter_date');
     expect(lines.url.searchParams.get('letter_id')).toBe(`eq.${id(900)}`);
   });
 
@@ -260,6 +272,7 @@ describe('APS letter entry transport', () => {
       lines: [
         {
           key: 'l1',
+          partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
           destinationWarehouseId: '',
@@ -288,6 +301,7 @@ describe('APS letter entry transport', () => {
       lines: [
         {
           key: 'l1',
+          partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
           destinationWarehouseId: id(100),
@@ -337,6 +351,7 @@ describe('APS letter entry transport', () => {
       lines: [
         {
           key: 'l1',
+          partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
           destinationWarehouseId: '',

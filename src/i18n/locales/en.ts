@@ -448,7 +448,7 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.headerHint':
     'The type decides the fields; the period comes from the periodic settings, and the number and the letter code are unique within the fiscal year.',
   'aps.entry.counterpartyTitle': 'Counterparty',
-  'aps.entry.counterpartyHint': 'One counterparty per letter type; not asked for a transfer.',
+  'aps.entry.counterpartyHint': 'The sister company and the direction of the external transfer.',
   'aps.entry.yearClosed': 'Closed',
   'aps.entry.partyInbound': 'Inbound party',
   'aps.entry.partyOutbound': 'Purpose of issue',
@@ -461,6 +461,37 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.linesTitle': 'Letter lines',
   'aps.entry.pairsTitle': 'Transfer pairs',
   'aps.entry.linesHint': 'Add a warehouse, classification and positive value to each line.',
+  'aps.entry.tree.inboundTitle': 'Inbound tree',
+  'aps.entry.tree.outboundTitle': 'Outbound tree',
+  'aps.entry.tree.inboundHint':
+    'Each inbound party groups its warehouses, classifications and values; a letter may carry several parties.',
+  'aps.entry.tree.outboundHint':
+    'Each issue purpose groups its warehouses, classifications and values; a letter may carry several purposes.',
+  'aps.entry.tree.addParty': 'Add {kind}',
+  'aps.entry.tree.removeParty': 'Remove {name}',
+  'aps.entry.tree.addWarehouse': 'Add warehouse',
+  'aps.entry.tree.addClassification': 'Add classification',
+  'aps.entry.tree.removeClassification': 'Remove classification',
+  'aps.entry.tree.subtotal': 'Subtotal',
+  'aps.entry.tree.collapse': 'Collapse',
+  'aps.entry.tree.expand': 'Expand',
+  'aps.entry.tree.noPartiesInbound': 'No active inbound parties yet.',
+  'aps.entry.tree.noPartiesOutbound': 'No active issue purposes yet.',
+  'aps.entry.tree.goAddParty': 'Add a {kind} in project settings',
+  'aps.entry.choosePurpose': 'Choose an issue purpose',
+  'aps.entry.balance.positive': 'Positive balance',
+  'aps.entry.balance.zero': 'Balance reaches zero after this letter',
+  'aps.entry.balance.negative': 'Negative balance after this letter',
+  'aps.entry.balance.current': 'Current balance',
+  'aps.entry.balance.after': 'After this letter',
+  'aps.entry.balance.physicalNote':
+    'The warehouse physical balance — shown under more than one party.',
+  'aps.entry.balance.show': 'Show the warehouse and classification balance',
+  'aps.entry.validate.lineParty': 'Choose an active party from the correct branch for line {line}.',
+  'aps.entry.validate.duplicateLine':
+    'This classification is already under the same party and warehouse (line {line}). Merge them into one line.',
+  'aps.entry.errorDuplicateLine':
+    'A classification is repeated under the same party and warehouse. Merge them into one line.',
   'aps.entry.pairsHint':
     'Each source has one destination with the same value, keeping the transfer balanced.',
   'aps.entry.line': 'Line {number}',

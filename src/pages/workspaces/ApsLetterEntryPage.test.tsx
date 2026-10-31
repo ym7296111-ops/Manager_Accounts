@@ -38,6 +38,7 @@ vi.mock('@/hooks/useApsLetterEntry', async () => {
     ...actual,
     useEntryOptions: () => hooks.options,
     useEntryDraft: () => hooks.draft,
+    useLetterBalances: () => ({ data: undefined }),
     saveEntryDraft: save,
     approveEntryLetter: approve,
   };
@@ -85,7 +86,12 @@ const options: EntryOptions = {
     { id: id(201), name: 'حديد', code: 'CL-001' },
     { id: id(202), name: 'تشغيل', code: 'CL-002' },
   ],
-  parties: [{ id: id(501), name: 'شركة النيل', code: 'IN-014', branch: 'inbound' }],
+  parties: [
+    { id: id(501), name: 'شركة النيل', code: 'IN-014', branch: 'inbound' },
+    { id: id(504), name: 'المشتريات المحلية', code: 'IN-002', branch: 'inbound' },
+    { id: id(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
+    { id: id(505), name: 'صرف عام', code: 'OUT-001', branch: 'outbound' },
+  ],
   sisters: [{ id: id(601), name: 'الشقيقة', code: 'SIS-001' }],
   issuers: [
     { id: id(701), code: 'YM', name: 'ياسر' },
@@ -144,7 +150,7 @@ function fillInbound() {
   fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
   choose('المُصدر', 'YM');
   fireEvent.change(screen.getByLabelText('الرقم'), { target: { value: '63' } });
-  choose('جهة الوارد', id(501));
+  choose('اختر الجهة', id(501));
   pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
   choose('التصنيف', id(201));
   fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '١٢٠٫٥٠' } });
@@ -168,7 +174,8 @@ describe('APS letter entry screen', () => {
     expect(within(group).getAllByRole('button')).toHaveLength(4);
     expect(screen.queryByRole('button', { name: /تسوية/ })).toBeNull();
     fillInbound();
-    expect(screen.getByText('١٢٠٫٥٠')).toBeTruthy();
+    // The amount echoes in the party and warehouse subtotals and the summary.
+    expect(screen.getAllByText('١٢٠٫٥٠').length).toBeGreaterThanOrEqual(3);
     fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     const [, version, form] = save.mock.calls[0] as [string, string | null, EntryForm];
@@ -177,7 +184,7 @@ describe('APS letter entry screen', () => {
       type: 'inbound',
       number: '2458',
       letterCode: 'YM:63',
-      partyId: id(501),
+      lines: [{ partyId: id(501), warehouseId: id(100), classificationId: id(201) }],
     });
     expect(form).not.toHaveProperty('date');
     expect(screen.getByTestId('shell-header').textContent).toBe('خطاب وارد جديد');
@@ -233,6 +240,34 @@ describe('APS letter entry screen', () => {
     expect(await screen.findByText(/حُفظت المسودة، لكن تعذّر اعتمادها/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'عرض المسودة' })).toBeTruthy();
     expect(screen.queryByText('تم اعتماد الخطاب بنجاح.')).toBeNull();
+  });
+
+  it('opens a new outbound tree with the smallest-code purpose already present', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /^منصرف/ }));
+    // OUT-001 wins over OUT-003: the comparison is numeric, never textual.
+    expect(screen.getByLabelText<HTMLSelectElement>('اختر غرض الصرف').value).toBe(id(505));
+  });
+
+  it('saves one inbound letter carrying two parties in the tree', async () => {
+    mount();
+    fillInbound();
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة جهة الوارد' }));
+    const partySelects = screen.getAllByLabelText<HTMLSelectElement>('اختر الجهة');
+    expect(partySelects).toHaveLength(2);
+    // The new group arrives holding the first still-unused party.
+    expect(partySelects[1]?.value).toBe(id(504));
+    const warehouses = screen.getAllByLabelText('المخزن');
+    fireEvent.focus(warehouses[1]!);
+    fireEvent.click(screen.getByRole('option', { name: 'المخزن الرئيسي - غرب القاهرة' }));
+    const classifications = screen.getAllByLabelText('التصنيف');
+    fireEvent.change(classifications[1]!, { target: { value: id(202) } });
+    const amounts = screen.getAllByLabelText('القيمة');
+    fireEvent.change(amounts[1]!, { target: { value: '30' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines.map((line) => line.partyId)).toEqual([id(501), id(504)]);
   });
 
   it('states the running period above two fields and asks for no date', () => {
@@ -300,12 +335,9 @@ describe('APS letter entry screen', () => {
     ]);
     expect(typeGroup.className).toContain('grid-cols-4');
 
-    // The paragraph numbers are sequential and never repeated.
-    expect(screen.getAllByText(/^0\d$/).map((node) => node.textContent)).toEqual([
-      '01',
-      '02',
-      '03',
-    ]);
+    // The paragraph numbers are sequential and never repeated: the header,
+    // then the tree — the party no longer has a paragraph of its own.
+    expect(screen.getAllByText(/^0\d$/).map((node) => node.textContent)).toEqual(['01', '02']);
   });
 
   it('builds the letter code from the issuer dropdown and a digits-only number', () => {
@@ -355,6 +387,7 @@ describe('APS letter entry screen', () => {
       data: {
         id: id(900),
         updatedAt: '2026-03-04T10:00:00Z',
+        letterDate: '2026-08-01',
         form: {
           type: 'inbound',
           number: '2458',
@@ -369,6 +402,7 @@ describe('APS letter entry screen', () => {
           lines: [
             {
               key: 'line-1',
+              partyId: '',
               warehouseId: id(100),
               classificationId: id(201),
               destinationWarehouseId: '',

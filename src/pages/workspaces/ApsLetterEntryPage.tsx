@@ -22,9 +22,11 @@ import {
   saveEntryDraft,
   useEntryDraft,
   useEntryOptions,
+  useLetterBalances,
   type EntryErrorCode,
   type LoadedDraft,
 } from '@/hooks/useApsLetterEntry';
+import { ApsLetterTree } from '@/pages/workspaces/ApsLetterTree';
 import { SearchCombobox } from '@/components/ui/SearchCombobox';
 import { usePageHeaderOverride } from '@/context/PageHeaderContext';
 import type { PageHeaderTone } from '@/lib/pageHeader';
@@ -35,9 +37,11 @@ import {
   entryTotal,
   fiscalYearLabel,
   joinLetterCode,
+  localToday,
   newEntryForm,
   newEntryLine,
   runningEntryPeriod,
+  smallestCodeParty,
   splitLetterCode,
   validateEntry,
   warehouseLabel,
@@ -131,6 +135,7 @@ const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   network: 'aps.entry.errorNetwork',
   duplicate: 'aps.entry.errorDuplicate',
   duplicateLetterCode: 'aps.entry.errorDuplicateCode',
+  duplicatePartyLine: 'aps.entry.errorDuplicateLine',
   existing: 'aps.entry.errorExisting',
   stale: 'aps.entry.errorStale',
   invalid: 'aps.entry.errorInvalid',
@@ -332,6 +337,10 @@ function EntryEditor({
   const reclassification = entryHasReclassification(form);
   const total = entryTotal(form);
   const parties = options.parties.filter((party) => party.branch === form.type);
+  const counterpartyTree = form.type === 'inbound' || form.type === 'outbound';
+  /* The badges read the physical balance as of the day this letter carries:
+     today for a new letter, the draft's own accounting date when resuming. */
+  const balances = useLetterBalances(form.yearId, draft?.letterDate ?? localToday());
   const year = options.years.find((item) => item.id === form.yearId);
   /* The screen works in the period that is running today. A draft that belongs
      to another fiscal year keeps its own year — and therefore its own period
@@ -545,7 +554,28 @@ function EntryEditor({
                   aria-pressed={selected}
                   title={t(hint)}
                   onClick={() => {
-                    if (!selected) patch({ type: value, partyId: '', sisterId: '' });
+                    if (selected) return;
+                    // Lines keep their warehouses and amounts across a type
+                    // switch, but a party of the other branch cannot travel.
+                    const cleared = form.lines.map((line) => ({ ...line, partyId: '' }));
+                    // A fresh outbound tree opens with its first purpose
+                    // already present — the smallest numeric code — ready to
+                    // be changed or removed like any other group.
+                    if (value === 'outbound') {
+                      const seed = smallestCodeParty(
+                        options.parties.filter((party) => party.branch === 'outbound'),
+                      );
+                      const blank = cleared.every(
+                        (line) =>
+                          line.warehouseId === '' &&
+                          line.classificationId === '' &&
+                          line.amount === '',
+                      );
+                      if (seed !== undefined && blank && cleared[0] !== undefined) {
+                        cleared[0] = { ...cleared[0], partyId: seed.id };
+                      }
+                    }
+                    patch({ type: value, partyId: '', sisterId: '', lines: cleared });
                   }}
                   className={`focus-visible:ring-ring flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-center transition-colors focus-visible:ring-2 focus-visible:outline-none @xl:flex-row @xl:gap-2 @xl:px-3 @xl:py-2 ${selected ? 'bg-card text-foreground border-border border shadow-sm' : 'text-muted-foreground hover:bg-card/60 border border-transparent'}`}
                 >
@@ -707,10 +737,16 @@ function EntryEditor({
           </div>
         </section>
 
-        {/* The counterparty is not header data, but it is still one answer: a
-            single row beside its own label, not a whole card of air. It follows
-            the merged header paragraph, so it is the second number. */}
-        {!transfer && (
+        {year?.closed && !year.supplementsOpen && (
+          <p className="text-destructive text-xs">
+            {t('aps.entry.yearClosed')} — {t('aps.entry.approveHint')}
+          </p>
+        )}
+
+        {/* Which sister company, and which way: the external transfer keeps its
+            one counterparty row. Inbound and outbound no longer ask here — the
+            party lives inside the tree below, once per line. */}
+        {form.type === 'external_transfer' && (
           <section className={`${CARD} flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end`}>
             <div className="flex min-w-0 items-start gap-2 sm:w-60 sm:shrink-0">
               <span className="bg-primary/10 text-primary grid size-7 shrink-0 place-items-center rounded-lg text-xs font-bold">
@@ -726,17 +762,6 @@ function EntryEditor({
               </div>
             </div>
             <div className="grid min-w-0 flex-1 gap-3 @2xl:grid-cols-2">
-              {(form.type === 'inbound' || form.type === 'outbound') && (
-                <OptionSelect
-                  label={t(
-                    form.type === 'inbound' ? 'aps.entry.partyInbound' : 'aps.entry.partyOutbound',
-                  )}
-                  value={form.partyId}
-                  options={parties}
-                  placeholder={t('aps.entry.chooseParty')}
-                  onChange={(partyId) => patch({ partyId })}
-                />
-              )}
               {form.type === 'external_transfer' && (
                 <OptionSelect
                   label={t('aps.entry.sister')}
@@ -762,154 +787,182 @@ function EntryEditor({
                 </label>
               )}
             </div>
-            {year?.closed && !year.supplementsOpen && (
-              <p className="text-destructive mt-3 text-xs">
-                {t('aps.entry.yearClosed')} — {t('aps.entry.approveHint')}
-              </p>
-            )}
           </section>
         )}
 
         <section className="min-w-0 space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <SectionHeading
-              number={transfer ? '02' : '03'}
-              title={t(transfer ? 'aps.entry.pairsTitle' : 'aps.entry.linesTitle')}
-              hint={t(transfer ? 'aps.entry.pairsHint' : 'aps.entry.linesHint')}
+          <SectionHeading
+            number={form.type === 'external_transfer' ? '03' : '02'}
+            title={t(
+              counterpartyTree
+                ? form.type === 'inbound'
+                  ? 'aps.entry.tree.inboundTitle'
+                  : 'aps.entry.tree.outboundTitle'
+                : transfer
+                  ? 'aps.entry.pairsTitle'
+                  : 'aps.entry.linesTitle',
+            )}
+            hint={t(
+              counterpartyTree
+                ? form.type === 'inbound'
+                  ? 'aps.entry.tree.inboundHint'
+                  : 'aps.entry.tree.outboundHint'
+                : transfer
+                  ? 'aps.entry.pairsHint'
+                  : 'aps.entry.linesHint',
+            )}
+          />
+          {counterpartyTree ? (
+            <ApsLetterTree
+              type={form.type === 'inbound' ? 'inbound' : 'outbound'}
+              parties={parties}
+              warehouseOptions={warehouses}
+              classifications={options.classifications}
+              lines={form.lines}
+              balances={balances.data ?? null}
+              maxLines={500}
+              onLinesChange={(lines) => patch({ lines })}
             />
-            <button
-              type="button"
-              disabled={form.lines.length >= (transfer ? 250 : 500)}
-              onClick={() => patch({ lines: [...form.lines, newEntryLine()] })}
-              className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
-            >
-              <Plus className="size-4" aria-hidden="true" />
-              {t(transfer ? 'aps.entry.addPair' : 'aps.entry.addLine')}
-            </button>
-          </div>
-          {form.lines.map((line, index) => (
-            <div key={line.key} className={CARD}>
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="text-foreground text-sm font-bold">
-                  {t(transfer ? 'aps.entry.pair' : 'aps.entry.line', { number: index + 1 })}
-                </h4>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-start justify-end gap-3">
                 <button
                   type="button"
-                  disabled={form.lines.length === 1}
-                  aria-label={t(transfer ? 'aps.entry.removePair' : 'aps.entry.removeLine', {
-                    number: index + 1,
-                  })}
-                  onClick={() =>
-                    patch({ lines: form.lines.filter((item) => item.key !== line.key) })
-                  }
-                  className="text-muted-foreground hover:text-destructive grid size-10 place-items-center rounded-lg disabled:opacity-30"
+                  disabled={form.lines.length >= (transfer ? 250 : 500)}
+                  onClick={() => patch({ lines: [...form.lines, newEntryLine()] })}
+                  className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
                 >
-                  <Trash2 className="size-4" aria-hidden="true" />
+                  <Plus className="size-4" aria-hidden="true" />
+                  {t(transfer ? 'aps.entry.addPair' : 'aps.entry.addLine')}
                 </button>
               </div>
-              {transfer ? (
-                <div className="mt-3 grid min-w-0 gap-3 @4xl:grid-cols-2">
-                  <div className="min-w-0 space-y-3 rounded-xl bg-orange-500/5 p-3">
-                    <p className="flex items-center gap-2 text-xs font-bold text-orange-700 dark:text-orange-300">
-                      <ArrowUpRight className="size-4" aria-hidden="true" />
-                      {t('aps.entry.source')}
-                    </p>
-                    <SearchCombobox
-                      label={`${t('aps.entry.source')} — ${t('aps.letters.warehouse')}`}
-                      value={line.warehouseId}
-                      options={warehouses}
-                      placeholder={t('aps.entry.chooseWarehouse')}
-                      searchPlaceholder={t('aps.entry.searchWarehouse')}
-                      noMatches={t('aps.entry.noWarehouseMatches')}
-                      clearLabel={t('aps.entry.clearWarehouse')}
-                      missingLabel={t('aps.entry.unavailableOption')}
-                      onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
-                    />
-                    <OptionSelect
-                      label={`${t('aps.entry.source')} — ${t('aps.letters.classification')}`}
-                      value={line.classificationId}
-                      options={options.classifications}
-                      placeholder={t('aps.entry.chooseClassification')}
-                      onChange={(classificationId) => updateLine(line.key, { classificationId })}
-                    />
-                  </div>
-                  <div className="min-w-0 space-y-3 rounded-xl bg-emerald-500/5 p-3">
-                    <p className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                      <ArrowDownLeft className="size-4" aria-hidden="true" />
-                      {t('aps.entry.destination')}
-                    </p>
-                    <SearchCombobox
-                      label={`${t('aps.entry.destination')} — ${t('aps.letters.warehouse')}`}
-                      value={line.destinationWarehouseId}
-                      options={warehouses}
-                      placeholder={t('aps.entry.chooseWarehouse')}
-                      searchPlaceholder={t('aps.entry.searchWarehouse')}
-                      noMatches={t('aps.entry.noWarehouseMatches')}
-                      clearLabel={t('aps.entry.clearWarehouse')}
-                      missingLabel={t('aps.entry.unavailableOption')}
-                      onChange={(destinationWarehouseId) =>
-                        updateLine(line.key, { destinationWarehouseId })
+              {form.lines.map((line, index) => (
+                <div key={line.key} className={CARD}>
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-foreground text-sm font-bold">
+                      {t(transfer ? 'aps.entry.pair' : 'aps.entry.line', { number: index + 1 })}
+                    </h4>
+                    <button
+                      type="button"
+                      disabled={form.lines.length === 1}
+                      aria-label={t(transfer ? 'aps.entry.removePair' : 'aps.entry.removeLine', {
+                        number: index + 1,
+                      })}
+                      onClick={() =>
+                        patch({ lines: form.lines.filter((item) => item.key !== line.key) })
                       }
-                    />
-                    <OptionSelect
-                      label={`${t('aps.entry.destination')} — ${t('aps.letters.classification')}`}
-                      value={line.destinationClassificationId}
-                      options={options.classifications}
-                      placeholder={t('aps.entry.chooseClassification')}
-                      onChange={(destinationClassificationId) =>
-                        updateLine(line.key, { destinationClassificationId })
-                      }
-                    />
+                      className="text-muted-foreground hover:text-destructive grid size-10 place-items-center rounded-lg disabled:opacity-30"
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                    </button>
                   </div>
+                  {transfer ? (
+                    <div className="mt-3 grid min-w-0 gap-3 @4xl:grid-cols-2">
+                      <div className="min-w-0 space-y-3 rounded-xl bg-orange-500/5 p-3">
+                        <p className="flex items-center gap-2 text-xs font-bold text-orange-700 dark:text-orange-300">
+                          <ArrowUpRight className="size-4" aria-hidden="true" />
+                          {t('aps.entry.source')}
+                        </p>
+                        <SearchCombobox
+                          label={`${t('aps.entry.source')} — ${t('aps.letters.warehouse')}`}
+                          value={line.warehouseId}
+                          options={warehouses}
+                          placeholder={t('aps.entry.chooseWarehouse')}
+                          searchPlaceholder={t('aps.entry.searchWarehouse')}
+                          noMatches={t('aps.entry.noWarehouseMatches')}
+                          clearLabel={t('aps.entry.clearWarehouse')}
+                          missingLabel={t('aps.entry.unavailableOption')}
+                          onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
+                        />
+                        <OptionSelect
+                          label={`${t('aps.entry.source')} — ${t('aps.letters.classification')}`}
+                          value={line.classificationId}
+                          options={options.classifications}
+                          placeholder={t('aps.entry.chooseClassification')}
+                          onChange={(classificationId) =>
+                            updateLine(line.key, { classificationId })
+                          }
+                        />
+                      </div>
+                      <div className="min-w-0 space-y-3 rounded-xl bg-emerald-500/5 p-3">
+                        <p className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                          <ArrowDownLeft className="size-4" aria-hidden="true" />
+                          {t('aps.entry.destination')}
+                        </p>
+                        <SearchCombobox
+                          label={`${t('aps.entry.destination')} — ${t('aps.letters.warehouse')}`}
+                          value={line.destinationWarehouseId}
+                          options={warehouses}
+                          placeholder={t('aps.entry.chooseWarehouse')}
+                          searchPlaceholder={t('aps.entry.searchWarehouse')}
+                          noMatches={t('aps.entry.noWarehouseMatches')}
+                          clearLabel={t('aps.entry.clearWarehouse')}
+                          missingLabel={t('aps.entry.unavailableOption')}
+                          onChange={(destinationWarehouseId) =>
+                            updateLine(line.key, { destinationWarehouseId })
+                          }
+                        />
+                        <OptionSelect
+                          label={`${t('aps.entry.destination')} — ${t('aps.letters.classification')}`}
+                          value={line.destinationClassificationId}
+                          options={options.classifications}
+                          placeholder={t('aps.entry.chooseClassification')}
+                          onChange={(destinationClassificationId) =>
+                            updateLine(line.key, { destinationClassificationId })
+                          }
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 grid min-w-0 gap-3 @3xl:grid-cols-3">
+                      <SearchCombobox
+                        label={t('aps.letters.warehouse')}
+                        value={line.warehouseId}
+                        options={warehouses}
+                        placeholder={t('aps.entry.chooseWarehouse')}
+                        searchPlaceholder={t('aps.entry.searchWarehouse')}
+                        noMatches={t('aps.entry.noWarehouseMatches')}
+                        clearLabel={t('aps.entry.clearWarehouse')}
+                        missingLabel={t('aps.entry.unavailableOption')}
+                        onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
+                      />
+                      <OptionSelect
+                        label={t('aps.letters.classification')}
+                        value={line.classificationId}
+                        options={options.classifications}
+                        placeholder={t('aps.entry.chooseClassification')}
+                        onChange={(classificationId) => updateLine(line.key, { classificationId })}
+                      />
+                      <label className={labelClass()}>
+                        <span>{t('aps.letters.amount')}</span>
+                        <input
+                          className={CONTROL}
+                          dir="ltr"
+                          inputMode="decimal"
+                          placeholder={t('aps.entry.amountPlaceholder')}
+                          value={line.amount}
+                          onChange={(event) => updateLine(line.key, { amount: event.target.value })}
+                        />
+                      </label>
+                    </div>
+                  )}
+                  {transfer && (
+                    <label className={`${labelClass()} mt-3 max-w-xs`}>
+                      <span>{t('aps.entry.pairAmount')}</span>
+                      <input
+                        className={CONTROL}
+                        dir="ltr"
+                        inputMode="decimal"
+                        placeholder={t('aps.entry.amountPlaceholder')}
+                        value={line.amount}
+                        onChange={(event) => updateLine(line.key, { amount: event.target.value })}
+                      />
+                    </label>
+                  )}
                 </div>
-              ) : (
-                <div className="mt-3 grid min-w-0 gap-3 @3xl:grid-cols-3">
-                  <SearchCombobox
-                    label={t('aps.letters.warehouse')}
-                    value={line.warehouseId}
-                    options={warehouses}
-                    placeholder={t('aps.entry.chooseWarehouse')}
-                    searchPlaceholder={t('aps.entry.searchWarehouse')}
-                    noMatches={t('aps.entry.noWarehouseMatches')}
-                    clearLabel={t('aps.entry.clearWarehouse')}
-                    missingLabel={t('aps.entry.unavailableOption')}
-                    onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
-                  />
-                  <OptionSelect
-                    label={t('aps.letters.classification')}
-                    value={line.classificationId}
-                    options={options.classifications}
-                    placeholder={t('aps.entry.chooseClassification')}
-                    onChange={(classificationId) => updateLine(line.key, { classificationId })}
-                  />
-                  <label className={labelClass()}>
-                    <span>{t('aps.letters.amount')}</span>
-                    <input
-                      className={CONTROL}
-                      dir="ltr"
-                      inputMode="decimal"
-                      placeholder={t('aps.entry.amountPlaceholder')}
-                      value={line.amount}
-                      onChange={(event) => updateLine(line.key, { amount: event.target.value })}
-                    />
-                  </label>
-                </div>
-              )}
-              {transfer && (
-                <label className={`${labelClass()} mt-3 max-w-xs`}>
-                  <span>{t('aps.entry.pairAmount')}</span>
-                  <input
-                    className={CONTROL}
-                    dir="ltr"
-                    inputMode="decimal"
-                    placeholder={t('aps.entry.amountPlaceholder')}
-                    value={line.amount}
-                    onChange={(event) => updateLine(line.key, { amount: event.target.value })}
-                  />
-                </label>
-              )}
-            </div>
-          ))}
+              ))}
+            </>
+          )}
           {reclassification && (
             <div className={`${CARD} border-amber-300/70`}>
               <label className={labelClass()}>

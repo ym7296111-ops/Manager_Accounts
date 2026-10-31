@@ -12,6 +12,11 @@ import {
   runningEntryPeriod,
   searchWarehouses,
   splitLetterCode,
+  centsToSignedAmount,
+  groupEntryLines,
+  partyCodeNumber,
+  signedAmountToCents,
+  smallestCodeParty,
   validateEntry,
   warehouseLabel,
   type EntryForm,
@@ -74,6 +79,7 @@ function validForm(patch: Partial<EntryForm> = {}): EntryForm {
     lines: [
       {
         key: 'line-1',
+        partyId: id(501),
         warehouseId: id(100),
         classificationId: id(201),
         destinationWarehouseId: '',
@@ -92,6 +98,7 @@ const transferForm = (amount = '50', destinationClassification = id(201)) =>
     lines: [
       {
         key: 'pair-1',
+        partyId: '',
         warehouseId: id(100),
         classificationId: id(201),
         destinationWarehouseId: id(100),
@@ -130,7 +137,13 @@ describe('APS letter entry validation', () => {
         validForm({
           lines: [
             { ...validForm().lines[0]!, key: 'a', amount: '9999999999999999' },
-            { ...validForm().lines[0]!, key: 'b', amount: '9999999999999999' },
+            // A different classification, so only the total cap can refuse it.
+            {
+              ...validForm().lines[0]!,
+              key: 'b',
+              classificationId: id(202),
+              amount: '9999999999999999',
+            },
           ],
         }),
         options,
@@ -146,7 +159,17 @@ describe('APS letter entry validation', () => {
     });
     expect(validateEntry(validForm({ yearId: id(999) }), options)).toEqual({ code: 'period' });
     expect(validateEntry(validForm({ yearId: '' }), options)).toEqual({ code: 'period' });
-    expect(validateEntry(validForm({ partyId: id(502) }), options)).toEqual({ code: 'party' });
+    // The party lives on the line: a wrong-branch party there is refused with
+    // its line number, while the header field alone no longer decides.
+    expect(
+      validateEntry(
+        validForm({ lines: [{ ...validForm().lines[0]!, partyId: id(502) }] }),
+        options,
+      ),
+    ).toEqual({ code: 'lineParty', line: 1 });
+    expect(
+      validateEntry(validForm({ lines: [{ ...validForm().lines[0]!, partyId: '' }] }), options),
+    ).toEqual({ code: 'lineParty', line: 1 });
     expect(validateEntry(validForm({ type: 'external_transfer', partyId: '' }), options)).toEqual({
       code: 'sister',
     });
@@ -156,6 +179,57 @@ describe('APS letter entry validation', () => {
         options,
       ),
     ).toBeNull();
+  });
+
+  it('refuses the same (party, warehouse, classification) twice but allows it across parties', () => {
+    const line = validForm().lines[0]!;
+    expect(
+      validateEntry(validForm({ lines: [line, { ...line, key: 'line-2' }] }), options),
+    ).toEqual({ code: 'duplicateLine', line: 2 });
+    expect(
+      validateEntry(
+        validForm({
+          type: 'outbound',
+          lines: [
+            { ...line, partyId: id(502) },
+            { ...line, key: 'line-2', partyId: id(502), classificationId: id(202) },
+          ],
+        }),
+        options,
+      ),
+    ).toBeNull();
+  });
+
+  it('groups lines into the party tree in first-appearance order', () => {
+    const base = validForm().lines[0]!;
+    const lines = [
+      { ...base, key: 'a', partyId: id(501), warehouseId: id(100) },
+      { ...base, key: 'b', partyId: id(502), warehouseId: id(100) },
+      { ...base, key: 'c', partyId: id(501), warehouseId: id(101) },
+      { ...base, key: 'd', partyId: id(501), warehouseId: id(100), classificationId: id(202) },
+    ];
+    const groups = groupEntryLines(lines);
+    expect(groups.map((group) => group.partyId)).toEqual([id(501), id(502)]);
+    expect(groups[0]?.warehouses.map((group) => group.warehouseId)).toEqual([id(100), id(101)]);
+    expect(groups[0]?.warehouses[0]?.lines.map((line) => line.key)).toEqual(['a', 'd']);
+  });
+
+  it('picks the smallest numeric party code, never the lexicographic one', () => {
+    const parties = [
+      { id: id(1), name: 'a', code: 'OUT-1000' },
+      { id: id(2), name: 'b', code: 'OUT-999' },
+      { id: id(3), name: 'c', code: 'OUT-001' },
+    ];
+    expect(smallestCodeParty(parties)?.code).toBe('OUT-001');
+    expect(partyCodeNumber('IN-014')).toBe(14n);
+    expect(partyCodeNumber('XX')).toBeNull();
+  });
+
+  it('round-trips signed balance amounts without Number', () => {
+    expect(signedAmountToCents('-3980.00')).toBe(-398000n);
+    expect(signedAmountToCents('0.05')).toBe(5n);
+    expect(centsToSignedAmount(-5n)).toBe('-0.05');
+    expect(centsToSignedAmount(102000n)).toBe('1020.00');
   });
 
   it('requires complete pairs and a written reason when the classification changes', () => {

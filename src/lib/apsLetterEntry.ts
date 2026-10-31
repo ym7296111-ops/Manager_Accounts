@@ -55,6 +55,11 @@ export interface EntryOptions {
 }
 export interface EntryLine {
   readonly key: string;
+  /**
+   * The party this line belongs to (inbound supplier / outbound purpose). The
+   * tree groups lines by it; transfers never carry one and leave it empty.
+   */
+  readonly partyId: string;
   readonly warehouseId: string;
   readonly classificationId: string;
   readonly destinationWarehouseId: string;
@@ -75,10 +80,11 @@ export interface EntryForm {
   readonly lines: readonly EntryLine[];
 }
 
-export function newEntryLine(): EntryLine {
+export function newEntryLine(partyId = '', warehouseId = ''): EntryLine {
   return {
     key: crypto.randomUUID(),
-    warehouseId: '',
+    partyId,
+    warehouseId,
     classificationId: '',
     destinationWarehouseId: '',
     destinationClassificationId: '',
@@ -259,10 +265,11 @@ export type EntryValidationCode =
   | 'letterCode'
   | 'issuerCode'
   | 'period'
-  | 'party'
   | 'sister'
   | 'lines'
   | 'lineReference'
+  | 'lineParty'
+  | 'duplicateLine'
   | 'amount'
   | 'total'
   | 'reason';
@@ -291,11 +298,6 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
   if (form.yearId === '' || !options.years.some((item) => item.id === form.yearId))
     return { code: 'period' };
   if (
-    (form.type === 'inbound' || form.type === 'outbound') &&
-    !options.parties.some((item) => item.id === form.partyId && item.branch === form.type)
-  )
-    return { code: 'party' };
-  if (
     form.type === 'external_transfer' &&
     !options.sisters.some((item) => item.id === form.sisterId)
   )
@@ -305,8 +307,23 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     form.lines.length > (form.type === 'internal_transfer' ? 250 : 500)
   )
     return { code: 'lines' };
+  const counterparty = form.type === 'inbound' || form.type === 'outbound';
+  const seenTriples = new Set<string>();
   let total = 0n;
   for (const [index, line] of form.lines.entries()) {
+    // The party lives on the line now: every counterparty line must name an
+    // active party of the letter's own branch, and the (party, warehouse,
+    // classification) triple may appear once — the database refuses a repeat,
+    // so the screen says it first and names the line.
+    if (counterparty) {
+      if (!options.parties.some((item) => item.id === line.partyId && item.branch === form.type))
+        return { code: 'lineParty', line: index + 1 };
+      const triple = `${line.partyId}:${line.warehouseId}:${line.classificationId}`;
+      if (line.warehouseId !== '' && line.classificationId !== '') {
+        if (seenTriples.has(triple)) return { code: 'duplicateLine', line: index + 1 };
+        seenTriples.add(triple);
+      }
+    }
     const hasWarehouse = options.warehouses.some((item) => item.id === line.warehouseId);
     const hasClassification = options.classifications.some(
       (item) => item.id === line.classificationId,
@@ -349,4 +366,113 @@ export function isEntryType(value: unknown): value is EntryLetterType {
 
 export function isEntryOptionId(value: unknown): value is string {
   return typeof value === 'string' && isLetterId(value);
+}
+
+/* ------------------------------------------------------------------ tree
+ * The counterparty letter is edited as a tree — root (the letter type), then
+ * parties, then warehouses, then one classification row per line — but the
+ * stored model stays the flat line list. These helpers are the only place the
+ * grouping is derived, in first-appearance order so nothing jumps while the
+ * clerk types.
+ */
+export interface EntryWarehouseGroup {
+  readonly warehouseId: string;
+  readonly lines: readonly EntryLine[];
+}
+export interface EntryPartyGroup {
+  readonly partyId: string;
+  readonly warehouses: readonly EntryWarehouseGroup[];
+  readonly lines: readonly EntryLine[];
+}
+
+export function groupEntryLines(lines: readonly EntryLine[]): readonly EntryPartyGroup[] {
+  const partyOrder: string[] = [];
+  const byParty = new Map<string, EntryLine[]>();
+  for (const line of lines) {
+    const bucket = byParty.get(line.partyId);
+    if (bucket === undefined) {
+      byParty.set(line.partyId, [line]);
+      partyOrder.push(line.partyId);
+    } else {
+      bucket.push(line);
+    }
+  }
+  return partyOrder.map((partyId) => {
+    const partyLines = byParty.get(partyId) ?? [];
+    const warehouseOrder: string[] = [];
+    const byWarehouse = new Map<string, EntryLine[]>();
+    for (const line of partyLines) {
+      const bucket = byWarehouse.get(line.warehouseId);
+      if (bucket === undefined) {
+        byWarehouse.set(line.warehouseId, [line]);
+        warehouseOrder.push(line.warehouseId);
+      } else {
+        bucket.push(line);
+      }
+    }
+    return {
+      partyId,
+      lines: partyLines,
+      warehouses: warehouseOrder.map((warehouseId) => ({
+        warehouseId,
+        lines: byWarehouse.get(warehouseId) ?? [],
+      })),
+    };
+  });
+}
+
+/**
+ * The number inside a party code (`OUT-007` → 7), compared as an integer —
+ * never lexicographically, because `OUT-1000` sorts before `OUT-999` as text.
+ * `null` for a code with no digits after the last dash.
+ */
+export function partyCodeNumber(code: string): bigint | null {
+  const match = /-(\d+)$/.exec(code.trim());
+  return match ? BigInt(match[1] ?? '0') : null;
+}
+
+/** The party with the smallest numeric code (`OUT-001` before `OUT-002`). */
+export function smallestCodeParty<T extends EntryOption>(parties: readonly T[]): T | undefined {
+  let best: T | undefined;
+  let bestNumber: bigint | null = null;
+  for (const party of parties) {
+    const number = partyCodeNumber(party.code);
+    if (
+      best === undefined ||
+      (number !== null && (bestNumber === null || number < bestNumber)) ||
+      (number === bestNumber && party.code < best.code)
+    ) {
+      best = party;
+      bestNumber = number;
+    }
+  }
+  return best;
+}
+
+/** Signed money for balances: `-3980.00` → cents, without ever using Number. */
+export function signedAmountToCents(value: string): bigint | null {
+  const trimmed = value.trim();
+  const negative = trimmed.startsWith('-');
+  const amount = parseLetterAmount(negative ? trimmed.slice(1) : trimmed);
+  if (amount === null) return null;
+  const cents = BigInt(amount.replace('.', ''));
+  return negative ? -cents : cents;
+}
+
+export function centsToSignedAmount(cents: bigint): string {
+  const sign = cents < 0n ? '-' : '';
+  const absolute = cents < 0n ? -cents : cents;
+  return `${sign}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
+}
+
+/** Sum of a line subset (a party or warehouse subtotal), null while incomplete. */
+export function sumEntryAmounts(lines: readonly EntryLine[]): string | null {
+  let total = 0n;
+  for (const line of lines) {
+    const amount = normalizeEntryAmount(line.amount);
+    if (amount === null) return null;
+    total += BigInt(amount.replace('.', ''));
+    if (total > MAX_CENTS) return null;
+  }
+  return centsToSignedAmount(total);
 }
