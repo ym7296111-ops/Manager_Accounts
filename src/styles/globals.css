@@ -251,6 +251,60 @@
     overflow: hidden;
     min-height: 0;
   }
+
+  /*
+    APS letter tree connectors: a box-free diagram over nested node blocks.
+    Each child draws its own vertical segment (so variable block heights
+    never break the line) and a horizontal stub aligned to the first line
+    of its header; the last child's segment stops at its own stub.
+    Logical properties keep the geometry identical in RTL and LTR — only
+    the indent width responds to the viewport. Node blocks must not use
+    outer vertical margins: rhythm comes from the header rows' own top
+    padding (which --tree-stub-y accounts for) so segments stay continuous.
+  */
+  .aps-tree {
+    --tree-indent: 1rem;
+    --tree-stub-y: 1.875rem;
+    --tree-line-x: 1.375rem;
+  }
+
+  @media (min-width: 40rem) {
+    .aps-tree {
+      --tree-indent: 1.375rem;
+    }
+  }
+
+  .aps-tree-children {
+    margin-inline-start: var(--tree-line-x);
+  }
+
+  .aps-tree-children > .aps-tree-node {
+    position: relative;
+    padding-inline-start: var(--tree-indent);
+  }
+
+  .aps-tree-children > .aps-tree-node::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0;
+    bottom: 0;
+    border-inline-start: 1px solid var(--color-border);
+  }
+
+  .aps-tree-children > .aps-tree-node:last-child::before {
+    bottom: auto;
+    height: var(--tree-stub-y);
+  }
+
+  .aps-tree-children > .aps-tree-node::after {
+    content: '';
+    position: absolute;
+    inset-inline-start: 0;
+    top: var(--tree-stub-y);
+    width: var(--tree-indent);
+    border-top: 1px solid var(--color-border);
+  }
 }
 
 :root {

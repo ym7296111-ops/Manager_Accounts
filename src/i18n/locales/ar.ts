@@ -467,6 +467,15 @@ export const ar = {
   'aps.entry.tree.noPartiesInbound': 'لا توجد جهات وارد نشطة بعد.',
   'aps.entry.tree.noPartiesOutbound': 'لا توجد أغراض صرف نشطة بعد.',
   'aps.entry.tree.goAddParty': 'إضافة {kind} من ضبط المشروع',
+  'aps.entry.tree.deletePartyTitle': 'حذف «{name}» من الشجرة؟',
+  'aps.entry.tree.deletePartyBody':
+    'سيتم حذف {kind} «{name}» وكل ما تحتها: {warehouses} مخزن و{lines} تصنيف بقيمة إجمالية {total}. يبقى الحذف داخل هذه المسودة حتى تحفظها.',
+  'aps.entry.tree.deleteWarehouseTitle': 'حذف المخزن من الشجرة؟',
+  'aps.entry.tree.deleteWarehouseBody':
+    'سيتم حذف المخزن «{name}» و{lines} تصنيف بقيمة إجمالية {total} من هذا الخطاب. يبقى الحذف داخل هذه المسودة حتى تحفظها.',
+  'aps.entry.tree.deleteConfirm': 'حذف',
+  'aps.entry.tree.deleteCancel': 'إلغاء',
+  'aps.entry.tree.deleteClose': 'إغلاق',
   'aps.entry.choosePurpose': 'اختر غرض الصرف',
   'aps.entry.balance.positive': 'رصيد موجب',
   'aps.entry.balance.zero': 'الرصيد صفر بعد هذا الخطاب',

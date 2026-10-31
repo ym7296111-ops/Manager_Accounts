@@ -270,6 +270,127 @@ describe('APS letter entry screen', () => {
     expect(form.lines.map((line) => line.partyId)).toEqual([id(501), id(504)]);
   });
 
+  it('asks with descendant counts before removing a party group, but removes a row at once', async () => {
+    mount();
+    fillInbound();
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة جهة الوارد' }));
+    const warehouses = screen.getAllByLabelText('المخزن');
+    fireEvent.focus(warehouses[1]!);
+    fireEvent.click(screen.getByRole('option', { name: 'المخزن الرئيسي - غرب القاهرة' }));
+    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(202) } });
+    fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '30' } });
+
+    // Removing the whole party is a group act: it asks, with the counts.
+    fireEvent.click(screen.getByRole('button', { name: 'حذف المشتريات المحلية' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/1 مخزن و1 تصنيف/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'إلغاء' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getAllByLabelText('اختر الجهة')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'حذف المشتريات المحلية' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'حذف' }));
+    expect(screen.getAllByLabelText('اختر الجهة')).toHaveLength(1);
+
+    // A single classification row needs no ceremony.
+    fireEvent.click(screen.getByRole('button', { name: 'حذف التصنيف' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByLabelText<HTMLInputElement>('القيمة').value).toBe('');
+
+    // Refill and save so the suite's unsaved-entry cache is left clean.
+    choose('اختر الجهة', id(501));
+    pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    choose('التصنيف', id(201));
+    fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+
+  it('paints both rows of a duplicate triple and unfolds their ancestors', async () => {
+    const view = mount();
+    fillInbound();
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة تصنيف' }));
+    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(201) } });
+    fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '5' } });
+
+    // Fold the party away, then let validation fail: the tree must unfold
+    // itself back to the offending rows instead of reporting from afar.
+    fireEvent.click(screen.getAllByRole('button', { name: 'طي' })[0]!);
+    expect(screen.queryAllByLabelText('القيمة')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    expect(await screen.findByText(/مُضاف بالفعل لنفس الجهة والمخزن/)).toBeTruthy();
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.getAllByLabelText('القيمة')).toHaveLength(2);
+    const painted = [...view.container.querySelectorAll('[data-line-key]')].filter((row) =>
+      row.className.includes('ring-destructive'),
+    );
+    expect(painted).toHaveLength(2);
+
+    // Fix the repeat and save, so no dirty entry leaks into the next test.
+    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(202) } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+
+  it('recomputes the warehouse, party and letter totals on every amount edit', async () => {
+    const view = mount();
+    fillInbound(); // one party, one warehouse, one row of 120.50
+    const card = view.container.querySelector('.aps-tree');
+    const folded = () =>
+      (card?.textContent ?? '')
+        .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+        .replace(/٬/g, ',')
+        .replace(/٫/g, '.');
+    const occurrences = (needle: string) => folded().split(needle).length - 1;
+    // Root, party and warehouse each carry the same running total; the row's
+    // own input value is a property, not text, so it cannot inflate the count.
+    expect(occurrences('120.50')).toBe(3);
+
+    fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '200' } });
+    expect(occurrences('120.50')).toBe(0);
+    expect(occurrences('200.00')).toBe(3);
+
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+
+  it('allows the same classification under two warehouses without calling it a duplicate', async () => {
+    hooks.options.data = {
+      ...options,
+      warehouses: [
+        ...options.warehouses,
+        {
+          id: id(101),
+          name: 'مخزن فرعي',
+          code: 'WH-002',
+          stationName: 'شرق القاهرة',
+          stationCode: 'ST-02',
+        },
+      ],
+    };
+    const view = mount();
+    fillInbound(); // party 501, main warehouse, CL-001
+    fireEvent.click(screen.getByRole('button', { name: 'إضافة مخزن' }));
+    const warehouses = screen.getAllByLabelText('المخزن');
+    fireEvent.focus(warehouses[1]!);
+    fireEvent.click(screen.getByRole('option', { name: 'مخزن فرعي - شرق القاهرة' }));
+    // Same classification as the first row, but a different warehouse: the
+    // duplicate rule is the (party, warehouse, classification) triple.
+    fireEvent.change(screen.getAllByLabelText('التصنيف')[1]!, { target: { value: id(201) } });
+    fireEvent.change(screen.getAllByLabelText('القيمة')[1]!, { target: { value: '50' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/مُضاف بالفعل لنفس الجهة والمخزن/)).toBeNull();
+    const painted = [...view.container.querySelectorAll('[data-line-key]')].filter((row) =>
+      row.className.includes('ring-destructive'),
+    );
+    expect(painted).toHaveLength(0);
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines.map((line) => line.warehouseId)).toEqual([id(100), id(101)]);
+    expect(form.lines.every((line) => line.classificationId === id(201))).toBe(true);
+  });
+
   it('states the running period above two fields and asks for no date', () => {
     mount();
     // The period is a badge, the month is the emphasis, and the fiscal year is
