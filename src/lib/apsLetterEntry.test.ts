@@ -3,6 +3,7 @@ import {
   entryHasReclassification,
   entryScreenPeriod,
   entryTotal,
+  entryTransferTotals,
   fiscalYearLabel,
   isLetterCode,
   joinLetterCode,
@@ -83,8 +84,6 @@ function validForm(patch: Partial<EntryForm> = {}): EntryForm {
         partyId: id(501),
         warehouseId: id(100),
         classificationId: id(201),
-        destinationWarehouseId: '',
-        destinationClassificationId: '',
         amount: '120.50',
       },
     ],
@@ -92,18 +91,27 @@ function validForm(patch: Partial<EntryForm> = {}): EntryForm {
   };
 }
 
+/* One transfer is a free list of rows: a source row and a destination row are
+   two independent entries, never two halves of one pair. */
 const transferForm = (amount = '50', destinationClassification = id(201)) =>
   validForm({
     type: 'internal_transfer',
     partyId: '',
     lines: [
       {
-        key: 'pair-1',
+        key: 'line-out',
         partyId: '',
         warehouseId: id(100),
         classificationId: id(201),
-        destinationWarehouseId: id(100),
-        destinationClassificationId: destinationClassification,
+        direction: 'out',
+        amount,
+      },
+      {
+        key: 'line-in',
+        partyId: '',
+        warehouseId: id(100),
+        classificationId: destinationClassification,
+        direction: 'in',
         amount,
       },
     ],
@@ -233,27 +241,78 @@ describe('APS letter entry validation', () => {
     expect(centsToSignedAmount(102000n)).toBe('1020.00');
   });
 
-  it('requires complete pairs and a written reason when the classification changes', () => {
+  it('accepts free transfer lines and never demands a destination on a row', () => {
     expect(validateEntry(transferForm(), options)).toBeNull();
     expect(entryHasReclassification(transferForm())).toBe(false);
-    expect(validateEntry(transferForm('10', id(202)), options)).toEqual({ code: 'reason' });
-    expect(validateEntry({ ...transferForm('10', id(202)), reason: 'نق' }, options)).toEqual({
-      code: 'reason',
-    });
-    expect(
-      validateEntry({ ...transferForm('10', id(202)), reason: 'إعادة تصنيف' }, options),
-    ).toBeNull();
+    /* One source row feeding two destinations is a legal transfer: nothing ties
+       the rows together, so the extra destination row is simply another line. */
+    const oneToTwo = transferForm();
     expect(
       validateEntry(
-        transferForm().lines.length === 1
-          ? {
-              ...transferForm(),
-              lines: [{ ...transferForm().lines[0]!, destinationClassificationId: '' }],
-            }
-          : transferForm(),
+        {
+          ...oneToTwo,
+          lines: [
+            ...oneToTwo.lines,
+            {
+              key: 'line-in-2',
+              partyId: '',
+              warehouseId: id(100),
+              classificationId: id(201),
+              direction: 'in',
+              amount: '50',
+            },
+          ],
+        },
+        options,
+      ),
+    ).toBeNull();
+    /* An empty reference is still refused, and the error names the row. */
+    expect(
+      validateEntry(
+        {
+          ...transferForm(),
+          lines: [{ ...transferForm().lines[0]!, warehouseId: '' }],
+        },
         options,
       ),
     ).toEqual({ code: 'lineReference', line: 1 });
+  });
+
+  it('treats the reclassification statement as optional but notices a change', () => {
+    expect(entryHasReclassification(transferForm('10', id(202)))).toBe(true);
+    /* Different classifications no longer gate the save: the statement is
+       optional on a draft and on approval. */
+    expect(validateEntry(transferForm('10', id(202)), options)).toBeNull();
+    expect(validateEntry(transferForm('10', id(202)), options)).toBeNull();
+    /* A bad amount is still an error, whatever the classifications say. */
+    expect(validateEntry(transferForm('0', id(202)), options)).toEqual({ code: 'amount', line: 1 });
+  });
+
+  it('measures each transfer side and reports the difference', () => {
+    expect(entryTransferTotals(transferForm().lines)).toEqual({
+      source: '50.00',
+      destination: '50.00',
+      difference: '0.00',
+      balanced: true,
+    });
+    const unbalanced = transferForm();
+    const totals = entryTransferTotals([
+      ...unbalanced.lines,
+      { ...unbalanced.lines[1]!, key: 'b' },
+    ]);
+    expect(totals).toEqual({
+      source: '50.00',
+      destination: '100.00',
+      difference: '-50.00',
+      balanced: false,
+    });
+    /* An unfinished row makes the meter say "not yet", never zero. */
+    expect(entryTransferTotals([{ ...unbalanced.lines[0]!, amount: '' }])).toEqual({
+      source: null,
+      destination: '0.00',
+      difference: null,
+      balanced: null,
+    });
   });
 
   it('labels a warehouse with its station and searches both', () => {

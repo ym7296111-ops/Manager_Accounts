@@ -345,76 +345,91 @@ describe('APS letter entry transport', () => {
     await expect(fetchEntryDraft(id(900), actor)).rejects.toMatchObject({ code: 'notFound' });
   });
 
-  it('reconstructs legacy pairs and free-line pairs for the current transfer screen', () => {
-    const source = draftLine({ id: id(960), direction: 'out', amount: '12.00' });
-    const destination = draftLine({ id: id(961), paired_line_id: id(960), amount: '12.00' });
+  it('reads a transfer draft back as free lines, one row per stored side', () => {
     const draft = parseEntryDraft(
-      draftHeader({
-        letter_type: 'internal_transfer',
-        party_id: null,
-        reclassification_reason: 'نقل داخلي',
-      }),
-      [source, destination],
-      actor,
-    );
-    expect(draft.form).toMatchObject({
-      type: 'internal_transfer',
-      partyId: '',
-      reason: 'نقل داخلي',
-      direction: 'in',
-      lines: [
-        {
-          warehouseId: id(100),
-          destinationWarehouseId: id(100),
-          amount: '12.00',
-        },
-      ],
-    });
-    const freeDraft = parseEntryDraft(
       draftHeader({
         letter_type: 'internal_transfer',
         party_id: null,
         reclassification_note: 'بيان التحويل',
       }),
       [
-        draftLine({ id: id(963), direction: 'out', amount: '8.00' }),
-        draftLine({ id: id(964), amount: '8.00' }),
+        draftLine({ id: id(963), direction: 'out', amount: '12.00' }),
+        draftLine({ id: id(964), direction: 'in', amount: '6.00' }),
+        draftLine({ id: id(965), direction: 'in', warehouse_id: id(101), amount: '6.00' }),
       ],
       actor,
     );
-    expect(freeDraft.form).toMatchObject({
+    expect(draft.form).toMatchObject({
+      type: 'internal_transfer',
+      partyId: '',
       reason: 'بيان التحويل',
-      lines: [{ warehouseId: id(100), destinationWarehouseId: id(100), amount: '8.00' }],
     });
-    // One source split across two free destinations cannot be represented by
-    // the temporary pair-shaped screen; refuse it rather than reshaping it.
+    /* One source row feeding two destinations survives the round trip: nothing
+       is zipped, nothing is paired, and the unbalanced shape is kept as saved. */
+    expect(draft.form.lines).toEqual([
+      {
+        key: id(963),
+        partyId: '',
+        warehouseId: id(100),
+        classificationId: id(201),
+        direction: 'out',
+        amount: '12.00',
+      },
+      {
+        key: id(964),
+        partyId: '',
+        warehouseId: id(100),
+        classificationId: id(201),
+        direction: 'in',
+        amount: '6.00',
+      },
+      {
+        key: id(965),
+        partyId: '',
+        warehouseId: id(101),
+        classificationId: id(201),
+        direction: 'in',
+        amount: '6.00',
+      },
+    ]);
+
+    /* A draft saved before the pairing column was dropped keeps loading: the
+       stored pointer is ignored, the two rows keep their own sides. */
+    const legacy = parseEntryDraft(
+      draftHeader({
+        letter_type: 'internal_transfer',
+        party_id: null,
+        reclassification_reason: 'نقل داخلي',
+      }),
+      [
+        draftLine({ id: id(960), direction: 'out', amount: '12.00' }),
+        draftLine({ id: id(961), paired_line_id: id(960), amount: '12.00' }),
+      ],
+      actor,
+    );
+    expect(legacy.form.reason).toBe('نقل داخلي');
+    expect(legacy.form.lines.map((line) => line.direction)).toEqual(['out', 'in']);
+    expect(legacy.form.lines.map((line) => line.amount)).toEqual(['12.00', '12.00']);
+
+    /* A pointer to a line that is not in this letter is corruption, not a link. */
     expect(() =>
       parseEntryDraft(
         draftHeader({ letter_type: 'internal_transfer', party_id: null }),
         [
-          draftLine({ id: id(965), direction: 'out', amount: '12.00' }),
-          draftLine({ id: id(966), amount: '6.00' }),
-          draftLine({ id: id(967), amount: '6.00' }),
+          draftLine({ id: id(961), direction: 'out', amount: '12.00' }),
+          draftLine({ id: id(962), paired_line_id: id(999), amount: '11.00' }),
         ],
         actor,
       ),
     ).toThrow(ApsEntryError);
-    const broken = [source, draftLine({ id: id(962), paired_line_id: id(960), amount: '11.00' })];
+    /* A transfer row set can never be loaded as an inbound letter. */
     expect(() =>
       parseEntryDraft(
-        draftHeader({ letter_type: 'internal_transfer', party_id: null }),
-        broken,
+        draftHeader(),
+        [draftLine({ id: id(961), direction: 'out', amount: '12.00' })],
         actor,
       ),
     ).toThrow(ApsEntryError);
-    expect(() =>
-      parseEntryDraft(
-        draftHeader({ letter_type: 'internal_transfer', party_id: null }),
-        [source],
-        actor,
-      ),
-    ).toThrow(ApsEntryError);
-    expect(() => parseEntryDraft(draftHeader(), [source], actor)).toThrow(ApsEntryError);
   });
 
   it('classifies conflicts, refusals and uncertain outcomes into stable codes', async () => {
@@ -442,8 +457,6 @@ describe('APS letter entry transport', () => {
           partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
-          destinationWarehouseId: '',
-          destinationClassificationId: '',
           amount: '5',
         },
       ],
@@ -471,8 +484,7 @@ describe('APS letter entry transport', () => {
           partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
-          destinationWarehouseId: id(100),
-          destinationClassificationId: id(201),
+          direction: 'out',
           amount: '١٢٫٥',
         },
       ],
@@ -499,93 +511,57 @@ describe('APS letter entry transport', () => {
     const internalRequests = setupTransport(() =>
       json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' }),
     );
-    await saveEntryDraft(id(900), null, { ...form, type: 'internal_transfer' });
-    const internalBody = JSON.parse(internalRequests[0]!.body) as Record<string, unknown>;
-    expect(internalBody).toMatchObject({
-      p_sister_company_id: null,
-      p_direction: null,
-      p_reclassification_note: 'ignored',
-      p_lines: [
-        {
-          direction: 'out',
-          warehouse_id: id(100),
-          classification_id: id(201),
-          amount: '12.50',
-        },
-        {
-          direction: 'in',
-          warehouse_id: id(100),
-          classification_id: id(201),
-          amount: '12.50',
-        },
-      ],
-    });
-    expect(internalBody).not.toHaveProperty('p_reclassification_reason');
-  });
-
-  it('falls back once to the legacy save signature while its migration is pending', async () => {
-    const requests = setupTransport((_url, body) => {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
-      return 'p_reclassification_note' in parsed
-        ? json(
-            {
-              code: 'PGRST202',
-              message:
-                'Could not find the function public.aps_save_letter_draft(p_reclassification_note) in the schema cache',
-              details: null,
-              hint: null,
-            },
-            404,
-          )
-        : json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' });
-    });
-    const form: EntryForm = {
-      ...newEntryForm(),
+    /* One source row feeding two destinations: three independent lines, each
+       naming its own side, and no party on any of them. */
+    await saveEntryDraft(id(900), null, {
+      ...form,
       type: 'internal_transfer',
-      number: '9',
-      yearId: id(400),
-      reason: 'بيان نقل',
+      partyId: '',
+      reason: 'إعادة تصنيف نقل',
       lines: [
         {
-          key: 'l1',
+          key: 's1',
           partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
-          destinationWarehouseId: id(101),
-          destinationClassificationId: id(202),
-          amount: '4.25',
+          direction: 'out',
+          amount: '١٢٫٥',
         },
-      ],
-    };
-
-    await expect(saveEntryDraft(id(900), null, form)).resolves.toEqual({
-      id: id(900),
-      updatedAt: '2026-03-04T11:00:00+00:00',
-    });
-    expect(requests).toHaveLength(2);
-    const firstBody = JSON.parse(requests[0]!.body) as Record<string, unknown>;
-    expect(firstBody).toMatchObject({
-      p_reclassification_note: 'بيان نقل',
-      p_lines: [
-        { direction: 'out', warehouse_id: id(100), classification_id: id(201), amount: '4.25' },
-        { direction: 'in', warehouse_id: id(101), classification_id: id(202), amount: '4.25' },
-      ],
-    });
-    expect(firstBody).not.toHaveProperty('p_reclassification_reason');
-    const fallbackBody = JSON.parse(requests[1]!.body) as Record<string, unknown>;
-    expect(fallbackBody).toMatchObject({
-      p_reclassification_reason: 'بيان نقل',
-      p_lines: [
         {
-          source_warehouse_id: id(100),
-          source_classification_id: id(201),
-          destination_warehouse_id: id(101),
-          destination_classification_id: id(202),
-          amount: '4.25',
+          key: 'd1',
+          partyId: '',
+          warehouseId: id(101),
+          classificationId: id(202),
+          direction: 'in',
+          amount: '6.25',
+        },
+        {
+          key: 'd2',
+          partyId: '',
+          warehouseId: id(102),
+          classificationId: id(201),
+          direction: 'in',
+          amount: '6.25',
         },
       ],
     });
-    expect(fallbackBody).not.toHaveProperty('p_reclassification_note');
+    const internalBody = JSON.parse(internalRequests[0]!.body) as Record<string, unknown>;
+    expect(internalBody).toMatchObject({
+      p_party_id: null,
+      p_sister_company_id: null,
+      p_direction: null,
+      p_reclassification_note: 'إعادة تصنيف نقل',
+      p_lines: [
+        { direction: 'out', warehouse_id: id(100), classification_id: id(201), amount: '12.50' },
+        { direction: 'in', warehouse_id: id(101), classification_id: id(202), amount: '6.25' },
+        { direction: 'in', warehouse_id: id(102), classification_id: id(201), amount: '6.25' },
+      ],
+    });
+    /* No pairing column, no party on a transfer row, no legacy argument. */
+    expect(internalBody).not.toHaveProperty('p_reclassification_reason');
+    const internalLines = internalBody.p_lines as Record<string, unknown>[];
+    expect(internalLines.every((line) => !('paired_line_id' in line))).toBe(true);
+    expect(internalLines.every((line) => !('party_id' in line))).toBe(true);
   });
 
   it('sends the letter code as one field and never sends the letter date', async () => {
@@ -604,8 +580,6 @@ describe('APS letter entry transport', () => {
           partyId: '',
           warehouseId: id(100),
           classificationId: id(201),
-          destinationWarehouseId: '',
-          destinationClassificationId: '',
           amount: '5',
         },
       ],

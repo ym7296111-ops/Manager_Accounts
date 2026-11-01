@@ -92,8 +92,14 @@ export interface EntryLine {
   readonly partyId: string;
   readonly warehouseId: string;
   readonly classificationId: string;
-  readonly destinationWarehouseId: string;
-  readonly destinationClassificationId: string;
+  /**
+   * Internal transfers only: which side of the move this row belongs to.
+   *
+   * A transfer is a list of free lines — `out` (source) and `in` (destination) —
+   * with no pairing between them, exactly as `letter_lines` stores them. The
+   * counterparty types leave it empty and read their direction from the letter.
+   */
+  readonly direction?: EntryDirection;
   readonly amount: string;
 }
 export interface EntryForm {
@@ -110,14 +116,17 @@ export interface EntryForm {
   readonly lines: readonly EntryLine[];
 }
 
-export function newEntryLine(partyId = '', warehouseId = ''): EntryLine {
+export function newEntryLine(
+  partyId = '',
+  warehouseId = '',
+  direction: EntryDirection = 'out',
+): EntryLine {
   return {
     key: crypto.randomUUID(),
     partyId,
     warehouseId,
     classificationId: '',
-    destinationWarehouseId: '',
-    destinationClassificationId: '',
+    direction,
     amount: '',
   };
 }
@@ -315,16 +324,64 @@ export function entryScreenPeriod(
   return runningEntryPeriod(options, today);
 }
 
+/**
+ * Whether the transfer moves stock between classifications.
+ *
+ * A free-line transfer has no pairs to compare, so the question is asked of the
+ * two sides as sets: if the source classifications and the destination
+ * classifications are not the same set, the move reclassifies something. The
+ * statement is still optional (the database only enforces its shape when it is
+ * written), so this never blocks a save.
+ */
 export function entryHasReclassification(form: EntryForm): boolean {
-  return (
-    form.type === 'internal_transfer' &&
-    form.lines.some(
-      (line) =>
-        line.classificationId !== '' &&
-        line.destinationClassificationId !== '' &&
-        line.classificationId !== line.destinationClassificationId,
-    )
-  );
+  if (form.type !== 'internal_transfer') return false;
+  const side = (direction: EntryDirection) =>
+    new Set(
+      form.lines
+        .filter((line) => line.direction === direction && line.classificationId !== '')
+        .map((line) => line.classificationId),
+    );
+  const sources = side('out');
+  const destinations = side('in');
+  if (sources.size === 0 || destinations.size === 0) return false;
+  if (sources.size !== destinations.size) return true;
+  for (const id of sources) if (!destinations.has(id)) return true;
+  return false;
+}
+
+export interface EntryTransferTotals {
+  /** Sum of the `out` side, `null` while a row is incomplete. */
+  readonly source: string | null;
+  /** Sum of the `in` side, `null` while a row is incomplete. */
+  readonly destination: string | null;
+  /** `source - destination` in cents; `null` while either side is incomplete. */
+  readonly difference: string | null;
+  /** True only when both sides are complete and equal. */
+  readonly balanced: boolean | null;
+}
+
+/**
+ * The balance meter of an internal transfer.
+ *
+ * Both sides are summed from the same free-line list the save sends, so the
+ * meter cannot disagree with the payload. `null` means "not answerable yet"
+ * (an empty or malformed amount) and is never rendered as zero.
+ */
+export function entryTransferTotals(lines: readonly EntryLine[]): EntryTransferTotals {
+  const side = (direction: EntryDirection) =>
+    sumEntryAmounts(lines.filter((line) => (line.direction ?? 'out') === direction));
+  const source = side('out');
+  const destination = side('in');
+  if (source === null || destination === null) {
+    return { source, destination, difference: null, balanced: null };
+  }
+  const difference = BigInt(source.replace('.', '')) - BigInt(destination.replace('.', ''));
+  return {
+    source,
+    destination,
+    difference: centsToSignedAmount(difference),
+    balanced: difference === 0n,
+  };
 }
 
 export type EntryValidationCode =
@@ -338,8 +395,7 @@ export type EntryValidationCode =
   | 'lineParty'
   | 'duplicateLine'
   | 'amount'
-  | 'total'
-  | 'reason';
+  | 'total';
 export interface EntryValidationError {
   readonly code: EntryValidationCode;
   readonly line?: number;
@@ -395,11 +451,9 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     const hasClassification = options.classifications.some(
       (item) => item.id === line.classificationId,
     );
-    const hasDestination =
-      form.type !== 'internal_transfer' ||
-      (options.warehouses.some((item) => item.id === line.destinationWarehouseId) &&
-        options.classifications.some((item) => item.id === line.destinationClassificationId));
-    if (!hasWarehouse || !hasClassification || !hasDestination) {
+    // A transfer row is one free line: warehouse, classification, amount and a
+    // side. There is no second pair of references to complete.
+    if (!hasWarehouse || !hasClassification) {
       return { code: 'lineReference', line: index + 1 };
     }
     const amount = normalizeEntryAmount(line.amount);
@@ -407,7 +461,8 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     total += BigInt(amount.replace('.', ''));
     if (total > MAX_CENTS) return { code: 'total' };
   }
-  if (entryHasReclassification(form) && form.reason.trim().length < 3) return { code: 'reason' };
+  // The reclassification statement is optional on a draft and on approval: the
+  // database only enforces its shape when it is written, never its presence.
   return null;
 }
 

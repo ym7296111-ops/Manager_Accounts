@@ -607,6 +607,19 @@ async function previewFetch(input: RequestInfo | URL, init?: RequestInit): Promi
     const letter = letters.find((item) => item.id === payload.p_letter_id);
     if (!letter || letter.status !== 'draft')
       return response({ code: '22023', message: 'Preview draft unavailable' }, 400);
+    /* `aps_assert_letter_consistent` refuses an unbalanced transfer at
+       approval (and only there): the draft may be saved half-typed. */
+    if (
+      letter.letter_type === 'internal_transfer' &&
+      cents(letter.source_total) !== cents(letter.destination_total)
+    )
+      return response(
+        {
+          code: '23514',
+          message: `aps letters: the transfer does not balance (${letter.destination_total} in vs ${letter.source_total} out)`,
+        },
+        400,
+      );
     letter.status = 'approved';
     letter.updated_at = nextVersion();
     if (scenario === 'approval-unknown')
