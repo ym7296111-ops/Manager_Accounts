@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ENTRY_OPTIONS_QUERY_KEY } from '@/hooks/useApsLetterEntry';
 import {
   FiscalSettingsWriteError,
   OPENING_BALANCE_SELECT,
@@ -12,6 +13,7 @@ import {
   useDeleteOpeningBalance,
   useOpeningBalances,
   useSetOpeningBalancesLock,
+  useUpdateFiscalPeriod,
   type OpeningBalanceRow,
 } from '@/hooks/useFiscalSettings';
 
@@ -363,6 +365,40 @@ describe('useDeleteOpeningBalance', () => {
     ).rejects.toMatchObject({ code: 'validation' });
 
     expect(calls.table).toBeUndefined();
+  });
+});
+
+describe('useUpdateFiscalPeriod', () => {
+  const monthWire = (period: number) => ({
+    id: 'month-1',
+    fiscal_year_id: 'year-1',
+    month_number: 7,
+    name: 'يوليو 2026',
+    start_date: '2026-07-01',
+    end_date: '2026-07-31',
+    current_period: period,
+    is_closed: false,
+    created_at: '2026-07-01T00:00:00.000Z',
+    updated_at: '2026-07-01T00:00:00.000Z',
+  });
+
+  it('refreshes the entry choices so the period bar follows the settings', async () => {
+    // The entry screen states the period from its own choices payload: changing
+    // the sub-period here must invalidate that payload, or the bar keeps naming
+    // the number the clerk just replaced.
+    respondWith(monthWire(3));
+    const queryClient = createQueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = mountQuery(() => useUpdateFiscalPeriod(), queryClient);
+
+    await result.current.mutateAsync({
+      monthId: 'month-1',
+      fiscalYearId: 'year-1',
+      currentPeriod: 3,
+    });
+
+    const keys = invalidate.mock.calls.map((call) => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(ENTRY_OPTIONS_QUERY_KEY));
   });
 });
 

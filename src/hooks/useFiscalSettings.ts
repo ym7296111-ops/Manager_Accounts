@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ENTRY_OPTIONS_QUERY_KEY } from '@/hooks/useApsLetterEntry';
 import { classifyPostgrestReadError } from '@/hooks/postgrestReadError';
 import type { Database } from '@/lib/database.types';
 import { getSupabase } from '@/lib/supabase';
@@ -366,9 +367,17 @@ function unwrapWrite<T>(
 
 function useInvalidateFiscalSettings() {
   const queryClient = useQueryClient();
+  /* The entry screen states the active period from its own choices payload, so
+     every settings write that can move the period refreshes that payload too —
+     otherwise the bar keeps naming the month the clerk just replaced. */
+  const invalidateEntryOptions = () => {
+    void queryClient.invalidateQueries({ queryKey: ENTRY_OPTIONS_QUERY_KEY });
+  };
   return {
+    invalidateEntryOptions,
     invalidateYears: () => {
       void queryClient.invalidateQueries({ queryKey: FISCAL_YEARS_QUERY_KEY });
+      invalidateEntryOptions();
     },
     invalidateMonths: (fiscalYearId?: string) => {
       void queryClient.invalidateQueries({
@@ -377,6 +386,7 @@ function useInvalidateFiscalSettings() {
             ? FISCAL_MONTHS_QUERY_KEY
             : [...FISCAL_MONTHS_QUERY_KEY, fiscalYearId],
       });
+      invalidateEntryOptions();
     },
     invalidateBalances: (fiscalYearId?: string) => {
       void queryClient.invalidateQueries({
