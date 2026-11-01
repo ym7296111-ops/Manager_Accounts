@@ -28,6 +28,7 @@ import {
   type LoadedDraft,
 } from '@/hooks/useApsLetterEntry';
 import { ApsLetterTree } from '@/pages/workspaces/ApsLetterTree';
+import { ApsTransferTables } from '@/pages/workspaces/ApsTransferTables';
 import { SearchCombobox } from '@/components/ui/SearchCombobox';
 import { usePageHeaderOverride } from '@/context/PageHeaderContext';
 import type { PageHeaderTone } from '@/lib/pageHeader';
@@ -37,6 +38,7 @@ import {
   entryHasReclassification,
   entryScreenPeriod,
   entryTotal,
+  entryTransferTotals,
   fiscalYearLabel,
   joinLetterCode,
   localToday,
@@ -142,6 +144,7 @@ const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   existing: 'aps.entry.errorExisting',
   stale: 'aps.entry.errorStale',
   invalid: 'aps.entry.errorInvalid',
+  unbalanced: 'aps.entry.errorUnbalanced',
   notFound: 'aps.entry.draftUnavailable',
   unknown: 'aps.entry.errorUnknown',
 };
@@ -514,7 +517,12 @@ function EntryEditor({
       if (phase === 'approving') {
         if (kind === 'network') setApprovalUnknown(true);
         setBanner({
-          key: kind === 'network' ? 'aps.entry.approveUnknown' : 'aps.entry.approveFailedSaved',
+          key:
+            kind === 'network'
+              ? 'aps.entry.approveUnknown'
+              : kind === 'unbalanced'
+                ? 'aps.entry.approveUnbalanced'
+                : 'aps.entry.approveFailedSaved',
           error: true,
           showDraft: true,
         });
@@ -533,6 +541,12 @@ function EntryEditor({
 
   const totalValue =
     total === null ? t('aps.entry.waitingAmount') : formatLetterAmount(total, locale);
+  /* A transfer has no single letter total: each side is its own total, and the
+     two of them are what the summary must show — the same numbers the meter
+     prints above the tables. */
+  const transferTotals = transfer ? entryTransferTotals(form.lines) : null;
+  const sideValue = (value: string | null) =>
+    value === null ? t('aps.entry.waitingAmount') : formatLetterAmount(value, locale);
   const inboundTotal =
     form.type === 'inbound' ||
     transfer ||
@@ -845,7 +859,7 @@ function EntryEditor({
                   ? 'aps.entry.tree.inboundTitle'
                   : 'aps.entry.tree.outboundTitle'
                 : transfer
-                  ? 'aps.entry.pairsTitle'
+                  ? 'aps.entry.transfer.title'
                   : 'aps.entry.linesTitle',
             )}
             hint={t(
@@ -854,10 +868,34 @@ function EntryEditor({
                   ? 'aps.entry.tree.inboundHint'
                   : 'aps.entry.tree.outboundHint'
                 : transfer
-                  ? 'aps.entry.pairsHint'
+                  ? 'aps.entry.transfer.hint'
                   : 'aps.entry.linesHint',
             )}
           />
+          {transfer && (
+            /* The statement sits in the letter header, above the two tables and
+               only for a transfer: it is optional, so it never blocks a save and
+               the database only checks its shape once something is written. */
+            <div className={`${CARD} border-amber-300/70`}>
+              <label className={labelClass()}>
+                <span>{t('aps.entry.transfer.noteTitle')}</span>
+                <span className="text-muted-foreground block font-normal">
+                  {t('aps.entry.transfer.noteHint')}
+                </span>
+                <textarea
+                  className={`${CONTROL} min-h-24 py-3`}
+                  value={form.reason}
+                  placeholder={t('aps.entry.transfer.notePlaceholder')}
+                  onChange={(event) => patch({ reason: event.target.value })}
+                />
+              </label>
+              {reclassification && (
+                <p className="text-muted-foreground mt-2 text-xs leading-relaxed">
+                  {t('aps.entry.transfer.noteSuggested')}
+                </p>
+              )}
+            </div>
+          )}
           {counterpartyTree ? (
             <ApsLetterTree
               type={form.type === 'inbound' ? 'inbound' : 'outbound'}
@@ -870,31 +908,38 @@ function EntryEditor({
               highlightedKeys={highlightedKeys}
               onLinesChange={(lines) => patch({ lines })}
             />
+          ) : transfer ? (
+            <ApsTransferTables
+              lines={form.lines}
+              warehouses={warehouses}
+              classifications={options.classifications}
+              maxLines={250}
+              highlightedKey={form.lines.find((line) => highlightedKeys.has(line.key))?.key ?? null}
+              onLinesChange={(lines) => patch({ lines })}
+            />
           ) : (
             <>
               <div className="flex flex-wrap items-start justify-end gap-3">
                 <button
                   type="button"
-                  disabled={form.lines.length >= (transfer ? 250 : 500)}
+                  disabled={form.lines.length >= 500}
                   onClick={() => patch({ lines: [...form.lines, newEntryLine()] })}
                   className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
                 >
                   <Plus className="size-4" aria-hidden="true" />
-                  {t(transfer ? 'aps.entry.addPair' : 'aps.entry.addLine')}
+                  {t('aps.entry.addLine')}
                 </button>
               </div>
               {form.lines.map((line, index) => (
                 <div key={line.key} className={CARD}>
                   <div className="flex items-center justify-between gap-3">
                     <h4 className="text-foreground text-sm font-bold">
-                      {t(transfer ? 'aps.entry.pair' : 'aps.entry.line', { number: index + 1 })}
+                      {t('aps.entry.line', { number: index + 1 })}
                     </h4>
                     <button
                       type="button"
                       disabled={form.lines.length === 1}
-                      aria-label={t(transfer ? 'aps.entry.removePair' : 'aps.entry.removeLine', {
-                        number: index + 1,
-                      })}
+                      aria-label={t('aps.entry.removeLine', { number: index + 1 })}
                       onClick={() =>
                         patch({ lines: form.lines.filter((item) => item.key !== line.key) })
                       }
@@ -903,108 +948,30 @@ function EntryEditor({
                       <Trash2 className="size-4" aria-hidden="true" />
                     </button>
                   </div>
-                  {transfer ? (
-                    <div className="mt-3 grid min-w-0 gap-3 @4xl:grid-cols-2">
-                      <div className="min-w-0 space-y-3 rounded-xl bg-orange-500/5 p-3">
-                        <p className="flex items-center gap-2 text-xs font-bold text-orange-700 dark:text-orange-300">
-                          <ArrowUpRight className="size-4" aria-hidden="true" />
-                          {t('aps.entry.source')}
-                        </p>
-                        <SearchCombobox
-                          label={`${t('aps.entry.source')} — ${t('aps.letters.warehouse')}`}
-                          value={line.warehouseId}
-                          options={warehouses}
-                          placeholder={t('aps.entry.chooseWarehouse')}
-                          searchPlaceholder={t('aps.entry.searchWarehouse')}
-                          noMatches={t('aps.entry.noWarehouseMatches')}
-                          clearLabel={t('aps.entry.clearWarehouse')}
-                          missingLabel={t('aps.entry.unavailableOption')}
-                          onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
-                        />
-                        <OptionSelect
-                          label={`${t('aps.entry.source')} — ${t('aps.letters.classification')}`}
-                          value={line.classificationId}
-                          options={options.classifications}
-                          placeholder={t('aps.entry.chooseClassification')}
-                          searchPlaceholder={t('aps.entry.searchClassification')}
-                          noMatches={t('aps.entry.noClassificationMatches')}
-                          clearLabel={t('aps.entry.clearClassification')}
-                          onChange={(classificationId) =>
-                            updateLine(line.key, { classificationId })
-                          }
-                        />
-                      </div>
-                      <div className="min-w-0 space-y-3 rounded-xl bg-emerald-500/5 p-3">
-                        <p className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                          <ArrowDownLeft className="size-4" aria-hidden="true" />
-                          {t('aps.entry.destination')}
-                        </p>
-                        <SearchCombobox
-                          label={`${t('aps.entry.destination')} — ${t('aps.letters.warehouse')}`}
-                          value={line.destinationWarehouseId}
-                          options={warehouses}
-                          placeholder={t('aps.entry.chooseWarehouse')}
-                          searchPlaceholder={t('aps.entry.searchWarehouse')}
-                          noMatches={t('aps.entry.noWarehouseMatches')}
-                          clearLabel={t('aps.entry.clearWarehouse')}
-                          missingLabel={t('aps.entry.unavailableOption')}
-                          onChange={(destinationWarehouseId) =>
-                            updateLine(line.key, { destinationWarehouseId })
-                          }
-                        />
-                        <OptionSelect
-                          label={`${t('aps.entry.destination')} — ${t('aps.letters.classification')}`}
-                          value={line.destinationClassificationId}
-                          options={options.classifications}
-                          placeholder={t('aps.entry.chooseClassification')}
-                          searchPlaceholder={t('aps.entry.searchClassification')}
-                          noMatches={t('aps.entry.noClassificationMatches')}
-                          clearLabel={t('aps.entry.clearClassification')}
-                          onChange={(destinationClassificationId) =>
-                            updateLine(line.key, { destinationClassificationId })
-                          }
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-3 grid min-w-0 gap-3 @3xl:grid-cols-3">
-                      <SearchCombobox
-                        label={t('aps.letters.warehouse')}
-                        value={line.warehouseId}
-                        options={warehouses}
-                        placeholder={t('aps.entry.chooseWarehouse')}
-                        searchPlaceholder={t('aps.entry.searchWarehouse')}
-                        noMatches={t('aps.entry.noWarehouseMatches')}
-                        clearLabel={t('aps.entry.clearWarehouse')}
-                        missingLabel={t('aps.entry.unavailableOption')}
-                        onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
-                      />
-                      <OptionSelect
-                        label={t('aps.letters.classification')}
-                        value={line.classificationId}
-                        options={options.classifications}
-                        placeholder={t('aps.entry.chooseClassification')}
-                        searchPlaceholder={t('aps.entry.searchClassification')}
-                        noMatches={t('aps.entry.noClassificationMatches')}
-                        clearLabel={t('aps.entry.clearClassification')}
-                        onChange={(classificationId) => updateLine(line.key, { classificationId })}
-                      />
-                      <label className={labelClass()}>
-                        <span>{t('aps.letters.amount')}</span>
-                        <input
-                          className={CONTROL}
-                          dir="ltr"
-                          inputMode="decimal"
-                          placeholder={t('aps.entry.amountPlaceholder')}
-                          value={line.amount}
-                          onChange={(event) => updateLine(line.key, { amount: event.target.value })}
-                        />
-                      </label>
-                    </div>
-                  )}
-                  {transfer && (
-                    <label className={`${labelClass()} mt-3 max-w-xs`}>
-                      <span>{t('aps.entry.pairAmount')}</span>
+                  <div className="mt-3 grid min-w-0 gap-3 @3xl:grid-cols-3">
+                    <SearchCombobox
+                      label={t('aps.letters.warehouse')}
+                      value={line.warehouseId}
+                      options={warehouses}
+                      placeholder={t('aps.entry.chooseWarehouse')}
+                      searchPlaceholder={t('aps.entry.searchWarehouse')}
+                      noMatches={t('aps.entry.noWarehouseMatches')}
+                      clearLabel={t('aps.entry.clearWarehouse')}
+                      missingLabel={t('aps.entry.unavailableOption')}
+                      onChange={(warehouseId) => updateLine(line.key, { warehouseId })}
+                    />
+                    <OptionSelect
+                      label={t('aps.letters.classification')}
+                      value={line.classificationId}
+                      options={options.classifications}
+                      placeholder={t('aps.entry.chooseClassification')}
+                      searchPlaceholder={t('aps.entry.searchClassification')}
+                      noMatches={t('aps.entry.noClassificationMatches')}
+                      clearLabel={t('aps.entry.clearClassification')}
+                      onChange={(classificationId) => updateLine(line.key, { classificationId })}
+                    />
+                    <label className={labelClass()}>
+                      <span>{t('aps.letters.amount')}</span>
                       <input
                         className={CONTROL}
                         dir="ltr"
@@ -1014,26 +981,10 @@ function EntryEditor({
                         onChange={(event) => updateLine(line.key, { amount: event.target.value })}
                       />
                     </label>
-                  )}
+                  </div>
                 </div>
               ))}
             </>
-          )}
-          {reclassification && (
-            <div className={`${CARD} border-amber-300/70`}>
-              <label className={labelClass()}>
-                <span>{t('aps.entry.reason')}</span>
-                <span className="text-muted-foreground block font-normal">
-                  {t('aps.entry.reasonHint')}
-                </span>
-                <textarea
-                  className={`${CONTROL} min-h-24 py-3`}
-                  value={form.reason}
-                  placeholder={t('aps.entry.reasonPlaceholder')}
-                  onChange={(event) => patch({ reason: event.target.value })}
-                />
-              </label>
-            </div>
           )}
         </section>
 
@@ -1045,30 +996,54 @@ function EntryEditor({
             </h3>
             <span className="text-muted-foreground text-xs">
               {form.lines.length === 1
-                ? t(transfer ? 'aps.entry.summaryPairOne' : 'aps.entry.summaryLineOne')
-                : t(transfer ? 'aps.entry.summaryPairs' : 'aps.entry.summaryLines', {
-                    count: form.lines.length,
-                  })}
+                ? t('aps.entry.summaryLineOne')
+                : t('aps.entry.summaryLines', { count: form.lines.length })}
             </span>
           </div>
           <div className="bg-muted/60 grid min-w-0 grid-cols-2 gap-4 rounded-xl p-4">
+            {/* A transfer prints its two sides in the order of its tables —
+                the source on the right, exactly as the meter above them. */}
             <div className="min-w-0">
-              <p className="text-muted-foreground text-xs">{t('aps.letters.inTotal')}</p>
+              <p className="text-muted-foreground text-xs">
+                {t(transfer ? 'aps.entry.transfer.totalSource' : 'aps.letters.inTotal')}
+              </p>
               <p className="text-foreground mt-1 text-base font-bold break-all">
-                <bdi dir="ltr">{inboundTotal ? totalValue : zero}</bdi>
+                <bdi dir="ltr">
+                  {transferTotals
+                    ? sideValue(transferTotals.source)
+                    : inboundTotal
+                      ? totalValue
+                      : zero}
+                </bdi>
               </p>
             </div>
             <div className="border-border min-w-0 border-s ps-4">
-              <p className="text-muted-foreground text-xs">{t('aps.letters.outTotal')}</p>
+              <p className="text-muted-foreground text-xs">
+                {t(transfer ? 'aps.entry.transfer.totalDestination' : 'aps.letters.outTotal')}
+              </p>
               <p className="text-foreground mt-1 text-base font-bold break-all">
-                <bdi dir="ltr">{outboundTotal ? totalValue : zero}</bdi>
+                <bdi dir="ltr">
+                  {transferTotals
+                    ? sideValue(transferTotals.destination)
+                    : outboundTotal
+                      ? totalValue
+                      : zero}
+                </bdi>
               </p>
             </div>
           </div>
-          {transfer && total !== null && (
-            <p className="flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-              <CheckCircle2 className="size-4" aria-hidden="true" />
-              {t('aps.entry.balanced')}
+          {transfer && transferTotals && transferTotals.balanced !== null && (
+            <p
+              className={`flex items-start gap-2 text-xs font-semibold ${
+                transferTotals.balanced
+                  ? 'text-emerald-700 dark:text-emerald-300'
+                  : 'text-destructive'
+              }`}
+            >
+              <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              {transferTotals.balanced
+                ? t('aps.entry.transfer.balanced')
+                : t('aps.entry.transfer.draftOnly')}
             </p>
           )}
           <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t pt-4">

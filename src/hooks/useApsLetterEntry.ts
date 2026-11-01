@@ -33,6 +33,8 @@ export type EntryErrorCode =
   | 'existing'
   | 'stale'
   | 'invalid'
+  /** An internal transfer whose two sides differ; approval refuses it. */
+  | 'unbalanced'
   | 'notFound'
   | 'unknown';
 
@@ -69,6 +71,9 @@ export function classifyEntryError(error: unknown, status?: number): EntryErrorC
     return 'duplicatePartyLine';
   if (code === 'P0001' && message.includes('aps_entry_id_exists')) return 'existing';
   if (code === 'P0001' && message.includes('aps_entry_stale_draft')) return 'stale';
+  // `aps_assert_letter_consistent` refuses an unbalanced transfer with 23514
+  // and says so in words; that refusal deserves its own message, not "bad data".
+  if (code === '23514' && message.includes('does not balance')) return 'unbalanced';
   if (
     code === '22023' ||
     code === '23514' ||
@@ -118,18 +123,6 @@ function isMissingColumnError(error: unknown, column: string): boolean {
   );
 }
 
-function isMissingSaveNoteSignature(error: unknown): boolean {
-  const item = record(error);
-  const code = text(item?.code) ?? '';
-  const detail = errorDetail(error);
-  if (!detail.includes('p_reclassification_note')) return false;
-  return (
-    code === 'PGRST202' ||
-    code === '42883' ||
-    detail.includes('could not find the function') ||
-    detail.includes('schema cache')
-  );
-}
 function client() {
   const current = getSupabase();
   if (current === null) throw new ApsEntryError('unavailable');
@@ -400,41 +393,25 @@ export function parseEntryDraft(
   const rows = lineValues.map(parseDraftLine);
   let lines: EntryLine[];
   if (type === 'internal_transfer') {
-    const sources = rows.filter((row) => row.direction === 'out');
-    const destinations = rows.filter((row) => row.direction === 'in');
-    if (sources.length !== destinations.length || sources.some((row) => row.pair !== null))
+    // A transfer is a free list of rows with no pairing — the screen shows the
+    // `out` rows in one table and the `in` rows in the other, and every saved
+    // row becomes one editable row again. Legacy pair-shaped drafts are read the
+    // same way: their two stored rows already carry the right direction.
+    // A draft written while the database still had `paired_line_id` carries a
+    // pointer from the destination row to its old source. It is not rewritten
+    // and never re-zipped: both rows already know their side, and a pointer to
+    // a line of another letter proves the payload was not this letter's.
+    const lineIds = new Set(rows.map((row) => row.id));
+    if (rows.some((row) => row.pair !== null && !lineIds.has(row.pair)))
       throw new ApsEntryError('invalid');
-    // The current transfer screen edits pair-shaped rows. Legacy drafts keep
-    // their explicit pairing; drafts written to the free-line schema by this
-    // same screen are stored source, destination, source, destination, so
-    // zipping the two ordered sides restores exactly those rows. A richer
-    // many-to-many free draft is for the forthcoming transfer screen and is
-    // refused here instead of being reshaped incorrectly.
-    const hasLegacyPairs = destinations.some((row) => row.pair !== null);
-    const claimed = new Set<string>();
-    lines = sources.map((source, index) => {
-      const matches = hasLegacyPairs
-        ? destinations.filter((destination) => destination.pair === source.id)
-        : [destinations[index]].filter((destination) => destination !== undefined);
-      const destination = matches[0];
-      if (
-        matches.length !== 1 ||
-        !destination ||
-        destination.amount !== source.amount ||
-        claimed.has(destination.id)
-      )
-        throw new ApsEntryError('invalid');
-      claimed.add(destination.id);
-      return {
-        key: source.id,
-        partyId: '',
-        warehouseId: source.warehouseId,
-        classificationId: source.classificationId,
-        destinationWarehouseId: destination.warehouseId,
-        destinationClassificationId: destination.classificationId,
-        amount: source.amount,
-      };
-    });
+    lines = rows.map((row) => ({
+      key: row.id,
+      partyId: '',
+      warehouseId: row.warehouseId,
+      classificationId: row.classificationId,
+      direction: row.direction,
+      amount: row.amount,
+    }));
   } else {
     const expected = type === 'inbound' ? 'in' : type === 'outbound' ? 'out' : rows[0]?.direction;
     if (rows.some((row) => row.pair !== null || row.direction !== expected))
@@ -446,8 +423,6 @@ export function parseEntryDraft(
       partyId: row.partyId ?? partyId,
       warehouseId: row.warehouseId,
       classificationId: row.classificationId,
-      destinationWarehouseId: '',
-      destinationClassificationId: '',
       amount: row.amount,
     }));
   }
@@ -568,49 +543,28 @@ export async function saveEntryDraft(
   updatedAt: string | null,
   form: EntryForm,
 ): Promise<{ id: string; updatedAt: string }> {
-  const normalizedLines = form.lines.map((line) => {
+  // One payload for every letter type: an internal transfer row already names
+  // its side, so the two tables reach the database as free lines — no pairing,
+  // no `paired_line_id`, and no party on a transfer line.
+  const lines = form.lines.map((line) => {
     const amount = normalizeEntryAmount(line.amount);
     if (amount === null) throw new ApsEntryError('invalid');
-    return { line, amount };
+    if (form.type === 'internal_transfer') {
+      return {
+        direction: line.direction ?? 'out',
+        warehouse_id: line.warehouseId,
+        classification_id: line.classificationId,
+        amount,
+      };
+    }
+    return {
+      direction: form.type === 'inbound' ? 'in' : form.type === 'outbound' ? 'out' : form.direction,
+      warehouse_id: line.warehouseId,
+      classification_id: line.classificationId,
+      amount,
+      ...(form.type === 'inbound' || form.type === 'outbound' ? { party_id: line.partyId } : {}),
+    };
   });
-  const legacyLines = normalizedLines.map(({ line, amount }) =>
-    form.type === 'internal_transfer'
-      ? {
-          source_warehouse_id: line.warehouseId,
-          source_classification_id: line.classificationId,
-          destination_warehouse_id: line.destinationWarehouseId,
-          destination_classification_id: line.destinationClassificationId,
-          amount,
-        }
-      : {
-          warehouse_id: line.warehouseId,
-          classification_id: line.classificationId,
-          amount,
-          ...(form.type === 'inbound' || form.type === 'outbound'
-            ? { party_id: line.partyId }
-            : {}),
-        },
-  );
-  // The current screen still thinks in source/destination rows. To the new
-  // database each such row is simply one `out` free line followed by its
-  // equal `in` free line; no pair relationship is written or needed.
-  const lines =
-    form.type === 'internal_transfer'
-      ? normalizedLines.flatMap(({ line, amount }) => [
-          {
-            direction: 'out',
-            warehouse_id: line.warehouseId,
-            classification_id: line.classificationId,
-            amount,
-          },
-          {
-            direction: 'in',
-            warehouse_id: line.destinationWarehouseId,
-            classification_id: line.destinationClassificationId,
-            amount,
-          },
-        ])
-      : legacyLines;
   const statement = form.type === 'internal_transfer' ? form.reason : null;
   const commonArgs = {
     p_letter_id: id,
@@ -628,21 +582,16 @@ export async function saveEntryDraft(
     p_direction: form.type === 'external_transfer' ? form.direction : null,
     p_issuer_reference: form.letterCode === '' ? null : form.letterCode,
   };
-  let response = await client().rpc('aps_save_letter_draft', {
+  // One signature only. The old one accepted source/destination *pairs*, which
+  // cannot express a free-line transfer at all (one source feeding two
+  // destinations has no pair to write), so retrying it would send a payload it
+  // must reject. A database that has not run the free-line migration fails here
+  // with `unavailable` — loudly, and without a half-written letter.
+  const response = await client().rpc('aps_save_letter_draft', {
     ...commonArgs,
     p_reclassification_note: statement,
     p_lines: lines,
   });
-  // PGRST202 proves the new signature was not found and therefore was not
-  // executed, so the pre-migration signature can be tried exactly once
-  // without any risk of a double save.
-  if (response.error && isMissingSaveNoteSignature(response.error)) {
-    response = await client().rpc('aps_save_letter_draft', {
-      ...commonArgs,
-      p_reclassification_reason: statement,
-      p_lines: legacyLines,
-    });
-  }
   assertResponse(response);
   const result = record(response.data);
   const version = text(result?.updated_at);

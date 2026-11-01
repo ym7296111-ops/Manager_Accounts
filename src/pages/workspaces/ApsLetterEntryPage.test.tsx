@@ -207,7 +207,7 @@ describe('APS letter entry screen', () => {
     expect(screen.getByRole('button', { name: 'حفظ التعديلات' })).toBeTruthy();
   });
 
-  it('validates before any request and keeps the reason rule for reclassification', async () => {
+  it('edits an internal transfer as two facing tables and measures the balance', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
     expect(await screen.findByText(/أدخل رقم النظام \(EPS\) بالأرقام فقط/)).toBeTruthy();
@@ -215,24 +215,97 @@ describe('APS letter entry screen', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
     fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '90' } });
-    const selects = screen.getAllByRole('combobox');
-    expect(selects.length).toBeGreaterThanOrEqual(4);
-    pick('المصدر — المخزن', 'المخزن الرئيسي - غرب القاهرة');
-    pick('المصدر — التصنيف', 'حديد');
-    pick('الوجهة — المخزن', 'المخزن الرئيسي - غرب القاهرة');
-    pick('الوجهة — التصنيف', 'تشغيل');
-    fireEvent.change(screen.getByLabelText('قيمة الزوج'), { target: { value: '10' } });
-    expect(await screen.findByLabelText(/سبب إعادة التصنيف/)).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
-    expect(await screen.findByText(/أدخل سبب إعادة التصنيف/)).toBeTruthy();
-    expect(save).not.toHaveBeenCalled();
-    fireEvent.change(screen.getByLabelText(/سبب إعادة التصنيف/), {
-      target: { value: 'إعادة تصنيف أثناء النقل' },
+
+    /* Two named tables, one row each side's own add button, and no pair
+       language anywhere: the transfer is a list of free lines. */
+    const source = screen.getByRole('region', { name: 'المصدر (صادر)' });
+    const destination = screen.getByRole('region', { name: 'الوجهة (وارد)' });
+    expect(
+      within(source)
+        .getAllByRole('columnheader')
+        .map((cell) => cell.textContent),
+    ).toEqual(['المخزن', 'التصنيف', 'القيمة', 'حذف']);
+    /* The destination table opens empty and says so; it grows by its own button. */
+    expect(within(destination).queryAllByRole('columnheader')).toHaveLength(0);
+    expect(within(destination).getByText('لا يوجد سطر وارد بعد.')).toBeTruthy();
+    expect(within(source).getByRole('button', { name: 'إضافة سطر صادر' })).toBeTruthy();
+    expect(within(destination).getByRole('button', { name: 'إضافة سطر وارد' })).toBeTruthy();
+    expect(screen.queryByText(/زوج/)).toBeNull();
+    // The statement sits above the tables and is optional.
+    expect(screen.getByLabelText(/بيان إعادة التصنيف/)).toBeTruthy();
+
+    pick('المصدر (صادر) — السطر 1 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('المصدر (صادر) — السطر 1 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('المصدر (صادر) — السطر 1 — القيمة'), {
+      target: { value: '10' },
     });
-    save.mockResolvedValue({ id: id(901), updatedAt: '2026-03-04T10:00:00Z' });
+
+    /* One source row feeding two destinations: the meter follows the payload,
+       not some pairing — and it says "not balanced" instead of refusing to
+       save. */
+    fireEvent.click(within(destination).getByRole('button', { name: 'إضافة سطر وارد' }));
+    fireEvent.click(within(destination).getByRole('button', { name: 'إضافة سطر وارد' }));
+    pick('الوجهة (وارد) — السطر 1 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('الوجهة (وارد) — السطر 1 — التصنيف', 'تشغيل');
+    fireEvent.change(screen.getByLabelText('الوجهة (وارد) — السطر 1 — القيمة'), {
+      target: { value: '6' },
+    });
+    pick('الوجهة (وارد) — السطر 2 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('الوجهة (وارد) — السطر 2 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('الوجهة (وارد) — السطر 2 — القيمة'), {
+      target: { value: '4' },
+    });
+
+    const meter = () => screen.getByTestId('transfer-balance');
+    const difference = () => screen.getByTestId('transfer-difference').textContent;
+    expect(within(meter()).getByText(/^متوازن/)).toBeTruthy();
+    expect(difference()).toBe('0.00');
+    /* The meter is the payload's own sum: take one unit off a destination row
+       and the difference appears at once, red, without blocking the save. */
+    fireEvent.change(screen.getByLabelText('الوجهة (وارد) — السطر 2 — القيمة'), {
+      target: { value: '3' },
+    });
+    expect(within(meter()).getByText('غير متوازن')).toBeTruthy();
+    expect(difference()).toBe('1.00');
+    expect(within(meter()).getByText('إجمالي المصدر')).toBeTruthy();
+    expect(within(meter()).getByText('إجمالي الوجهة')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('الوجهة (وارد) — السطر 2 — القيمة'), {
+      target: { value: '4.00' },
+    });
+    expect(within(meter()).getByText(/^متوازن/)).toBeTruthy();
+    expect(difference()).toBe('0.00');
+
     fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
-    await waitFor(() => expect(approve).toHaveBeenCalledWith(save.mock.calls[0]![0]));
+    await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines.map((line) => line.direction)).toEqual(['out', 'in', 'in']);
+    /* The screen keeps what was typed; `saveEntryDraft` normalises it. */
+    expect(form.lines.map((line) => line.amount)).toEqual(['10', '6', '4.00']);
     expect(await screen.findByText('تم اعتماد الخطاب بنجاح.')).toBeTruthy();
+  });
+
+  it('saves an unbalanced transfer as a draft and names the approval refusal', async () => {
+    approve.mockRejectedValue(new ApsEntryError('unbalanced'));
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '91' } });
+    pick('المصدر (صادر) — السطر 1 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('المصدر (صادر) — السطر 1 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('المصدر (صادر) — السطر 1 — القيمة'), {
+      target: { value: '10' },
+    });
+
+    /* The draft is allowed to be unbalanced: the write is not blocked. */
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines).toHaveLength(1);
+    expect(form.lines[0]?.direction).toBe('out');
+    expect(within(screen.getByTestId('transfer-balance')).getByText('غير متوازن')).toBeTruthy();
+
+    /* Approval is refused by the database, and the screen says why. */
+    fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
+    expect(await screen.findByText(/التحويل غير متوازن/)).toBeTruthy();
   });
 
   it('reports a duplicate number without losing the entered data', async () => {
@@ -628,8 +701,6 @@ describe('APS letter entry screen', () => {
               partyId: '',
               warehouseId: id(100),
               classificationId: id(201),
-              destinationWarehouseId: '',
-              destinationClassificationId: '',
               amount: '10',
             },
           ],

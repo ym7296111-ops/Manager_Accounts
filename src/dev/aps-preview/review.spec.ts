@@ -157,6 +157,12 @@ async function fillHeader(page: Page, number: string, code = '63') {
   await page.getByLabel('الرقم', { exact: true }).fill(code);
 }
 
+/** The classification is the same searchable combobox, printing the name only. */
+async function pickOption(page: Page, label: string, option: string) {
+  await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole('option', { name: option }).click();
+}
+
 /** The warehouse is a searchable combobox; the option carries the station. */
 async function pickWarehouse(page: Page, label: string, option: string) {
   await page.getByLabel(label, { exact: true }).click();
@@ -191,37 +197,88 @@ test('entry creates an inbound draft and approves it through the existing transi
   await expect(page.getByRole('link', { name: 'عرض التفاصيل 9001' })).toBeVisible();
 });
 
-test('internal entry pairs source and destination and requires a reclassification reason', async ({
+test('internal transfer writes free source and destination lines and refuses an unbalanced approval', async ({
   page,
 }) => {
-  await page.goto('/workspaces/aps/letters/new?scenario=approval-fails');
+  await page.setViewportSize({ width: 1280, height: 1100 });
+  await page.goto('/workspaces/aps/letters/new');
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   await fillHeader(page, '9002');
-  await pickWarehouse(page, 'المصدر — المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
-  await page.getByLabel('المصدر — التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
-  await pickWarehouse(page, 'الوجهة — المخزن', 'مخزن التشغيل الرئيسي - محطة شرق القاهرة');
-  await page.getByLabel('الوجهة — التصنيف').selectOption({ label: 'مستلزمات التشغيل — CL-002' });
-  await page.getByLabel('قيمة الزوج').fill('75');
-  await expect(page.getByLabel(/سبب إعادة التصنيف/)).toBeVisible();
-  await expect(page.getByText('المصدر والوجهة متساويان')).toBeVisible();
-  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
-  await expect(page.getByText(/أدخل سبب إعادة التصنيف/)).toBeVisible();
-  await page.getByLabel(/سبب إعادة التصنيف/).fill('إعادة تصنيف أثناء النقل');
-  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
-  await expect(page.getByText(/حُفظت المسودة، لكن تعذّر اعتمادها/)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'عرض المسودة' })).toBeVisible();
+
+  /* Two tables, two independent row sets: one source row feeding two
+     destinations. Nothing on screen speaks of a pair. */
+  const source = page.getByRole('region', { name: 'المصدر (صادر)' });
+  const destination = page.getByRole('region', { name: 'الوجهة (وارد)' });
+  await expect(source).toBeVisible();
+  await expect(destination).toBeVisible();
+  await expect(page.getByLabel(/بيان إعادة التصنيف/)).toBeVisible();
+
+  await pickWarehouse(
+    page,
+    'المصدر (صادر) — السطر 1 — المخزن',
+    'مخزن المواد الخام - محطة غرب القاهرة',
+  );
+  await pickOption(page, 'المصدر (صادر) — السطر 1 — التصنيف', 'حديد وصلب');
+  await page.getByLabel('المصدر (صادر) — السطر 1 — القيمة').fill('120');
+
+  await destination.getByRole('button', { name: 'إضافة سطر وارد' }).click();
+  await destination.getByRole('button', { name: 'إضافة سطر وارد' }).click();
+  await pickWarehouse(
+    page,
+    'الوجهة (وارد) — السطر 1 — المخزن',
+    'مخزن التشغيل الرئيسي - محطة شرق القاهرة',
+  );
+  await pickOption(page, 'الوجهة (وارد) — السطر 1 — التصنيف', 'مستلزمات التشغيل');
+  await page.getByLabel('الوجهة (وارد) — السطر 1 — القيمة').fill('100');
+  await pickWarehouse(
+    page,
+    'الوجهة (وارد) — السطر 2 — المخزن',
+    'مخزن التشغيل الرئيسي - محطة شرق القاهرة',
+  );
+  await pickOption(page, 'الوجهة (وارد) — السطر 2 — التصنيف', 'حديد وصلب');
+  await page.getByLabel('الوجهة (وارد) — السطر 2 — القيمة').fill('20');
+
+  const meter = page.getByTestId('transfer-balance');
+  await expect(meter).toHaveAttribute('data-balance', 'balanced');
+  await expect(meter).toContainText('120.00');
   await expectNoHorizontalOverflow(page);
+
+  /* The draft may be unbalanced: the meter turns red, the save still writes. */
+  await page.getByLabel('الوجهة (وارد) — السطر 2 — القيمة').fill('10');
+  await expect(meter).toHaveAttribute('data-balance', 'unbalanced');
+  await expect(page.getByTestId('transfer-difference')).toHaveText('10.00');
+  await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
+  await expect(page.getByText(/حُفظت المسودة بنجاح/)).toBeVisible();
+
+  /* Approval is the gate the database keeps, and the screen names it. */
+  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
+  await expect(page.getByText(/التحويل غير متوازن/)).toBeVisible();
+
+  /* Balance it, save, and approve: the transfer becomes a reference document. */
+  await page.getByLabel('الوجهة (وارد) — السطر 2 — القيمة').fill('20');
+  await expect(meter).toHaveAttribute('data-balance', 'balanced');
+  await page.getByRole('button', { name: 'اعتماد الخطاب' }).click();
+  await expect(page.getByText('تم اعتماد الخطاب بنجاح.')).toBeVisible();
 });
 
-test('entry stays usable at 390px with the paired layout', async ({ page }) => {
+test('entry stays usable at 390px with the stacked transfer tables', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/workspaces/aps/letters/new');
   await expect(pageHeader(page).getByText('خطاب وارد جديد')).toBeVisible();
   await expect(page.getByRole('button', { name: /وارد/ })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
-  await expect(page.getByLabel('المصدر — المخزن')).toBeVisible();
-  await expect(page.getByLabel('الوجهة — التصنيف')).toBeVisible();
+  const sourceTable = page.getByRole('region', { name: 'المصدر (صادر)' });
+  const destinationTable = page.getByRole('region', { name: 'الوجهة (وارد)' });
+  await expect(page.getByLabel('المصدر (صادر) — السطر 1 — المخزن')).toBeVisible();
+  await expect(destinationTable).toBeVisible();
+  /* Stacked, not side by side: the meter sits between the two tables. */
+  const sourceBox = await sourceTable.boundingBox();
+  const meterBox = await page.getByTestId('transfer-balance').boundingBox();
+  const destinationBox = await destinationTable.boundingBox();
+  expect(sourceBox && meterBox && destinationBox).toBeTruthy();
+  expect(sourceBox!.y).toBeLessThan(meterBox!.y);
+  expect(meterBox!.y).toBeLessThan(destinationBox!.y);
   // The merged header still fits: the four type labels in one row, the period
   // bar, then EPS above the letter code — all inside 390px, no sideways scroll.
   const typeSwitch = page.getByRole('group', { name: 'اختر نوع الخطاب' });
