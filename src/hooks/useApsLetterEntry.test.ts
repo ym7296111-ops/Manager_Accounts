@@ -177,7 +177,7 @@ describe('APS letter entry transport', () => {
   it('parses the A.3 payload: no year flag, an active period, a today suggestion', () => {
     const options = parseEntryOptions(a3Payload);
     expect(options.years[0]).toMatchObject({ id: id(400), active: true });
-    expect(options.months[0].containsToday).toBe(true);
+    expect(options.months[0]?.containsToday ?? null).toBe(true);
     expect(options.activePeriod).toMatchObject({
       monthId: id(300),
       yearId: id(400),
@@ -193,13 +193,13 @@ describe('APS letter entry transport', () => {
     // A pre-A.3 database: no period and no suggestion, the year flag still there.
     const legacy = parseEntryOptions(optionsPayload);
     expect(legacy.activePeriod ?? null).toBeNull();
-    expect(legacy.years[0].active).toBe(true);
-    expect(legacy.months[0].containsToday ?? null).toBeNull();
+    expect(legacy.years[0]?.active).toBe(true);
+    expect(legacy.months[0]?.containsToday ?? null).toBeNull();
     // No period at all: nothing is invented, and the list still parses.
     expect(
       parseEntryOptions({ ...a3Payload, active_period: null }).activePeriod ?? null,
     ).toBeNull();
-    expect(parseEntryOptions({ ...a3Payload, active_period: null }).years[0].active).toBe(false);
+    expect(parseEntryOptions({ ...a3Payload, active_period: null }).years[0]?.active).toBe(false);
     // An unreadable period is ignored, not fatal.
     const broken = parseEntryOptions({ ...a3Payload, active_period: { fiscal_month_id: 'x' } });
     expect(broken.activePeriod ?? null).toBeNull();
