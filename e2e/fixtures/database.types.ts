@@ -118,6 +118,7 @@ export interface E2EDatabase {
           start_date: string;
           end_date: string;
           current_period: number;
+          is_active: boolean;
           is_closed: boolean;
           created_at: string;
           updated_at: string;
@@ -131,6 +132,12 @@ export interface E2EDatabase {
           end_date: string;
           current_period?: number;
           is_closed?: boolean;
+        },
+        {
+          current_period?: number;
+          is_closed?: boolean;
+          /** Service-role cleanup and the direct-write privilege probe only. */
+          is_active?: boolean;
         }
       >;
       opening_balances: Table<
@@ -278,6 +285,10 @@ export interface E2EDatabase {
     };
     Views: Record<string, never>;
     Functions: {
+      aps_activate_fiscal_month: {
+        Args: { p_fiscal_month_id: string; p_reason?: string | null };
+        Returns: Json;
+      };
       admin_update_project_settings: {
         Args: {
           p_name_ar: string;

@@ -24,6 +24,8 @@ interface TestState {
   createYear: ReturnType<typeof vi.fn>;
   activateYear: ReturnType<typeof vi.fn>;
   updatePeriod: ReturnType<typeof vi.fn>;
+  activateMonth: ReturnType<typeof vi.fn>;
+  activationPending: boolean;
   saveBalances: ReturnType<typeof vi.fn>;
 }
 
@@ -36,6 +38,8 @@ const fiscalState = vi.hoisted<TestState>(() => ({
   createYear: vi.fn(),
   activateYear: vi.fn(),
   updatePeriod: vi.fn(),
+  activateMonth: vi.fn(),
+  activationPending: false,
   saveBalances: vi.fn(),
 }));
 
@@ -70,6 +74,11 @@ vi.mock('@/hooks/useFiscalSettings', async (importOriginal) => {
     useCreateFiscalYear: () => ({ mutateAsync: fiscalState.createYear, isPending: false }),
     useActivateFiscalYear: () => ({ mutateAsync: fiscalState.activateYear, isPending: false }),
     useUpdateFiscalPeriod: () => ({ mutateAsync: fiscalState.updatePeriod, isPending: false }),
+    useActivateFiscalMonth: () => ({
+      mutateAsync: fiscalState.activateMonth,
+      isPending: fiscalState.activationPending,
+      variables: fiscalState.activationPending ? { monthId: 'fm-2' } : undefined,
+    }),
     useSaveOpeningBalances: () => ({ mutateAsync: fiscalState.saveBalances, isPending: false }),
     useDeleteOpeningBalance: () => ({ mutateAsync: vi.fn(), isPending: false }),
   };
@@ -146,6 +155,7 @@ function createMonths(yearId: string): FiscalMonth[] {
       start_date: start,
       end_date: start,
       current_period: 1,
+      is_active: false,
       is_closed: false,
       created_at: '2035-07-01T00:00:00.000Z',
       updated_at: '2035-07-01T00:00:00.000Z',
@@ -194,6 +204,22 @@ describe('FiscalSettings', () => {
           month.id === input.monthId ? { ...month, current_period: input.currentPeriod } : month,
         );
         return Promise.resolve(fiscalState.months.find((month) => month.id === input.monthId)!);
+      },
+    );
+    fiscalState.activationPending = false;
+    fiscalState.activateMonth = vi.fn(
+      (input: { fiscalYearId: string; monthId: string; reason?: string | null }) => {
+        fiscalState.months = fiscalState.months.map((month) => ({
+          ...month,
+          is_active: month.id === input.monthId,
+        }));
+        return Promise.resolve({
+          fiscal_month_id: input.monthId,
+          fiscal_year_id: input.fiscalYearId,
+          changed: true,
+          was_closed: false,
+          reason: input.reason ?? null,
+        });
       },
     );
     fiscalState.saveBalances = vi.fn(
@@ -273,5 +299,144 @@ describe('FiscalSettings', () => {
       }),
     );
     expect(await screen.findByText('نحن الآن في الفترة 3 من شهر يوليو 2035.')).toBeTruthy();
+    expect(fiscalState.activateMonth).not.toHaveBeenCalled();
+  });
+
+  it('activates a month independently of selection and moves the single active badge', async () => {
+    const year = createYear(true);
+    fiscalState.years = [year];
+    fiscalState.months = createMonths(year.id).map((month) => ({
+      ...month,
+      is_active: month.id === 'fm-1',
+    }));
+    renderFiscalSettings();
+    fireEvent.click(screen.getByRole('tab', { name: 'الضبط الدوري' }));
+
+    const rows = screen.getAllByTestId('fiscal-period-month');
+    expect(rows[0]?.getAttribute('data-active')).toBe('true');
+    expect(within(rows[0]!).getByText('فعال')).toBeTruthy();
+    expect(within(rows[0]!).getByRole('button', { name: 'تنشيط شهر يوليو 2035' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'تنشيط شهر أغسطس 2035' }));
+
+    await waitFor(() =>
+      expect(fiscalState.activateMonth).toHaveBeenCalledWith({
+        fiscalYearId: year.id,
+        monthId: 'fm-2',
+        reason: null,
+      }),
+    );
+    expect(await screen.findByText('تم تنشيط الشهر ليصبح فترة الترحيل للمشروع.')).toBeTruthy();
+    expect(
+      screen
+        .getAllByTestId('fiscal-period-month')
+        .filter((row) => row.getAttribute('data-active') === 'true'),
+    ).toHaveLength(1);
+    expect(screen.getAllByTestId('fiscal-period-month')[1]?.getAttribute('data-active')).toBe(
+      'true',
+    );
+    // Activation neither selects the row nor edits its current_period.
+    expect(screen.getByLabelText('الفترة الجارية')).toHaveProperty('value', '1');
+    expect(
+      within(screen.getAllByTestId('fiscal-period-month')[0]!).getByRole('button', {
+        pressed: true,
+      }),
+    ).toBeTruthy();
+    expect(fiscalState.updatePeriod).not.toHaveBeenCalled();
+    expect(fiscalState.months.find((month) => month.id === 'fm-2')?.current_period).toBe(1);
+  });
+
+  it('requires a reason for a closed month and keeps the dialog open on refusal', async () => {
+    const year = createYear(true);
+    fiscalState.years = [year];
+    fiscalState.months = createMonths(year.id).map((month) =>
+      month.id === 'fm-2' ? { ...month, is_closed: true } : month,
+    );
+    fiscalState.activateMonth.mockRejectedValueOnce({
+      code: '42501',
+      message: 'permission denied',
+    });
+    renderFiscalSettings();
+    fireEvent.click(screen.getByRole('tab', { name: 'الضبط الدوري' }));
+    fireEvent.click(screen.getByRole('button', { name: 'تنشيط شهر أغسطس 2035' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(fiscalState.activateMonth).not.toHaveBeenCalled();
+    const reason = within(dialog).getByLabelText('سبب التنشيط');
+    const submit = within(dialog).getByRole('button', { name: 'تنشيط' });
+    expect(submit).toHaveProperty('disabled', true);
+    fireEvent.change(reason, { target: { value: 'قصير' } });
+    expect(submit).toHaveProperty('disabled', true);
+    fireEvent.change(reason, { target: { value: '  اعتماد متأخر بموافقة المالك  ' } });
+    expect(submit).toHaveProperty('disabled', false);
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(fiscalState.activateMonth).toHaveBeenCalledWith({
+        fiscalYearId: year.id,
+        monthId: 'fm-2',
+        reason: 'اعتماد متأخر بموافقة المالك',
+      }),
+    );
+    expect(await within(dialog).findByRole('alert')).toBeTruthy();
+    expect(within(dialog).getByLabelText('سبب التنشيط')).toHaveProperty(
+      'value',
+      '  اعتماد متأخر بموافقة المالك  ',
+    );
+    expect(screen.queryByText('تم تنشيط الشهر ليصبح فترة الترحيل للمشروع.')).toBeNull();
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.getAllByTestId('fiscal-period-month')[1]?.getAttribute('data-active')).toBe(
+      'true',
+    );
+  });
+
+  it('asks for a reason when the active year is closed even if the month is open', () => {
+    fiscalState.years = [{ ...createYear(true), is_closed: true }];
+    fiscalState.months = createMonths('fy-2035');
+    renderFiscalSettings();
+    fireEvent.click(screen.getByRole('tab', { name: 'الضبط الدوري' }));
+    fireEvent.click(screen.getByRole('button', { name: 'تنشيط شهر يوليو 2035' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(fiscalState.activateMonth).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'إلغاء' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('shows an activation failure without moving the active badge', async () => {
+    fiscalState.years = [createYear(true)];
+    fiscalState.months = createMonths('fy-2035').map((month) => ({
+      ...month,
+      is_active: month.id === 'fm-1',
+    }));
+    fiscalState.activateMonth.mockRejectedValueOnce(new Error('network down'));
+    renderFiscalSettings();
+    fireEvent.click(screen.getByRole('tab', { name: 'الضبط الدوري' }));
+    fireEvent.click(screen.getByRole('button', { name: 'تنشيط شهر أغسطس 2035' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect(screen.getAllByTestId('fiscal-period-month')[0]?.getAttribute('data-active')).toBe(
+      'true',
+    );
+    expect(screen.queryByText('تم تنشيط الشهر ليصبح فترة الترحيل للمشروع.')).toBeNull();
+  });
+
+  it('disables activation and period saving while a request is in flight', () => {
+    fiscalState.years = [createYear(true)];
+    fiscalState.months = createMonths('fy-2035');
+    fiscalState.activationPending = true;
+    renderFiscalSettings();
+    fireEvent.click(screen.getByRole('tab', { name: 'الضبط الدوري' }));
+    const buttons = screen.getAllByRole('button', { name: /^تنشيط شهر/ });
+    expect(buttons).toHaveLength(12);
+    expect(buttons.every((button) => button.hasAttribute('disabled'))).toBe(true);
+    expect(
+      screen.getByRole('button', { name: 'تنشيط شهر أغسطس 2035' }).getAttribute('aria-busy'),
+    ).toBe('true');
+    fireEvent.change(screen.getByLabelText('الفترة الجارية'), { target: { value: '4' } });
+    expect(screen.getByRole('button', { name: 'حفظ الفترة' })).toHaveProperty('disabled', true);
   });
 });

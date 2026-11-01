@@ -31,6 +31,21 @@ async function cleanFiscalYear() {
     }
   }
 
+  // A.1 refuses deletion of an active posting month, even through CASCADE.
+  // Clear only this throw-away year's flags before removing its fixtures.
+  if ((years ?? []).length > 0) {
+    const { error: activationError } = await admin
+      .from('fiscal_months')
+      .update({ is_active: false })
+      .in(
+        'fiscal_year_id',
+        (years ?? []).map((year) => year.id),
+      );
+    if (activationError) {
+      throw new Error(`Could not clean the E2E posting month: ${activationError.message}`);
+    }
+  }
+
   const { error: deleteError } = await admin.from('fiscal_years').delete().eq('name', YEAR_NAME);
   if (deleteError) throw new Error(`Could not clean the E2E fiscal year: ${deleteError.message}`);
 }
@@ -117,7 +132,7 @@ test.afterEach(async () => {
 
 /* E1–E8 live in the second test below; this one keeps the year/period flow and
    the write permission probe that already existed, without the old flat form. */
-test('owner creates a fiscal year, changes its period and checks write permissions', async ({
+test('owner creates a year, edits and activates its periods, and checks write permissions', async ({
   page,
 }) => {
   await cleanFiscalYear();
@@ -174,6 +189,41 @@ test('owner creates a fiscal year, changes its period and checks write permissio
   expect(monthError).toBeNull();
   expect(firstMonth?.current_period).toBe(3);
 
+  // Activation is separate from both selecting a month and editing current_period.
+  const monthList = main.getByRole('navigation', { name: 'Months in the active fiscal year' });
+  await monthList.getByRole('button', { name: 'Activate July 2035', exact: true }).click();
+  await expect(monthList.getByText('Active', { exact: true })).toHaveCount(1);
+  await expect(
+    monthList.getByRole('button', { name: 'Activate July 2035', exact: true }),
+  ).toBeDisabled();
+  await monthList.getByRole('button', { name: 'Activate August 2035', exact: true }).click();
+  await expect(
+    monthList.getByRole('button', { name: 'Activate August 2035', exact: true }),
+  ).toBeDisabled();
+  await expect(
+    monthList.getByRole('button', { name: 'Activate July 2035', exact: true }),
+  ).toBeEnabled();
+  await expect(monthList.getByText('Active', { exact: true })).toHaveCount(1);
+
+  const { data: activeMonths, error: activeMonthsError } = await admin
+    .from('fiscal_months')
+    .select('id, fiscal_year_id, month_number, current_period, is_active')
+    .eq('is_active', true);
+  expect(activeMonthsError).toBeNull();
+  expect(activeMonths).toHaveLength(1);
+  expect(activeMonths?.[0]).toMatchObject({
+    fiscal_year_id: year!.id,
+    month_number: 2,
+    current_period: 1,
+  });
+  const { data: unchangedPeriod, error: unchangedPeriodError } = await admin
+    .from('fiscal_months')
+    .select('current_period, is_active')
+    .eq('id', firstMonth!.id)
+    .single();
+  expect(unchangedPeriodError).toBeNull();
+  expect(unchangedPeriod).toEqual({ current_period: 3, is_active: false });
+
   // The owner succeeds, while an authenticated ordinary admin without
   // project.settings:manage cannot change current_period through PostgREST.
   const ordinaryAdmin = createClient<E2EDatabase>(fixtures.supabaseUrl, fixtures.anonKey, {
@@ -197,7 +247,21 @@ test('owner creates a fiscal year, changes its period and checks write permissio
     .select('id, current_period');
   expect(unauthorizedError).toBeNull();
   expect(unauthorizedRows).toEqual([]);
-  await ordinaryAdmin.auth.signOut();
+
+  const { error: unauthorizedActivationError } = await ordinaryAdmin.rpc(
+    'aps_activate_fiscal_month',
+    {
+      p_fiscal_month_id: firstMonth!.id,
+      p_reason: null,
+    },
+  );
+  expect(unauthorizedActivationError?.code).toBe('42501');
+  const { error: directActivationError } = await ordinaryAdmin
+    .from('fiscal_months')
+    .update({ is_active: true })
+    .eq('id', firstMonth!.id);
+  expect(directActivationError?.code).toBe('42501');
+  await ordinaryAdmin.auth.signOut({ scope: 'local' });
 });
 
 /*

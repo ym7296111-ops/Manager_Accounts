@@ -21,7 +21,7 @@ export const OPENING_BALANCES_CONFLICT_TARGET =
 const FISCAL_YEAR_SELECT =
   'id, name, start_date, end_date, is_active, is_closed, supplements_open, opening_balances_locked, created_at, updated_at';
 const FISCAL_MONTH_SELECT =
-  'id, fiscal_year_id, month_number, name, start_date, end_date, current_period, is_closed, created_at, updated_at';
+  'id, fiscal_year_id, month_number, name, start_date, end_date, current_period, is_active, is_closed, created_at, updated_at';
 
 /**
  * The classification columns an opening-balance row needs to render.
@@ -56,6 +56,7 @@ export type FiscalSettingsWriteErrorCode =
 export type FiscalSettingsWriteOperation =
   | 'createYear'
   | 'activateYear'
+  | 'activateMonth'
   | 'updatePeriod'
   | 'saveOpeningBalances'
   | 'deleteOpeningBalance'
@@ -241,6 +242,21 @@ export interface CreateFiscalYearInput {
   readonly end_date: string;
 }
 
+export interface ActivateFiscalMonthInput {
+  readonly fiscalYearId: string;
+  readonly monthId: string;
+  /** Required by the RPC for a closed month/year; optional for an open one. */
+  readonly reason?: string | null;
+}
+
+export interface ActivateFiscalMonthResult {
+  readonly fiscal_month_id: string;
+  readonly fiscal_year_id: string;
+  readonly changed: boolean;
+  readonly was_closed: boolean;
+  readonly reason?: string | null;
+}
+
 export interface UpdateFiscalPeriodInput {
   readonly fiscalYearId: string;
   readonly monthId: string;
@@ -326,7 +342,13 @@ export function classifyFiscalSettingsWriteError(
   if (code === '23505') {
     return 'duplicate';
   }
-  if (code === '23514' || code === '22P02' || code === '22007' || code === '22008') {
+  if (
+    code === '23514' ||
+    code === '22023' ||
+    code === '22P02' ||
+    code === '22007' ||
+    code === '22008'
+  ) {
     return 'validation';
   }
   if (code === 'PGRST116' || code === 'P0002') {
@@ -531,6 +553,69 @@ export function useActivateFiscalYear() {
         current?.map((year) => ({ ...year, is_active: year.id === activeYear.id })),
       );
       invalidation.invalidateYears();
+    },
+  });
+}
+
+/**
+ * The posting month has one write path: the A.1 RPC. Never update `is_active`
+ * through PostgREST — the column grant intentionally rejects that shortcut.
+ * The RPC also enforces the closed-period exception (protected role + reason).
+ */
+export function useActivateFiscalMonth() {
+  const queryClient = useQueryClient();
+  const invalidation = useInvalidateFiscalSettings();
+
+  return useMutation({
+    mutationFn: async (input: ActivateFiscalMonthInput): Promise<ActivateFiscalMonthResult> => {
+      if (input.monthId.trim() === '' || input.fiscalYearId.trim() === '') {
+        throw new FiscalSettingsWriteError('validation');
+      }
+      if (input.reason != null && typeof input.reason !== 'string') {
+        throw new FiscalSettingsWriteError('validation');
+      }
+      const supabase = requireSupabase();
+      const response: {
+        data: unknown;
+        error: { code?: string; message?: string } | null;
+      } = await supabase.rpc('aps_activate_fiscal_month', {
+        p_fiscal_month_id: input.monthId,
+        p_reason: input.reason?.trim() || null,
+      });
+      const { data, error } = response;
+      const result = unwrapWrite(data, error, 'activateMonth');
+      if (
+        !isRecord(result) ||
+        result.fiscal_month_id !== input.monthId ||
+        result.fiscal_year_id !== input.fiscalYearId ||
+        typeof result.changed !== 'boolean' ||
+        typeof result.was_closed !== 'boolean'
+      ) {
+        throw new FiscalSettingsWriteError('validation');
+      }
+      return {
+        fiscal_month_id: input.monthId,
+        fiscal_year_id: input.fiscalYearId,
+        changed: result.changed,
+        was_closed: result.was_closed,
+        reason: typeof result.reason === 'string' ? result.reason : null,
+      };
+    },
+    onSuccess: (result) => {
+      // The RPC succeeded, so the database invariant guarantees this is now
+      // the only active month. Patch the visible list immediately, then refetch
+      // every year's list because the previous active month may be elsewhere.
+      queryClient.setQueryData<readonly FiscalMonth[]>(
+        [...FISCAL_MONTHS_QUERY_KEY, result.fiscal_year_id],
+        (current) =>
+          current?.map((month) => ({
+            ...month,
+            is_active: month.id === result.fiscal_month_id,
+          })),
+      );
+      // This also refreshes ENTRY_OPTIONS_QUERY_KEY, which carries the active
+      // posting period to the letter-entry screen.
+      invalidation.invalidateMonths();
     },
   });
 }

@@ -30,7 +30,8 @@
  *   `SIS-001-01` for its first branch, `parent_id`/`code`/`level` are refused
  *   on update, and deleting a company that still has branches raises 23503;
  * * a fiscal-year insert derives its name and generates twelve months, a
- *   period edit writes only `current_period`, and opening balances upsert on
+ *   period edit writes only `current_period`, activation uses the RPC and
+ *   rotates the single active month, and opening balances upsert on
  *   `(fiscal_year_id, warehouse_id, classification_id)`;
  * * the opening-balance freeze is honoured: a year flipped to
  *   `opening_balances_locked` refuses new balances (42501) and filters deletes,
@@ -203,6 +204,7 @@ interface FiscalMonthPreviewRow {
   start_date: string;
   end_date: string;
   current_period: number;
+  is_active: boolean;
   is_closed: boolean;
   created_at: string;
   updated_at: string;
@@ -270,6 +272,7 @@ function createFiscalMonths(year: FiscalYearPreviewRow): FiscalMonthPreviewRow[]
       start_date: monthStart,
       end_date: monthEnd < monthStart ? monthStart : monthEnd,
       current_period: 1,
+      is_active: false,
       is_closed: false,
       created_at: nowIso(),
       updated_at: nowIso(),
@@ -1003,6 +1006,10 @@ function runFiscal(
           year.is_active = year.id === row.id;
           year.updated_at = nowIso();
         }
+        // A posting month cannot outlive the active fiscal year (A.1).
+        for (const month of fiscalMonths) {
+          if (month.fiscal_year_id !== row.id) month.is_active = false;
+        }
         return { data: single ? { ...row } : [{ ...row }], error: null };
       }
 
@@ -1297,7 +1304,56 @@ function builder(
   return chain;
 }
 
+/** Preview of A.1's single write path; authentication/audit remain server-only. */
+function activateFiscalMonth(args: Record<string, unknown>): Outcome {
+  try {
+    const month = fiscalMonths.find((row) => row.id === args.p_fiscal_month_id);
+    if (month === undefined) {
+      throw new DbError('P0002', 'unknown fiscal month');
+    }
+    const year = fiscalYears.find((row) => row.id === month.fiscal_year_id);
+    if (!year?.is_active) {
+      throw new DbError('22023', 'the fiscal year is not active');
+    }
+    const reason = typeof args.p_reason === 'string' ? args.p_reason.trim() : '';
+    const wasClosed = month.is_closed || year.is_closed;
+    if (month.is_active) {
+      return {
+        data: {
+          fiscal_month_id: month.id,
+          fiscal_year_id: year.id,
+          changed: false,
+          was_closed: wasClosed,
+        },
+        error: null,
+      };
+    }
+    if (wasClosed && Array.from(reason).length < 10) {
+      throw new DbError(
+        '22023',
+        'a closed period needs a written reason of at least 10 characters',
+      );
+    }
+    for (const row of fiscalMonths) row.is_active = row.id === month.id;
+    month.updated_at = nowIso();
+    return {
+      data: {
+        fiscal_month_id: month.id,
+        fiscal_year_id: year.id,
+        changed: true,
+        was_closed: wasClosed,
+        reason: reason === '' ? null : reason,
+      },
+      error: null,
+    };
+  } catch (error) {
+    if (error instanceof DbError) return { data: null, error };
+    throw error;
+  }
+}
+
 export interface PreviewSupabaseClient {
+  rpc: (name: string, args: Record<string, unknown>) => Promise<Outcome>;
   from: (table: string) => {
     select: (columns?: string) => Builder;
     insert: (payload: PreviewPayload) => Builder;
@@ -1308,6 +1364,12 @@ export interface PreviewSupabaseClient {
 }
 
 const client: PreviewSupabaseClient = {
+  rpc: (name, args) =>
+    Promise.resolve(
+      name === 'aps_activate_fiscal_month'
+        ? activateFiscalMonth(args)
+        : { data: null, error: new DbError('PGRST202', `unsupported preview RPC: ${name}`) },
+    ),
   from: (table: string) => ({
     select: (columns?: string) => builder(table, 'select', undefined).select(columns),
     insert: (payload: PreviewPayload) => builder(table, 'insert', payload),
