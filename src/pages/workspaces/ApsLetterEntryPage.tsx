@@ -20,6 +20,7 @@ import {
   approveEntryLetter,
   classifyEntryError,
   saveEntryDraft,
+  ENTRY_OPTIONS_QUERY_KEY,
   useEntryDraft,
   useEntryOptions,
   useLetterBalances,
@@ -492,6 +493,9 @@ function EntryEditor({
         void queryClient.invalidateQueries({ queryKey: ['aps', 'letters'] });
         void queryClient.invalidateQueries({ queryKey: ['aps', 'letter-detail'] });
         void queryClient.invalidateQueries({ queryKey: ['aps', 'entry-draft', actor, id] });
+        // The save resolved the period itself; re-read the choices so the bar
+        // repeats what was actually written, not what the screen assumed.
+        void queryClient.invalidateQueries({ queryKey: ENTRY_OPTIONS_QUERY_KEY });
       }
       if (!shouldApprove) {
         setBanner({ key: 'aps.entry.saved', error: false, showDraft: true });

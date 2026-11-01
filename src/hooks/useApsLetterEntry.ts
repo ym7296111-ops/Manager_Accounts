@@ -516,14 +516,40 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
   return parseEntryDraft(header.data, lines.data, actorId);
 }
 
+/**
+ * The entry choices query key.
+ *
+ * Exported because the posting period lives inside these choices and is changed
+ * elsewhere — the periodic settings screen — which has to refresh the entry bar
+ * without borrowing the shape of this hook's key.
+ */
+export const ENTRY_OPTIONS_QUERY_KEY = ['aps', 'entry-options'] as const;
+
+/**
+ * How often an open entry screen re-reads its choices.
+ *
+ * The active month can change while a clerk is filling a form, and a period
+ * statement that disagrees with what the save will write is worse than no
+ * statement at all. Thirty seconds is a compromise: fast enough to notice a
+ * switch, cheap enough for a payload of a few hundred rows.
+ */
+export const ENTRY_OPTIONS_REFRESH_MS = 30_000;
+
 export function useEntryOptions() {
   const { session } = useAuth();
   const actor = session?.user.id ?? null;
   return useQuery({
-    queryKey: ['aps', 'entry-options', actor],
+    queryKey: [...ENTRY_OPTIONS_QUERY_KEY, actor],
     queryFn: fetchEntryOptions,
     enabled: actor !== null,
     retry: false,
+    // A cached period is a stale period as soon as someone activates another
+    // month: never treat these choices as fresh, re-read them when the window
+    // regains focus, and poll while the screen stays open.
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
+    refetchOnMount: 'always',
+    refetchInterval: ENTRY_OPTIONS_REFRESH_MS,
   });
 }
 export function useEntryDraft(id: string | null) {

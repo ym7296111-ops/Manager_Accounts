@@ -1,6 +1,12 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { renderHook, waitFor } from '@testing-library/react';
 import { createClient } from '@supabase/supabase-js';
+import { createElement, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ENTRY_OPTIONS_QUERY_KEY,
+  ENTRY_OPTIONS_REFRESH_MS,
+  useEntryOptions,
   ApsEntryError,
   approveEntryLetter,
   classifyEntryError,
@@ -12,8 +18,14 @@ import {
 } from '@/hooks/useApsLetterEntry';
 import { newEntryForm, type EntryForm } from '@/lib/apsLetterEntry';
 
-const { getClient } = vi.hoisted(() => ({ getClient: vi.fn() }));
+const { getClient, sessionUser } = vi.hoisted(() => ({
+  getClient: vi.fn(),
+  sessionUser: '00000000-0000-4000-8000-000000000001',
+}));
 vi.mock('@/lib/supabase', () => ({ getSupabase: getClient }));
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({ session: { user: { id: sessionUser } } }),
+}));
 
 const id = (number: number) => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
 const actor = id(1);
@@ -211,6 +223,26 @@ describe('APS letter entry transport', () => {
         fiscal_years: [{ ...a3Payload.fiscal_years[0], is_active: 'true' }],
       }),
     ).toThrow(ApsEntryError);
+  });
+
+  it('keeps the choices fresh so a period change reaches the bar', async () => {
+    setupTransport(() => json(optionsPayload));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client }, children);
+    const { result } = renderHook(() => useEntryOptions(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // The active month can change while the form is open, so the cached answer
+    // is never treated as fresh: the screen re-reads on focus and on a timer.
+    const observer = client.getQueryCache().find({
+      queryKey: [...ENTRY_OPTIONS_QUERY_KEY, sessionUser],
+      exact: true,
+    })?.observers[0];
+    expect(observer?.options.staleTime).toBe(0);
+    expect(observer?.options.refetchOnWindowFocus).toBe('always');
+    expect(observer?.options.refetchOnMount).toBe('always');
+    expect(observer?.options.refetchInterval).toBe(ENTRY_OPTIONS_REFRESH_MS);
   });
 
   it('reads the creator-only choices through the RPC and never a directory table', async () => {
