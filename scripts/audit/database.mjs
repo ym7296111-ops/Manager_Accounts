@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 61);
+    assert.equal(migrations.length, 62);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2008,6 +2008,9 @@ try {
     assert.ok(migrations.includes('20261119000000_aps_inbound_multi_party_columns.sql'));
     assert.ok(migrations.includes('20261119010000_aps_inbound_multi_party_rules.sql'));
     assert.ok(migrations.includes('20261119020000_aps_letter_balances.sql'));
+    // Internal transfers retire line pairing in favour of two independent
+    // lists settled by the letter-level balance.
+    assert.ok(migrations.includes('20261120000000_aps_internal_transfer_free_lines.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2917,15 +2920,14 @@ try {
     asRole('authenticated', A, (c) =>
       c.query(
         `insert into public.letter_lines
-           (letter_id, direction, warehouse_id, classification_id, amount, paired_line_id, party_id)
-         values ($1,$2,$3,$4,$5,$6,$7) returning id`,
+           (letter_id, direction, warehouse_id, classification_id, amount, party_id)
+         values ($1,$2,$3,$4,$5,$6) returning id`,
         [
           letterId,
           line.direction,
           line.warehouseId,
           line.classificationId,
           line.amount,
-          line.pairedLineId ?? null,
           line.partyId ?? null,
         ],
       ),
@@ -2998,7 +3000,7 @@ try {
           entry.partyId ?? null,
           entry.sisterId ?? null,
           entry.direction ?? null,
-          entry.reason ?? null,
+          entry.note ?? null,
           JSON.stringify(entry.lines),
           entry.issuerReference ?? null,
           // Explicit only where a fixture needs an accounting date; the screen
@@ -3620,15 +3622,30 @@ try {
     }
   });
 
-  await test('APS entry: all letter types, paired transfers and reclassification reasons', async () => {
+  await test('APS entry: all letter types, free-line internal transfers and the header note', async () => {
     await withApsEntryFixture(async (fixture, ids) => {
-      const pair = {
-        source_warehouse_id: fixture.warehouseId,
-        source_classification_id: fixture.leafA,
-        destination_warehouse_id: fixture.warehouseId,
-        destination_classification_id: fixture.leafB,
-        amount: '33.25',
-      };
+      // One source settles into two destinations. Part crosses into another
+      // classification, but no line names a partner or carries a reason.
+      const transferLines = [
+        {
+          direction: 'out',
+          warehouse_id: fixture.warehouseId,
+          classification_id: fixture.leafA,
+          amount: '100.00',
+        },
+        {
+          direction: 'in',
+          warehouse_id: fixture.warehouseId,
+          classification_id: fixture.leafB,
+          amount: '60.00',
+        },
+        {
+          direction: 'in',
+          warehouse_id: fixture.warehouseId,
+          classification_id: fixture.leafA,
+          amount: '40.00',
+        },
+      ];
       const id = randomUUID();
       ids.push(id);
       const transfer = {
@@ -3637,44 +3654,115 @@ try {
         type: 'internal_transfer',
         number: '90',
         date: '2040-08-15',
-        lines: [pair],
+        lines: transferLines,
       };
-      await expectCode('22023', () => saveApsEntry(E, transfer));
-      assert.equal((await db.query('select id from public.letters where id=$1', [id])).rowCount, 0);
-      const saved = (await saveApsEntry(E, { ...transfer, reason: 'إعادة تصنيف' })).rows[0].result;
+      const saved = (await saveApsEntry(E, transfer)).rows[0].result;
       const lines = (
         await db.query(
-          'select id,direction,amount::text,paired_line_id from public.letter_lines where letter_id=$1 order by line_number',
+          'select direction,classification_id,amount::text from public.letter_lines where letter_id=$1 order by line_number',
           [id],
         )
       ).rows;
-      assert.equal(lines.length, 2);
-      assert.equal(lines[0].direction, 'out');
-      assert.equal(lines[1].direction, 'in');
-      assert.equal(lines[1].paired_line_id, lines[0].id);
-      assert.equal(lines[0].amount, '33.25');
-      assert.equal(lines[1].amount, '33.25');
+      assert.deepEqual(lines, [
+        { direction: 'out', classification_id: fixture.leafA, amount: '100.00' },
+        { direction: 'in', classification_id: fixture.leafB, amount: '60.00' },
+        { direction: 'in', classification_id: fixture.leafA, amount: '40.00' },
+      ]);
       const header = (
         await db.query(
-          'select has_reclassification,reclassification_reason,source_total::text,destination_total::text from public.letters where id=$1',
+          'select reclassification_note,source_total::text,destination_total::text from public.letters where id=$1',
           [id],
         )
       ).rows[0];
       assert.deepEqual(header, {
-        has_reclassification: true,
-        reclassification_reason: 'إعادة تصنيف',
-        source_total: '33.25',
-        destination_total: '33.25',
+        reclassification_note: null,
+        source_total: '100.00',
+        destination_total: '100.00',
       });
-      // Editing a pair removes the incoming reference first, then replaces both sides.
+
+      // The optional statement lives once on the header. Saving it does not
+      // add a reason to, or a relationship between, any of the free lines.
       await saveApsEntry(E, {
         ...transfer,
         version: saved.updated_at,
-        reason: 'إعادة تصنيف',
-        lines: [{ ...pair, amount: '34.50' }],
+        note: '  إعادة تصنيف لجزء من الحركة  ',
+        lines: [
+          { ...transferLines[0], amount: '120.00' },
+          { ...transferLines[1], amount: '70.00' },
+          { ...transferLines[2], amount: '50.00' },
+        ],
+      });
+      const notedHeader = (
+        await db.query(
+          'select reclassification_note,source_total::text,destination_total::text from public.letters where id=$1',
+          [id],
+        )
+      ).rows[0];
+      assert.deepEqual(notedHeader, {
+        reclassification_note: 'إعادة تصنيف لجزء من الحركة',
+        source_total: '120.00',
+        destination_total: '120.00',
       });
       await asRole('authenticated', E, (c) =>
         c.query('select public.aps_approve_letter($1)', [id]),
+      );
+
+      // A half-typed transfer may remain a draft, but the letter-level
+      // balance is mandatory before it can become an approved document.
+      const unbalanced = randomUUID();
+      ids.push(unbalanced);
+      await saveApsEntry(E, {
+        id: unbalanced,
+        yearId: fixture.firstYear.id,
+        type: 'internal_transfer',
+        number: '95',
+        date: '2040-08-15',
+        lines: [
+          transferLines[0],
+          {
+            direction: 'in',
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafB,
+            amount: '40.00',
+          },
+        ],
+      });
+      const balanceError = await captureApsError(() =>
+        asRole('authenticated', E, (c) =>
+          c.query('select public.aps_approve_letter($1)', [unbalanced]),
+        ),
+      );
+      assert.equal(balanceError.code, '23514');
+      assert.match(balanceError.message, /does not balance \(40\.00 in vs 100\.00 out\)/);
+      assert.equal(
+        (await db.query('select status from public.letters where id=$1', [unbalanced])).rows[0]
+          .status,
+        'draft',
+      );
+
+      // Free lines still need a real direction; malformed payloads are
+      // rejected before a header is written.
+      const missingDirection = randomUUID();
+      ids.push(missingDirection);
+      await expectCode('22023', () =>
+        saveApsEntry(E, {
+          id: missingDirection,
+          yearId: fixture.firstYear.id,
+          type: 'internal_transfer',
+          number: '96',
+          date: '2040-08-15',
+          lines: [
+            {
+              warehouse_id: fixture.warehouseId,
+              classification_id: fixture.leafA,
+              amount: '1.00',
+            },
+          ],
+        }),
+      );
+      assert.equal(
+        (await db.query('select id from public.letters where id=$1', [missingDirection])).rowCount,
+        0,
       );
       for (const [type, number, partyId, sisterId, direction] of [
         ['outbound', '91', fixture.partyOut.id, null, 'out'],
@@ -3730,8 +3818,9 @@ try {
         saveApsEntry(E, {
           ...transfer,
           id: invalid,
-          reason: 'إعادة تصنيف',
-          lines: [{ ...pair, amount: '-4' }],
+          number: '97',
+          note: 'بيان اختياري',
+          lines: [{ ...transferLines[0], amount: '-4' }],
         }),
       );
       assert.equal(
@@ -4155,13 +4244,23 @@ try {
         'cancelled_by',
         'cancel_reason',
         'issuer_reference',
+        // An internal transfer may carry one optional statement on its header.
+        'reclassification_note',
         // The multi-party tree counts the distinct line parties on the header.
         'party_count',
       ]) {
         assert.ok(names.includes(column), `letters.${column} is missing`);
       }
-      // The retired pair must be gone: one manual code replaced it.
-      for (const column of ['issuer_code', 'issuer_sequence']) {
+      // One manual code replaced the retired issuer pair. The mandatory
+      // reclassification flag + reason also retired with paired transfers;
+      // there has never been a single source-warehouse header column.
+      for (const column of [
+        'issuer_code',
+        'issuer_sequence',
+        'has_reclassification',
+        'reclassification_reason',
+        'source_warehouse_id',
+      ]) {
         assert.ok(!names.includes(column), `letters.${column} must be retired`);
       }
       assert.deepEqual(
@@ -4178,7 +4277,6 @@ try {
           'warehouse_id',
           'classification_id',
           'amount',
-          'paired_line_id',
           'note',
           'created_at',
           'updated_at',
@@ -4459,7 +4557,7 @@ try {
         0,
       );
 
-      // ---- D4(b): an internal transfer must balance and be paired. ---------
+      // ---- An internal transfer settles as two independent lists. ----------
       const transfer = (
         await insertApsLetter(fixture, {
           type: 'internal_transfer',
@@ -4468,66 +4566,48 @@ try {
         })
       ).rows[0];
       createdIds.push(transfer.id);
-      const source = (
-        await insertApsLine(transfer.id, {
-          direction: 'out',
-          warehouseId: fixture.warehouseId,
-          classificationId: fixture.leafA,
-          amount: 100,
-        })
-      ).rows[0];
-      // A pair that names a non-existent partner, or an unequal one, fails on
-      // write — where the mistake is made.
-      await expectCode('23503', () =>
-        insertApsLine(transfer.id, {
-          direction: 'in',
-          warehouseId: fixture.warehouseId,
-          classificationId: fixture.leafA,
-          amount: 100,
-          pairedLineId: randomUUID(),
-        }),
-      );
-      await expectCode('23514', () =>
-        insertApsLine(transfer.id, {
-          direction: 'in',
-          warehouseId: fixture.warehouseId,
-          classificationId: fixture.leafA,
-          amount: 90,
-          pairedLineId: source.id,
-        }),
-      );
-      // An unpaired destination line is caught at approval.
+      await insertApsLine(transfer.id, {
+        direction: 'out',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafA,
+        amount: 100,
+      });
+      // The old pair-level equality is gone, but the whole letter must still
+      // balance: 100 out against only 90 in cannot be approved.
       await insertApsLine(transfer.id, {
         direction: 'in',
         warehouseId: fixture.warehouseId,
         classificationId: fixture.leafB,
-        amount: 100,
+        amount: 90,
       });
       assert.match(
         (await captureApsError(() => approveApsLetter(transfer.id))).message,
-        /name the source line/,
+        /does not balance \(90\.00 in vs 100\.00 out\)/,
       );
       await db.query("delete from public.letter_lines where letter_id=$1 and direction='in'", [
         transfer.id,
       ]);
-      // Paired and balanced, but it moves stock into a different classification:
-      // D4(b) requires the explicit reclassification flag.
+      // Two destinations settle the one source. The 60.00 crosses into a
+      // different classification without a flag, a note or a line-level reason.
       await insertApsLine(transfer.id, {
         direction: 'in',
         warehouseId: fixture.warehouseId,
         classificationId: fixture.leafB,
-        amount: 100,
-        pairedLineId: source.id,
+        amount: 60,
       });
-      assert.match(
-        (await captureApsError(() => approveApsLetter(transfer.id))).message,
-        /reclassification/,
-      );
-      await asRole('authenticated', A, (c) =>
-        c.query(
-          'update public.letters set has_reclassification=true, reclassification_reason=$2 where id=$1',
-          [transfer.id, 'تحويل بين تصنيفين بقرار من الإدارة'],
-        ),
+      await insertApsLine(transfer.id, {
+        direction: 'in',
+        warehouseId: fixture.warehouseId,
+        classificationId: fixture.leafA,
+        amount: 40,
+      });
+      assert.equal(
+        (
+          await db.query('select reclassification_note from public.letters where id=$1', [
+            transfer.id,
+          ])
+        ).rows[0].reclassification_note,
+        null,
       );
       await approveApsLetter(transfer.id);
       const approvedTransfer = (

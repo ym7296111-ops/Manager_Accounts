@@ -253,7 +253,7 @@ interface PreviewLetter {
   party_id: string | null;
   party_count: number;
   sister_company_id: string | null;
-  reclassification_reason: string | null;
+  reclassification_note: string | null;
   created_by: string;
   updated_at: string;
 }
@@ -268,7 +268,7 @@ const letters: PreviewLetter[] = sampleLetters.map((item) => ({
         ? uid(item.id === uid(5) ? 503 : 502)
         : null,
   sister_company_id: item.letter_type === 'external_transfer' ? uid(601) : null,
-  reclassification_reason: null,
+  reclassification_note: null,
   issuer_reference: `YM:${item.letter_number}`,
   created_by: uid(1),
   updated_at: '2026-10-30T12:00:00.000Z',
@@ -335,7 +335,6 @@ interface PreviewLine {
   station_name: string;
   classification_name: string;
   amount: string;
-  paired_line_id: string | null;
 }
 const lines: PreviewLine[] = sampleLines.map((item) => {
   const letter = letters.find((row) => row.id === item.letter_id);
@@ -345,12 +344,12 @@ const lines: PreviewLine[] = sampleLines.map((item) => {
     party_id: letter?.party_id ?? null,
     party_code: party?.code ?? null,
     party_name: party?.name ?? null,
-    paired_line_id: item.id === uid(305) ? uid(304) : null,
   };
 });
 
 interface MockEntryLine {
   amount: string;
+  direction?: Direction;
   party_id?: string;
   warehouse_id?: string;
   classification_id?: string;
@@ -368,7 +367,10 @@ interface MockEntrySave {
   p_party_id: string | null;
   p_sister_company_id: string | null;
   p_direction: Direction | null;
-  p_reclassification_reason: string | null;
+  // The compatibility client tries the new signature and may fall back to the
+  // old one during rollout; the preview accepts either statement field.
+  p_reclassification_note?: string | null;
+  p_reclassification_reason?: string | null;
   p_lines: MockEntryLine[];
   p_issuer_reference: string | null;
   /** Optional: the preview mirrors the database default when it is omitted. */
@@ -427,7 +429,6 @@ function saveMockDraft(input: MockEntrySave): Response {
     warehouseId: string | undefined,
     classificationId: string | undefined,
     amount: string,
-    pair: string | null = null,
     partyId: string | null = null,
   ) {
     const store = entryOptions.warehouses.find((item) => item.id === warehouseId);
@@ -451,20 +452,19 @@ function saveMockDraft(input: MockEntrySave): Response {
       station_name: store.station_name,
       classification_name: classification.name,
       amount,
-      paired_line_id: pair,
     });
     return id;
   }
   for (const item of input.p_lines) {
     if (input.p_letter_type === 'internal_transfer') {
-      const out = add('out', item.source_warehouse_id, item.source_classification_id, item.amount);
-      add(
-        'in',
-        item.destination_warehouse_id,
-        item.destination_classification_id,
-        item.amount,
-        out,
-      );
+      if (item.direction) {
+        // New free-line payload: each item is already one stored line.
+        add(item.direction, item.warehouse_id, item.classification_id, item.amount);
+      } else {
+        // Legacy fallback payload: expand its pair object into two free lines.
+        add('out', item.source_warehouse_id, item.source_classification_id, item.amount);
+        add('in', item.destination_warehouse_id, item.destination_classification_id, item.amount);
+      }
     } else {
       const direction =
         input.p_letter_type === 'inbound'
@@ -478,7 +478,6 @@ function saveMockDraft(input: MockEntrySave): Response {
         item.warehouse_id,
         item.classification_id,
         item.amount,
-        null,
         item.party_id ?? input.p_party_id,
       );
     }
@@ -530,7 +529,7 @@ function saveMockDraft(input: MockEntrySave): Response {
     party_id: primaryPartyId,
     party_count: new Set(created.map((item) => item.party_id).filter((id) => id !== null)).size,
     sister_company_id: input.p_sister_company_id,
-    reclassification_reason: input.p_reclassification_reason,
+    reclassification_note: input.p_reclassification_note ?? input.p_reclassification_reason ?? null,
     issuer_reference: issuerReference,
     created_by: uid(1),
     updated_at: updatedAt,
