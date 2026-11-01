@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 62);
+    assert.equal(migrations.length, 63);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1977,6 +1977,7 @@ try {
     );
     assert.ok(migrations.includes('20261028000000_user_notifications_replica_identity_full.sql'));
     assert.ok(migrations.includes('20261029000000_executive_dashboard_project_timezone.sql'));
+
     assert.ok(migrations.includes('20261030000000_permission_delegatable.sql'));
     assert.ok(migrations.includes('20261031000000_user_lifecycle_auto_suspend_and_kpis.sql'));
     assert.ok(migrations.includes('20261101000000_delegation_notifications_and_profile.sql'));
@@ -2011,6 +2012,7 @@ try {
     // Internal transfers retire line pairing in favour of two independent
     // lists settled by the letter-level balance.
     assert.ok(migrations.includes('20261120000000_aps_internal_transfer_free_lines.sql'));
+    assert.ok(migrations.includes('20261121000000_aps_active_fiscal_month.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2352,6 +2354,41 @@ try {
           })),
         );
         for (const privilege of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) {
+          if (table === 'fiscal_months' && privilege === 'UPDATE') {
+            // A.1 replaces the whole-table UPDATE grant with per-column grants so
+            // that `is_active` has exactly one writer (aps_activate_fiscal_month).
+            // PostgREST writes `current_period` from the periodic settings screen,
+            // so that column must stay writable.
+            const columns = await db.query(
+              `select column_name,
+                      has_column_privilege('authenticated','public.fiscal_months',column_name,'UPDATE') as allowed
+                 from information_schema.columns
+                where table_schema='public' and table_name='fiscal_months'
+                order by column_name`,
+            );
+            // Everything the client could write before stays writable; the only
+            // columns withheld are the period flag and the row identity.
+            const withheld = new Set(['is_active', 'id']);
+            for (const column of columns.rows) {
+              assert.equal(
+                column.allowed,
+                !withheld.has(column.column_name),
+                `authenticated UPDATE on fiscal_months.${column.column_name} must be ${
+                  withheld.has(column.column_name) ? 'refused' : 'allowed'
+                }`,
+              );
+            }
+            assert.equal(
+              (
+                await db.query(
+                  "select has_table_privilege('authenticated','public.fiscal_months','UPDATE') as allowed",
+                )
+              ).rows[0].allowed,
+              false,
+              'the whole-table UPDATE grant must be gone, not just the one column',
+            );
+            continue;
+          }
           assert.equal(
             (
               await db.query('select has_table_privilege($1,$2,$3) as allowed', [
@@ -2438,6 +2475,172 @@ try {
       await db.query('delete from public.warehouses where id=$1', [warehouseId]);
       await db.query('delete from public.stations where id=$1', [stationId]);
       await db.query('delete from public.classifications where id=$1', [classificationId]);
+    }
+  });
+  await test('active period: one audited posting month, column-granted, cleared by year rotation', async () => {
+    const yearIds = [randomUUID(), randomUUID()];
+    let octoberId = null;
+    let novemberId = null;
+
+    try {
+      const months = async (yearId) =>
+        (
+          await db.query(
+            'select id,month_number,name,is_closed from public.fiscal_months where fiscal_year_id=$1 order by month_number',
+            [yearId],
+          )
+        ).rows;
+      const activate = (actor, monthId, reason) =>
+        asRole('authenticated', actor, (c) =>
+          c.query('select public.aps_activate_fiscal_month($1,$2) as result', [
+            monthId,
+            reason ?? null,
+          ]),
+        );
+      const reader = (actor) =>
+        asRole('authenticated', actor, (c) =>
+          c.query('select public.aps_active_period() as period'),
+        );
+      const activeMonths = async () =>
+        (await db.query('select id from public.fiscal_months where is_active')).rows;
+
+      await db.query(
+        `insert into public.fiscal_years(id,start_date,end_date,is_active)
+           values ($1,'2026-07-01','2027-06-30',true),($2,'2027-07-01','2028-06-30',false)`,
+        [yearIds[0], yearIds[1]],
+      );
+      const firstYearMonths = await months(yearIds[0]);
+      assert.equal(firstYearMonths.length, 12);
+      octoberId = firstYearMonths[3].id;
+      novemberId = firstYearMonths[4].id;
+
+      // The column, the index and the vocabulary this feature rests on.
+      const column = await db.query(
+        `select is_nullable,column_default from information_schema.columns
+          where table_schema='public' and table_name='fiscal_months' and column_name='is_active'`,
+      );
+      assert.deepEqual(column.rows, [{ is_nullable: 'NO', column_default: 'false' }]);
+      const index = await db.query(
+        `select i.indisunique, i.indpred is not null as is_partial
+           from pg_index i where i.indexrelid='public.fiscal_months_one_active_idx'::regclass`,
+      );
+      assert.deepEqual(index.rows, [{ indisunique: true, is_partial: true }]);
+      const vocabulary = await db.query(
+        `select enumlabel from pg_enum e join pg_type t on t.oid=e.enumtypid
+          where t.typname='audit_action' and enumlabel like 'fiscal_month.%' order by enumlabel`,
+      );
+      assert.deepEqual(
+        vocabulary.rows.map((row) => row.enumlabel),
+        ['fiscal_month.activated', 'fiscal_month.activated_closed', 'fiscal_month.deactivated'],
+      );
+
+      // Without an active period the reader says so — no invented month.
+      assert.equal((await reader(C)).rows[0].period, null);
+      assert.equal((await activeMonths()).length, 0);
+
+      // Gate 6: the only writer is the RPC, and it is capability-gated.
+      await expectDenied(() =>
+        asRole('authenticated', C, (c) =>
+          c.query('update public.fiscal_months set is_active=true where id=$1', [octoberId]),
+        ),
+      );
+      assert.equal((await activeMonths()).length, 0);
+      await expectCode('42501', () => reader(E));
+
+      const activated = await activate(C, octoberId);
+      assert.equal(activated.rows[0].result.changed, true);
+      const period = (await reader(C)).rows[0].period;
+      assert.equal(period.fiscal_month_id, octoberId);
+      assert.equal(period.month_number, 4);
+      assert.equal(period.name, 'أكتوبر 2026');
+      assert.equal(period.period_number, 1);
+      assert.equal(period.is_closed, false);
+      assert.equal(period.fiscal_year_name, '2026-2027');
+      assert.equal(period.fiscal_year_is_active, true);
+      assert.equal(typeof period.contains_today, 'boolean');
+      assert.equal((await activeMonths()).length, 1);
+
+      // A repeat click is a no-op and writes no second audit row.
+      const auditCount = async () =>
+        (
+          await db.query(
+            "select count(*)::int as n from public.audit_logs where entity='fiscal_months'",
+          )
+        ).rows[0].n;
+      const before = await auditCount();
+      assert.equal((await activate(C, octoberId)).rows[0].result.changed, false);
+      assert.equal(await auditCount(), before);
+
+      // Gate 5: a closed month needs the protected role AND a written reason.
+      await db.query('update public.fiscal_months set is_closed=true where id=$1', [novemberId]);
+      await expectCode('42501', () => activate(C, novemberId));
+      await expectCode('22023', () => activate(A, novemberId));
+      await expectCode('22023', () => activate(A, novemberId, 'short'));
+      const closedReason = 'اعتماد متأخر لشهر مغلق بموافقة المالك';
+      const closedActivation = await activate(A, novemberId, closedReason);
+      assert.equal(closedActivation.rows[0].result.changed, true);
+      assert.equal(closedActivation.rows[0].result.was_closed, true);
+      assert.equal((await activeMonths()).length, 1);
+      const closedAudit = (
+        await db.query(
+          "select actor_id,action,metadata from public.audit_logs where entity='fiscal_months' order by id desc limit 1",
+        )
+      ).rows[0];
+      assert.equal(closedAudit.actor_id, A);
+      assert.equal(closedAudit.action, 'fiscal_month.activated_closed');
+      assert.equal(closedAudit.metadata.reason, closedReason);
+      assert.equal(closedAudit.metadata.month_is_closed, true);
+      assert.equal(closedAudit.metadata.via, 'rpc');
+      assert.equal(closedAudit.metadata.previous_fiscal_month_id, octoberId);
+      assert.equal(closedAudit.metadata.previous_month_name, 'أكتوبر 2026');
+      await db.query('update public.fiscal_months set is_closed=false where id=$1', [novemberId]);
+
+      // R6: rotating the year clears the period, and says so.
+      await asRole('authenticated', A, (c) =>
+        c.query('update public.fiscal_years set is_active=true where id=$1', [yearIds[1]]),
+      );
+      assert.equal((await activeMonths()).length, 0);
+      assert.equal((await reader(C)).rows[0].period, null);
+      const clearing = (
+        await db.query(
+          "select action,metadata from public.audit_logs where entity='fiscal_months' order by id desc limit 1",
+        )
+      ).rows[0];
+      assert.equal(clearing.action, 'fiscal_month.deactivated');
+      assert.equal(clearing.metadata.reason, 'fiscal_year_rotation');
+      assert.equal(clearing.metadata.via, 'year_rotation');
+
+      // A month of an inactive year is not a posting target.
+      await expectCode('22023', () => activate(C, octoberId));
+
+      // A.1 ships with zero visible change: the entry function keeps exactly the
+      // contract PR #38 left behind (still defaulting the letter date to
+      // current_date — A.3 is what replaces that with the active period).
+      const entrySignature = await db.query(
+        `select pg_get_function_identity_arguments(oid) as args,
+                pg_get_function_arguments(oid) as full
+           from pg_proc where oid='public.aps_save_letter_draft'::regproc`,
+      );
+      assert.equal(
+        entrySignature.rows[0].args,
+        'p_letter_id uuid, p_expected_updated_at timestamp with time zone, p_fiscal_year_id uuid, ' +
+          'p_letter_type text, p_letter_number text, p_party_id uuid, p_sister_company_id uuid, ' +
+          'p_direction text, p_reclassification_note text, p_lines jsonb, p_issuer_reference text, ' +
+          'p_letter_date date',
+      );
+      assert.ok(
+        entrySignature.rows[0].full.includes('p_letter_date date DEFAULT CURRENT_DATE'),
+        'A.1 must not touch the entry date default (that is A.3)',
+      );
+    } finally {
+      await db.query(
+        'update public.fiscal_months set is_active=false where fiscal_year_id=any($1::uuid[])',
+        [yearIds],
+      );
+      await db.query('delete from public.fiscal_months where fiscal_year_id=any($1::uuid[])', [
+        yearIds,
+      ]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [yearIds]);
     }
   });
   await test('opening-balance freeze: RLS refuses writes in a locked year and lock/unlock are audited', async () => {
