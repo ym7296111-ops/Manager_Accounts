@@ -31,6 +31,11 @@ export interface EntryMonth {
   readonly endDate: string;
   readonly period: number;
   readonly closed: boolean;
+  /**
+   * A.3: whether the project's today falls inside this month. A suggestion the
+   * manager may ignore; `null` when the database did not send the field.
+   */
+  readonly containsToday?: boolean | null;
 }
 export interface EntryParty extends EntryOption {
   readonly branch: 'inbound' | 'outbound';
@@ -44,6 +49,26 @@ export interface EntryYear {
   readonly closed: boolean;
   readonly supplementsOpen: boolean;
 }
+/**
+ * The posting period the database resolved (`aps_active_period()`, A.3).
+ *
+ * Presentation state, never an input: the save function resolves the period
+ * itself and refuses a stale screen by name. `null` means "no active month",
+ * or a database older than A.3 — both are reportable states, not errors.
+ */
+export interface EntryActivePeriod {
+  readonly monthId: string;
+  readonly yearId: string;
+  readonly monthNumber: number;
+  readonly name: string;
+  readonly startDate: string;
+  readonly endDate: string;
+  /** The sub-period running inside the month (D13). */
+  readonly period: number;
+  readonly closed: boolean;
+  readonly projectToday: string | null;
+  readonly containsToday: boolean | null;
+}
 export interface EntryOptions {
   readonly years: readonly EntryYear[];
   readonly months: readonly EntryMonth[];
@@ -52,6 +77,11 @@ export interface EntryOptions {
   readonly parties: readonly EntryParty[];
   readonly sisters: readonly EntryOption[];
   readonly issuers: readonly EntryIssuer[];
+  /**
+   * A.3: the active posting month. Optional so a pre-A.3 database (or a
+   * preview fixture) still parses; the screen reads it when it is there.
+   */
+  readonly activePeriod?: EntryActivePeriod | null;
 }
 export interface EntryLine {
   readonly key: string;
