@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   entryHasReclassification,
+  entryScreenPeriod,
   entryTotal,
   fiscalYearLabel,
   isLetterCode,
@@ -277,6 +278,64 @@ describe('APS letter entry validation', () => {
         '2026-07-01',
       ),
     ).toBeNull();
+  });
+
+  it('states the period the database resolved, not the browser clock', () => {
+    const july = {
+      id: id(310),
+      yearId: id(400),
+      monthNumber: 7,
+      name: 'يوليو 2026',
+      startDate: '2026-07-01',
+      endDate: '2026-07-31',
+      period: 1,
+      closed: false,
+    };
+    const october = {
+      id: id(311),
+      yearId: id(400),
+      monthNumber: 10,
+      name: 'أكتوبر 2026',
+      startDate: '2026-10-01',
+      endDate: '2026-10-31',
+      period: 2,
+      closed: false,
+    };
+    const months = { ...options, months: [july, october] };
+    const withActive = {
+      ...months,
+      activePeriod: {
+        monthId: july.id,
+        yearId: id(400),
+        monthNumber: 7,
+        name: july.name,
+        startDate: july.startDate,
+        endDate: july.endDate,
+        period: 1,
+        closed: false,
+        projectToday: '2026-10-15',
+        containsToday: false,
+      },
+    };
+    // The clock would have answered October; the database says July.
+    expect(runningEntryPeriod(months, '2026-10-15')).toMatchObject({
+      month: { name: 'أكتوبر 2026', period: 2 },
+    });
+    expect(entryScreenPeriod(withActive, null, '2026-10-15')).toMatchObject({
+      month: { name: 'يوليو 2026', period: 1 },
+      year: { id: id(400) },
+    });
+    // A draft keeps the month it was written in, even after the period moved.
+    expect(entryScreenPeriod(withActive, '2026-10-04', '2026-10-15')).toMatchObject({
+      month: { name: 'أكتوبر 2026', period: 2 },
+    });
+    // A pre-A.3 database sends no period: the clock rule is the fallback.
+    expect(entryScreenPeriod(months, null, '2026-10-15')).toMatchObject({
+      month: { name: 'أكتوبر 2026' },
+    });
+    expect(entryScreenPeriod(months, null, '2026-12-15')).toBeNull();
+    // A period whose month is not in the list never invents a statement.
+    expect(entryScreenPeriod({ ...withActive, months: [october] }, null, '2026-12-15')).toBeNull();
   });
 
   it('writes the fiscal year the way the paper does', () => {
