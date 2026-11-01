@@ -138,6 +138,81 @@ describe('APS letter entry transport', () => {
     ).toThrow(ApsEntryError);
   });
 
+  // A.3 stopped sending `is_active` on the year rows and added the active period
+  // plus a per-month `contains_today`. The screen must keep loading: the year
+  // flag is inferred from the period, and the period itself is presentation
+  // state that a broken payload may not turn into a blank screen.
+  const activePeriodPayload = {
+    fiscal_month_id: id(300),
+    fiscal_year_id: id(400),
+    month_number: 3,
+    name: 'مارس 2026',
+    period_number: 2,
+    start_date: '2026-03-01',
+    end_date: '2026-03-31',
+    is_closed: false,
+    fiscal_year_name: '2026',
+    fiscal_year_is_active: true,
+    fiscal_year_is_closed: false,
+    supplements_open: false,
+    project_today: '2026-03-15',
+    contains_today: true,
+  };
+  const a3Payload = {
+    ...optionsPayload,
+    active_period: activePeriodPayload,
+    fiscal_years: [
+      {
+        id: id(400),
+        name: '2026',
+        start_date: '2026-01-01',
+        end_date: '2026-12-31',
+        is_closed: false,
+        supplements_open: false,
+      },
+    ],
+    fiscal_months: [{ ...optionsPayload.fiscal_months[0], contains_today: true }],
+  };
+
+  it('parses the A.3 payload: no year flag, an active period, a today suggestion', () => {
+    const options = parseEntryOptions(a3Payload);
+    expect(options.years[0]).toMatchObject({ id: id(400), active: true });
+    expect(options.months[0].containsToday).toBe(true);
+    expect(options.activePeriod).toMatchObject({
+      monthId: id(300),
+      yearId: id(400),
+      monthNumber: 3,
+      period: 2,
+      closed: false,
+      projectToday: '2026-03-15',
+      containsToday: true,
+    });
+  });
+
+  it('keeps the screen usable when the period fields are missing or malformed', () => {
+    // A pre-A.3 database: no period and no suggestion, the year flag still there.
+    const legacy = parseEntryOptions(optionsPayload);
+    expect(legacy.activePeriod ?? null).toBeNull();
+    expect(legacy.years[0].active).toBe(true);
+    expect(legacy.months[0].containsToday ?? null).toBeNull();
+    // No period at all: nothing is invented, and the list still parses.
+    expect(
+      parseEntryOptions({ ...a3Payload, active_period: null }).activePeriod ?? null,
+    ).toBeNull();
+    expect(parseEntryOptions({ ...a3Payload, active_period: null }).years[0].active).toBe(false);
+    // An unreadable period is ignored, not fatal.
+    const broken = parseEntryOptions({ ...a3Payload, active_period: { fiscal_month_id: 'x' } });
+    expect(broken.activePeriod ?? null).toBeNull();
+    expect(broken.years).toHaveLength(1);
+    // A year flag that is present but wrong is still a corruption, not a variant.
+    expect(() =>
+      parseEntryOptions({
+        ...a3Payload,
+        fiscal_years: [{ ...a3Payload.fiscal_years[0], is_active: 'true' }],
+      }),
+    ).toThrow(ApsEntryError);
+  });
+
   it('reads the creator-only choices through the RPC and never a directory table', async () => {
     const requests = setupTransport(() => json(optionsPayload));
     await expect(fetchEntryOptions()).resolves.toMatchObject({

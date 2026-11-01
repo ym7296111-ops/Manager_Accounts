@@ -9,6 +9,7 @@ import {
   newEntryLine,
   normalizeEntryAmount,
   signedAmountToCents,
+  type EntryActivePeriod,
   type EntryForm,
   type EntryIssuer,
   type EntryLine,
@@ -162,6 +163,55 @@ function parseIssuer(value: unknown): EntryIssuer {
   if (!/^[A-Za-z]{2}$/.test(option.code)) throw new ApsEntryError('invalid');
   return option;
 }
+/**
+ * The active posting month, read defensively.
+ *
+ * A malformed or missing period must never blank the entry screen: the period
+ * bar is presentation state, and the save function re-resolves the period on
+ * every write. So this returns null instead of throwing.
+ */
+function parseActivePeriod(value: unknown): EntryActivePeriod | null {
+  const row = record(value);
+  const monthId = row?.fiscal_month_id;
+  const yearId = row?.fiscal_year_id;
+  const name = text(row?.name);
+  const start = text(row?.start_date);
+  const end = text(row?.end_date);
+  if (
+    !isEntryOptionId(monthId) ||
+    !isEntryOptionId(yearId) ||
+    name === null ||
+    start === null ||
+    end === null ||
+    !isLetterDate(start) ||
+    !isLetterDate(end) ||
+    start > end ||
+    typeof row?.month_number !== 'number' ||
+    !Number.isInteger(row.month_number) ||
+    row.month_number < 1 ||
+    row.month_number > 12 ||
+    typeof row?.period_number !== 'number' ||
+    !Number.isInteger(row.period_number) ||
+    row.period_number < 1 ||
+    typeof row?.is_closed !== 'boolean'
+  )
+    return null;
+  const projectToday = row.project_today == null ? null : text(row.project_today);
+  if (projectToday !== null && !isLetterDate(projectToday)) return null;
+  return {
+    monthId,
+    yearId,
+    monthNumber: row.month_number,
+    name,
+    startDate: start,
+    endDate: end,
+    period: row.period_number,
+    closed: row.is_closed,
+    projectToday,
+    containsToday: typeof row.contains_today === 'boolean' ? row.contains_today : null,
+  };
+}
+
 function parseMonth(value: unknown): EntryMonth {
   const row = record(value);
   const name = text(row?.name);
@@ -195,6 +245,7 @@ function parseMonth(value: unknown): EntryMonth {
     endDate: end,
     period: row.current_period,
     closed: row.is_closed,
+    containsToday: typeof row.contains_today === 'boolean' ? row.contains_today : null,
   };
 }
 function parseParty(value: unknown): EntryParty {
@@ -203,7 +254,16 @@ function parseParty(value: unknown): EntryParty {
   if (branch !== 'inbound' && branch !== 'outbound') throw new ApsEntryError('invalid');
   return { ...option, branch };
 }
-function parseYear(value: unknown): EntryYear {
+/**
+ * A fiscal year row.
+ *
+ * `is_active` is read when the database sends it. Since A.3 the year block no
+ * longer carries it — the active period names the year instead — so a missing
+ * flag is inferred from that period rather than treated as a broken payload.
+ * (A rejected payload here is what blanked the screen with «تعذر تحميل بيانات
+ * الإدخال» right after A.3 was applied.)
+ */
+function parseYear(value: unknown, activeYearId: string | null): EntryYear {
   const row = record(value);
   const name = text(row?.name);
   const start = text(row?.start_date);
@@ -216,17 +276,23 @@ function parseYear(value: unknown): EntryYear {
     !isLetterDate(start) ||
     !isLetterDate(end) ||
     start > end ||
-    typeof row?.is_active !== 'boolean' ||
+    (row?.is_active !== undefined && typeof row.is_active !== 'boolean') ||
     typeof row?.is_closed !== 'boolean' ||
     typeof row?.supplements_open !== 'boolean'
   )
     throw new ApsEntryError('invalid');
+  const active =
+    typeof row.is_active === 'boolean'
+      ? row.is_active
+      : activeYearId === null
+        ? false
+        : row.id === activeYearId;
   return {
     id: row.id,
     name,
     startDate: start,
     endDate: end,
-    active: row.is_active,
+    active,
     closed: row.is_closed,
     supplementsOpen: row.supplements_open,
   };
@@ -244,14 +310,16 @@ export function parseEntryOptions(value: unknown): EntryOptions {
     !Array.isArray(row.issuers)
   )
     throw new ApsEntryError('invalid');
+  const activePeriod = parseActivePeriod(row.active_period);
   return {
-    years: row.fiscal_years.map(parseYear),
+    years: row.fiscal_years.map((year) => parseYear(year, activePeriod?.yearId ?? null)),
     months: row.fiscal_months.map(parseMonth),
     warehouses: row.warehouses.map(parseWarehouse),
     classifications: row.classifications.map(parseOption),
     parties: row.parties.map(parseParty),
     sisters: row.sister_companies.map(parseOption),
     issuers: row.issuers.map(parseIssuer),
+    activePeriod,
   };
 }
 
