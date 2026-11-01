@@ -449,6 +449,50 @@ describe('APS letter entry screen', () => {
     });
   });
 
+  it('states the active period the database resolved, not the browser date', () => {
+    // A.3: the database says July while the browser clock says today's month,
+    // and the bar must repeat the database — it is what the save will write.
+    const july = {
+      id: id(310),
+      yearId: id(400),
+      monthNumber: 7,
+      name: 'يوليو 2026',
+      startDate: `${calendarYear}-07-01`,
+      endDate: `${calendarYear}-07-31`,
+      period: 1,
+      closed: false,
+    };
+    hooks.options = {
+      isPending: false,
+      isError: false,
+      data: {
+        ...options,
+        months: [july],
+        activePeriod: {
+          monthId: july.id,
+          yearId: id(400),
+          monthNumber: 7,
+          name: july.name,
+          startDate: july.startDate,
+          endDate: july.endDate,
+          period: 1,
+          closed: false,
+          projectToday: today,
+          containsToday: false,
+        },
+      },
+    };
+    mount();
+    const periodBar = screen
+      .getByText('بيانات الخطاب')
+      .closest('section')!
+      .querySelector('[role="status"]')!;
+    expect(within(periodBar as HTMLElement).getByText('فترة 1')).toBeTruthy();
+    expect(within(periodBar as HTMLElement).getByText('يوليو 2026')).toBeTruthy();
+    // The month that contains the browser's today is not what was written.
+    expect(periodBar.textContent).not.toContain('مارس');
+  });
+
   it('states the running period above two fields and asks for no date', () => {
     mount();
     // The period is a badge, the month is the emphasis, and the fiscal year is

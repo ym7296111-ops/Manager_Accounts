@@ -278,6 +278,43 @@ export function runningEntryPeriod(
   return null;
 }
 
+/**
+ * The period the entry screen must state for the letter in hand.
+ *
+ * A.3 made the database the authority on the posting period:
+ * `aps_letter_entry_options().active_period` is the month a new letter will be
+ * dated into, so the bar reads that month instead of computing one from the
+ * browser clock (the defect this fixes: a July period displayed as November
+ * because the browser's today landed in November).
+ *
+ * A draft keeps the period it was written in — A.3 never re-dates it — so the
+ * month containing its own `letterDate` is the month that will be saved again.
+ * A database older than A.3 sends no period at all; the clock-based rule stays
+ * as the fallback so the screen never loses its statement.
+ */
+export function entryScreenPeriod(
+  options: EntryOptions,
+  draftLetterDate: string | null = null,
+  today = localToday(),
+): EntryPeriod | null {
+  if (draftLetterDate !== null) {
+    const drafted = options.months.find(
+      (item) => draftLetterDate >= item.startDate && draftLetterDate <= item.endDate,
+    );
+    const draftYear =
+      drafted === undefined ? undefined : options.years.find((item) => item.id === drafted.yearId);
+    if (drafted !== undefined && draftYear !== undefined)
+      return { month: drafted, year: draftYear };
+  }
+  const active = options.activePeriod ?? null;
+  if (active !== null) {
+    const month = options.months.find((item) => item.id === active.monthId);
+    const year = options.years.find((item) => item.id === active.yearId);
+    if (month !== undefined && year !== undefined) return { month, year };
+  }
+  return runningEntryPeriod(options, today);
+}
+
 export function entryHasReclassification(form: EntryForm): boolean {
   return (
     form.type === 'internal_transfer' &&

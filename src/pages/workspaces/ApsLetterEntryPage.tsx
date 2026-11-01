@@ -34,13 +34,13 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   APS_LETTER_NEW_PATH,
   entryHasReclassification,
+  entryScreenPeriod,
   entryTotal,
   fiscalYearLabel,
   joinLetterCode,
   localToday,
   newEntryForm,
   newEntryLine,
-  runningEntryPeriod,
   smallestCodeParty,
   splitLetterCode,
   validateEntry,
@@ -324,7 +324,7 @@ function EntryEditor({
     const empty = newEntryForm();
     const form = draft?.form ?? {
       ...empty,
-      yearId: runningEntryPeriod(options)?.year.id ?? '',
+      yearId: entryScreenPeriod(options)?.year.id ?? '',
     };
     return {
       id: draft?.id ?? crypto.randomUUID(),
@@ -379,10 +379,12 @@ function EntryEditor({
      today for a new letter, the draft's own accounting date when resuming. */
   const balances = useLetterBalances(form.yearId, draft?.letterDate ?? localToday());
   const year = options.years.find((item) => item.id === form.yearId);
-  /* The screen works in the period that is running today. A draft that belongs
-     to another fiscal year keeps its own year — and therefore its own period
-     statement — instead of being silently moved forward. */
-  const running = runningEntryPeriod(options);
+  /* The screen states the period the database will actually write into: the
+     active month for a new letter, and a draft's own month for a draft (A.3
+     keeps that date). Neither is read from the browser clock when the database
+     answers. A draft that belongs to another fiscal year keeps its own year —
+     and therefore its own period statement — instead of being moved forward. */
+  const running = entryScreenPeriod(options, draft?.letterDate ?? null);
   const period = running !== null && running.year.id === form.yearId ? running : null;
   const activeYear = year ?? running?.year ?? null;
   const letterCodeId = 'aps-letter-code';
