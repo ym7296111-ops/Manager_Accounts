@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 64);
+    assert.equal(migrations.length, 65);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2014,6 +2014,7 @@ try {
     assert.ok(migrations.includes('20261120000000_aps_internal_transfer_free_lines.sql'));
     assert.ok(migrations.includes('20261121000000_aps_active_fiscal_month.sql'));
     assert.ok(migrations.includes('20261121010000_aps_letter_period_columns.sql'));
+    assert.ok(migrations.includes('20261121020000_aps_entry_period_derivation.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2614,9 +2615,10 @@ try {
       // A month of an inactive year is not a posting target.
       await expectCode('22023', () => activate(C, octoberId));
 
-      // A.1 ships with zero visible change: the entry function keeps exactly the
-      // contract PR #38 left behind (still defaulting the letter date to
-      // current_date — A.3 is what replaces that with the active period).
+      // A.3 owns the entry signature now: the active period decides the date, so
+      // `p_letter_date` defaults to null and the two period parameters trail it
+      // (A.1's test asserted the old default; the contract it protected is gone
+      // by design, not by accident).
       const entrySignature = await db.query(
         `select pg_get_function_identity_arguments(oid) as args,
                 pg_get_function_arguments(oid) as full
@@ -2627,11 +2629,16 @@ try {
         'p_letter_id uuid, p_expected_updated_at timestamp with time zone, p_fiscal_year_id uuid, ' +
           'p_letter_type text, p_letter_number text, p_party_id uuid, p_sister_company_id uuid, ' +
           'p_direction text, p_reclassification_note text, p_lines jsonb, p_issuer_reference text, ' +
-          'p_letter_date date',
+          'p_letter_date date, p_document_date date, p_expected_fiscal_month_id uuid',
+      );
+      assert.ok(entrySignature.rows[0].full.includes('p_letter_date date DEFAULT NULL'));
+      assert.ok(entrySignature.rows[0].full.includes('p_document_date date DEFAULT NULL'));
+      assert.ok(
+        entrySignature.rows[0].full.includes('p_expected_fiscal_month_id uuid DEFAULT NULL'),
       );
       assert.ok(
-        entrySignature.rows[0].full.includes('p_letter_date date DEFAULT CURRENT_DATE'),
-        'A.1 must not touch the entry date default (that is A.3)',
+        !entrySignature.rows[0].full.includes('CURRENT_DATE'),
+        'no parameter may default to the clock any more',
       );
     } finally {
       await db.query(
@@ -3292,11 +3299,37 @@ try {
     throw new Error('expected the call to fail');
   };
 
+  // A.3: a new letter is dated by the active posting month, so the entry
+  // fixture opens one and closes it again afterwards.
+  const activateApsMonth = async (yearId, monthNumber) => {
+    await asRole('authenticated', A, (c) =>
+      c.query('update public.fiscal_years set is_active=true where id=$1', [yearId]),
+    );
+    const month = (
+      await db.query(
+        'select id,start_date::text as start_date from public.fiscal_months where fiscal_year_id=$1 and month_number=$2',
+        [yearId, monthNumber],
+      )
+    ).rows[0];
+    await asRole('authenticated', A, (c) =>
+      c.query('select public.aps_activate_fiscal_month($1)', [month.id]),
+    );
+    return month;
+  };
+
+  const clearApsPeriod = async (yearIds) => {
+    await db.query('update public.fiscal_months set is_active=false where is_active');
+    await db.query('update public.fiscal_years set is_active=false where id=any($1::uuid[])', [
+      yearIds,
+    ]);
+  };
+
   const withApsEntryFixture = async (fn) => {
     const fixture = await seedApsLetters();
     const roleId = randomUUID();
     const letterIds = [];
     try {
+      const augustMonth = await activateApsMonth(fixture.firstYear.id, 2);
       await db.query('insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$3,$4)', [
         roleId,
         `audit_entry_${roleId}`,
@@ -3308,8 +3341,9 @@ try {
         [roleId],
       );
       await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [E, roleId]);
-      await fn(fixture, letterIds);
+      await fn(fixture, letterIds, augustMonth);
     } finally {
+      await clearApsPeriod([fixture.firstYear.id, fixture.secondYear.id]);
       await db.query('delete from public.user_roles where role_id=$1', [roleId]);
       await db.query('delete from public.roles where id=$1', [roleId]);
       await db.query('delete from public.letters where id=any($1::uuid[])', [letterIds]);
@@ -3331,7 +3365,7 @@ try {
   const saveApsEntry = (actor, entry) =>
     asRole('authenticated', actor, (c) =>
       c.query(
-        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12) as result`,
+        `select public.aps_save_letter_draft($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14) as result`,
         [
           entry.id,
           entry.version ?? null,
@@ -3344,15 +3378,16 @@ try {
           entry.note ?? null,
           JSON.stringify(entry.lines),
           entry.issuerReference ?? null,
-          // Explicit only where a fixture needs an accounting date; the screen
-          // omits it and lets the database default to today.
+          // Kept for the pre-A.3 wire shape: the database ignores it now.
           entry.date ?? null,
+          entry.documentDate ?? null,
+          entry.expectedMonthId ?? null,
         ],
       ),
     );
 
   await test('APS entry: limited choices are creator-only without directory grants or RLS changes', async () => {
-    await withApsEntryFixture(async (fixture) => {
+    await withApsEntryFixture(async (fixture, _ids, augustMonth) => {
       await expectCode('42501', () =>
         asRole('anon', null, (c) => c.query('select public.aps_letter_entry_options()')),
       );
@@ -3365,6 +3400,7 @@ try {
         )
       ).rows[0].options;
       assert.deepEqual(Object.keys(options).sort(), [
+        'active_period',
         'classifications',
         'fiscal_months',
         'fiscal_years',
@@ -3373,6 +3409,8 @@ try {
         'sister_companies',
         'warehouses',
       ]);
+      assert.equal(options.active_period.fiscal_month_id, augustMonth.id);
+      assert.equal(options.active_period.name, 'أغسطس 2040');
       assert.ok(options.warehouses.some((item) => item.id === fixture.warehouseId));
       assert.ok(options.classifications.some((item) => item.id === fixture.leafA));
       assert.ok(
@@ -3402,6 +3440,7 @@ try {
         ),
       );
       assert.deepEqual(Object.keys(options.fiscal_months[0]).sort(), [
+        'contains_today',
         'current_period',
         'end_date',
         'fiscal_year_id',
@@ -3411,6 +3450,10 @@ try {
         'name',
         'start_date',
       ]);
+      const openMonth = options.fiscal_months.find((item) => item.id === augustMonth.id);
+      assert.equal(openMonth.start_date, augustMonth.start_date);
+      // 2040 is far from the clock, so the "today" suggestion is off there.
+      assert.equal(openMonth.contains_today, false);
       assert.deepEqual(
         Object.keys(options.parties.find((item) => item.id === fixture.party.id)).sort(),
         ['branch', 'code', 'id', 'name'],
@@ -3444,7 +3487,7 @@ try {
       }
       const functionFlags = (
         await db.query(
-          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,uuid,uuid,text,text,jsonb,text,date)'::regprocedure) order by proname`,
+          `select proname,prosecdef,proconfig from pg_proc where oid in ('public.aps_letter_entry_options()'::regprocedure, 'public.aps_save_letter_draft(uuid,timestamptz,uuid,text,text,uuid,uuid,text,text,jsonb,text,date,date,uuid)'::regprocedure) order by proname`,
         )
       ).rows;
       assert.deepEqual(functionFlags, [
@@ -3713,6 +3756,176 @@ try {
     });
   });
 
+  await test('APS entry period: the active month dates the letter, a moved period is refused, drafts keep their month', async () => {
+    await withApsEntryFixture(async (fixture, ids, augustMonth) => {
+      const tag = randomUUID().slice(0, 8);
+      const monthRow = async (number) =>
+        (
+          await db.query(
+            `select id, start_date::text as start_date, end_date::text as end_date
+               from public.fiscal_months
+              where fiscal_year_id=$1 and month_number=$2`,
+            [fixture.firstYear.id, number],
+          )
+        ).rows[0];
+      const september = await monthRow(3);
+      const entryFor = (id, extra = {}) => ({
+        id,
+        yearId: fixture.firstYear.id,
+        type: 'inbound',
+        number: `A3-${tag}-${id.slice(0, 4)}`,
+        partyId: fixture.party.id,
+        expectedMonthId: augustMonth.id,
+        lines: [
+          { warehouse_id: fixture.warehouseId, classification_id: fixture.leafA, amount: '5.00' },
+        ],
+        ...extra,
+      });
+      const rowOf = async (id) =>
+        (
+          await db.query(
+            `select to_char(letter_date,'YYYY-MM-DD') as letter_date,
+                    fiscal_month_id, fiscal_year_id,
+                    to_char(document_date,'YYYY-MM-DD') as document_date,
+                    updated_at::text as version
+               from public.letters where id=$1`,
+            [id],
+          )
+        ).rows[0];
+      const options = (
+        await asRole('authenticated', E, (c) =>
+          c.query('select public.aps_letter_entry_options() as options'),
+        )
+      ).rows[0].options;
+
+      // The bar's single source: the active month and its sub-period.
+      assert.deepEqual(Object.keys(options.active_period).sort(), [
+        'contains_today',
+        'end_date',
+        'fiscal_month_id',
+        'fiscal_year_id',
+        'fiscal_year_is_active',
+        'fiscal_year_is_closed',
+        'fiscal_year_name',
+        'is_closed',
+        'month_number',
+        'name',
+        'period_number',
+        'project_today',
+        'start_date',
+        'supplements_open',
+      ]);
+
+      // 1) A new letter is dated the first day of the active month, whatever
+      //    the request carries; the year comes from the same month.
+      const firstId = randomUUID();
+      ids.push(firstId);
+      const created = (
+        await saveApsEntry(E, entryFor(firstId, { date: '2040-09-20', documentDate: '2040-07-15' }))
+      ).rows[0].result;
+      assert.equal(created.letter_date, augustMonth.start_date);
+      assert.equal(created.fiscal_month_id, augustMonth.id);
+      assert.equal(created.document_date, '2040-07-15');
+      assert.equal(created.current_period, 1);
+      const firstRow = await rowOf(firstId);
+      assert.equal(firstRow.letter_date, augustMonth.start_date);
+      assert.equal(firstRow.fiscal_month_id, augustMonth.id);
+      assert.equal(firstRow.fiscal_year_id, fixture.firstYear.id);
+
+      // 2) A screen that opened on another month is refused, not written.
+      const raceId = randomUUID();
+      const race = await captureApsError(() =>
+        saveApsEntry(E, entryFor(raceId, { expectedMonthId: september.id })),
+      );
+      assert.ok(race.message.includes('aps_period_changed'), race.message);
+      assert.equal(
+        (await db.query('select 1 from public.letters where id=$1', [raceId])).rowCount,
+        0,
+      );
+
+      // 3) The defect: a draft reopened after the period moved keeps its date
+      //    and its month instead of being re-dated as if it were new.
+      await asRole('authenticated', A, (c) =>
+        c.query('select public.aps_activate_fiscal_month($1)', [september.id]),
+      );
+      // Text, not a JS Date: the function compares the version to the
+      // microsecond, and a Date only carries milliseconds.
+      const version = (await rowOf(firstId)).version;
+      const reopened = (
+        await saveApsEntry(
+          E,
+          entryFor(firstId, {
+            version,
+            date: '2040-09-20',
+            expectedMonthId: september.id,
+            documentDate: '2040-09-21',
+          }),
+        )
+      ).rows[0].result;
+      assert.equal(reopened.letter_date, augustMonth.start_date);
+      assert.equal(reopened.fiscal_month_id, augustMonth.id);
+      assert.equal(reopened.document_date, '2040-09-21');
+      const reopenedRow = await rowOf(firstId);
+      assert.equal(reopenedRow.letter_date, augustMonth.start_date);
+      assert.equal(reopenedRow.fiscal_month_id, augustMonth.id);
+
+      // 4) The balance badge stops reading the clock: with September open and
+      //    no cutoff sent, the cutoff is 1 September, so the August letter is
+      //    still counted — a 2026 clock would have excluded it.
+      await approveApsLetter(firstId);
+      const openBalances = (
+        await asRole('authenticated', E, (c) =>
+          c.query('select * from public.aps_letter_balances($1)', [fixture.firstYear.id]),
+        )
+      ).rows;
+      assert.deepEqual(openBalances, [
+        {
+          warehouse_id: fixture.warehouseId,
+          classification_id: fixture.leafA,
+          balance: '5.00',
+        },
+      ]);
+      const audit = (
+        await db.query(
+          `select metadata from public.audit_logs
+            where action='aps.letter_approved' and entity_id=$1`,
+          [firstId],
+        )
+      ).rows[0];
+      assert.equal(audit.metadata.fiscal_month_id, augustMonth.id);
+      assert.equal(audit.metadata.current_period, 1);
+      assert.equal(audit.metadata.document_date, '2040-09-21');
+
+      // 5) No active period: a clear token on save and no invented cutoff.
+      await clearApsPeriod([fixture.firstYear.id, fixture.secondYear.id]);
+      const noneId = randomUUID();
+      const none = await captureApsError(() => saveApsEntry(E, entryFor(noneId)));
+      assert.ok(none.message.includes('aps_no_active_period'), none.message);
+      assert.equal(
+        (await db.query('select 1 from public.letters where id=$1', [noneId])).rowCount,
+        0,
+      );
+      assert.equal(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query('select * from public.aps_letter_balances($1)', [fixture.firstYear.id]),
+          )
+        ).rowCount,
+        0,
+      );
+      assert.deepEqual(
+        (
+          await asRole('authenticated', E, (c) =>
+            c.query('select public.aps_letter_entry_options() as options'),
+          )
+        ).rows[0].options.active_period,
+        null,
+      );
+      // The monthly approval block still refuses a closed month, and a draft is
+      // still saveable inside a closed month (only approval is blocked).
+    });
+  });
+
   await test('APS issuers: creators read the list, settings managers maintain it', async () => {
     await withApsEntryFixture(async (fixture) => {
       await expectCode('42501', () =>
@@ -3858,7 +4071,9 @@ try {
         )
       ).rows[0];
       assert.equal(header.issuer_reference, `${fixture.issuerCode}:0042`);
-      assert.equal(header.letter_date, '2040-08-15');
+      // A.3: the request still carries a date for wire compatibility, and the
+      // active period overrides it with the first day of the month.
+      assert.equal(header.letter_date, '2040-08-01');
       // The station travels with the line as a snapshot, like the two names.
       const line = (
         await db.query(
@@ -3910,8 +4125,20 @@ try {
       );
       assert.equal(duplicate.code, 'P0001');
       assert.match(duplicate.message, /aps_entry_duplicate_letter_code/);
-      // The same code in the next fiscal year is a different series.
-      await saveApsEntry(E, build(randomUUID(), fixture.secondYear.id, '2041-08-15', '902'));
+      // The same code in the next fiscal year is a different series. The save
+      // RPC can no longer express this — since A.3 the active period owns the
+      // year of a new draft — so the per-year key is exercised where it lives:
+      // on the table.
+      const otherYearId = randomUUID();
+      ids.push(otherYearId);
+      await asRole('authenticated', E, (c) =>
+        c.query(
+          `insert into public.letters
+             (id, fiscal_year_id, letter_type, letter_number, letter_date, party_id, issuer_reference)
+           values ($1,$2,'inbound','902','2041-08-15',$3,$4)`,
+          [otherYearId, fixture.secondYear.id, fixture.party.id, `${fixture.issuerCode}:1`],
+        ),
+      );
     });
   });
 
