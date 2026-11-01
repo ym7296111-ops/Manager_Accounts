@@ -100,7 +100,7 @@ function draftHeader(overrides: Record<string, unknown> = {}) {
     issuer_reference: 'YM:42',
     party_id: id(501),
     sister_company_id: null,
-    reclassification_reason: null,
+    reclassification_note: null,
     status: 'draft',
     created_by: actor,
     updated_at: '2026-03-04T10:00:00+00:00',
@@ -114,7 +114,7 @@ function draftLine(overrides: Record<string, unknown> = {}) {
     warehouse_id: id(100),
     classification_id: id(201),
     amount: '10.00',
-    paired_line_id: null,
+    // The new schema has no pairing column; legacy fixtures add it explicitly.
     ...overrides,
   };
 }
@@ -190,7 +190,38 @@ describe('APS letter entry transport', () => {
     expect(lines.url.searchParams.get('select')).toContain('party_id');
     expect(header.url.searchParams.get('select')).toContain('issuer_reference');
     expect(header.url.searchParams.get('select')).toContain('letter_date');
+    expect(header.url.searchParams.get('select')).toContain('reclassification_note');
+    expect(lines.url.searchParams.get('select')).not.toContain('paired_line_id');
     expect(lines.url.searchParams.get('letter_id')).toBe(`eq.${id(900)}`);
+  });
+
+  it('falls back to the legacy statement column while the database migration is pending', async () => {
+    const requests = setupTransport((url) => {
+      if (!url.pathname.endsWith('/letters')) return json([draftLine()]);
+      return url.searchParams.get('select')?.includes('reclassification_note')
+        ? json(
+            {
+              code: '42703',
+              message: 'column letters.reclassification_note does not exist',
+              details: null,
+              hint: null,
+            },
+            400,
+          )
+        : json(
+            draftHeader({
+              reclassification_note: undefined,
+              reclassification_reason: 'بيان من المخطط القديم',
+            }),
+          );
+    });
+
+    const draft = await fetchEntryDraft(id(900), actor);
+    expect(draft.form.reason).toBe('بيان من المخطط القديم');
+    const headerRequests = requests.filter(({ url }) => url.pathname.endsWith('/letters'));
+    expect(headerRequests).toHaveLength(2);
+    expect(headerRequests[0]?.url.searchParams.get('select')).toContain('reclassification_note');
+    expect(headerRequests[1]?.url.searchParams.get('select')).toContain('reclassification_reason');
   });
 
   it('refuses to edit a draft owned by someone else or one already approved', async () => {
@@ -207,7 +238,7 @@ describe('APS letter entry transport', () => {
     await expect(fetchEntryDraft(id(900), actor)).rejects.toMatchObject({ code: 'notFound' });
   });
 
-  it('reconstructs internal pairs and rejects a broken pairing', () => {
+  it('reconstructs legacy pairs and free-line pairs for the current transfer screen', () => {
     const source = draftLine({ id: id(960), direction: 'out', amount: '12.00' });
     const destination = draftLine({ id: id(961), paired_line_id: id(960), amount: '12.00' });
     const draft = parseEntryDraft(
@@ -232,6 +263,35 @@ describe('APS letter entry transport', () => {
         },
       ],
     });
+    const freeDraft = parseEntryDraft(
+      draftHeader({
+        letter_type: 'internal_transfer',
+        party_id: null,
+        reclassification_note: 'بيان التحويل',
+      }),
+      [
+        draftLine({ id: id(963), direction: 'out', amount: '8.00' }),
+        draftLine({ id: id(964), amount: '8.00' }),
+      ],
+      actor,
+    );
+    expect(freeDraft.form).toMatchObject({
+      reason: 'بيان التحويل',
+      lines: [{ warehouseId: id(100), destinationWarehouseId: id(100), amount: '8.00' }],
+    });
+    // One source split across two free destinations cannot be represented by
+    // the temporary pair-shaped screen; refuse it rather than reshaping it.
+    expect(() =>
+      parseEntryDraft(
+        draftHeader({ letter_type: 'internal_transfer', party_id: null }),
+        [
+          draftLine({ id: id(965), direction: 'out', amount: '12.00' }),
+          draftLine({ id: id(966), amount: '6.00' }),
+          draftLine({ id: id(967), amount: '6.00' }),
+        ],
+        actor,
+      ),
+    ).toThrow(ApsEntryError);
     const broken = [source, draftLine({ id: id(962), paired_line_id: id(960), amount: '11.00' })];
     expect(() =>
       parseEntryDraft(
@@ -324,18 +384,101 @@ describe('APS letter entry transport', () => {
       p_party_id: null,
       p_sister_company_id: id(601),
       p_direction: 'out',
-      p_reclassification_reason: null,
+      p_reclassification_note: null,
       p_lines: [{ warehouse_id: id(100), classification_id: id(201), amount: '12.50' }],
     });
+    expect(body).not.toHaveProperty('p_reclassification_reason');
 
     const internalRequests = setupTransport(() =>
       json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' }),
     );
     await saveEntryDraft(id(900), null, { ...form, type: 'internal_transfer' });
-    expect(JSON.parse(internalRequests[0]!.body)).toMatchObject({
+    const internalBody = JSON.parse(internalRequests[0]!.body) as Record<string, unknown>;
+    expect(internalBody).toMatchObject({
       p_sister_company_id: null,
       p_direction: null,
+      p_reclassification_note: 'ignored',
+      p_lines: [
+        {
+          direction: 'out',
+          warehouse_id: id(100),
+          classification_id: id(201),
+          amount: '12.50',
+        },
+        {
+          direction: 'in',
+          warehouse_id: id(100),
+          classification_id: id(201),
+          amount: '12.50',
+        },
+      ],
     });
+    expect(internalBody).not.toHaveProperty('p_reclassification_reason');
+  });
+
+  it('falls back once to the legacy save signature while its migration is pending', async () => {
+    const requests = setupTransport((_url, body) => {
+      const parsed = JSON.parse(body) as Record<string, unknown>;
+      return 'p_reclassification_note' in parsed
+        ? json(
+            {
+              code: 'PGRST202',
+              message:
+                'Could not find the function public.aps_save_letter_draft(p_reclassification_note) in the schema cache',
+              details: null,
+              hint: null,
+            },
+            404,
+          )
+        : json({ id: id(900), updated_at: '2026-03-04T11:00:00+00:00' });
+    });
+    const form: EntryForm = {
+      ...newEntryForm(),
+      type: 'internal_transfer',
+      number: '9',
+      yearId: id(400),
+      reason: 'بيان نقل',
+      lines: [
+        {
+          key: 'l1',
+          partyId: '',
+          warehouseId: id(100),
+          classificationId: id(201),
+          destinationWarehouseId: id(101),
+          destinationClassificationId: id(202),
+          amount: '4.25',
+        },
+      ],
+    };
+
+    await expect(saveEntryDraft(id(900), null, form)).resolves.toEqual({
+      id: id(900),
+      updatedAt: '2026-03-04T11:00:00+00:00',
+    });
+    expect(requests).toHaveLength(2);
+    const firstBody = JSON.parse(requests[0]!.body) as Record<string, unknown>;
+    expect(firstBody).toMatchObject({
+      p_reclassification_note: 'بيان نقل',
+      p_lines: [
+        { direction: 'out', warehouse_id: id(100), classification_id: id(201), amount: '4.25' },
+        { direction: 'in', warehouse_id: id(101), classification_id: id(202), amount: '4.25' },
+      ],
+    });
+    expect(firstBody).not.toHaveProperty('p_reclassification_reason');
+    const fallbackBody = JSON.parse(requests[1]!.body) as Record<string, unknown>;
+    expect(fallbackBody).toMatchObject({
+      p_reclassification_reason: 'بيان نقل',
+      p_lines: [
+        {
+          source_warehouse_id: id(100),
+          source_classification_id: id(201),
+          destination_warehouse_id: id(101),
+          destination_classification_id: id(202),
+          amount: '4.25',
+        },
+      ],
+    });
+    expect(fallbackBody).not.toHaveProperty('p_reclassification_note');
   });
 
   it('sends the letter code as one field and never sends the letter date', async () => {

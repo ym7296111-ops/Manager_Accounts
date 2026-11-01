@@ -88,6 +88,47 @@ function assertResponse(response: { readonly error: unknown; readonly status: nu
     throw new ApsEntryError(classifyEntryError(response.error, response.status));
   }
 }
+
+function errorDetail(error: unknown): string {
+  const item = record(error);
+  return [item?.code, item?.message, item?.details, item?.hint]
+    .map((value) => text(value) ?? '')
+    .join(' ')
+    .toLowerCase();
+}
+
+/**
+ * The note-column rollout can briefly have this client talking to the
+ * pre-migration schema. Only a schema-cache/undefined-column error naming the
+ * new column is a compatibility signal; every other failure keeps its normal
+ * classification and is never retried.
+ */
+function isMissingColumnError(error: unknown, column: string): boolean {
+  const item = record(error);
+  const code = text(item?.code) ?? '';
+  const detail = errorDetail(error);
+  if (!detail.includes(column.toLowerCase())) return false;
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    detail.includes('does not exist') ||
+    detail.includes('could not find') ||
+    detail.includes('schema cache')
+  );
+}
+
+function isMissingSaveNoteSignature(error: unknown): boolean {
+  const item = record(error);
+  const code = text(item?.code) ?? '';
+  const detail = errorDetail(error);
+  if (!detail.includes('p_reclassification_note')) return false;
+  return (
+    code === 'PGRST202' ||
+    code === '42883' ||
+    detail.includes('could not find the function') ||
+    detail.includes('schema cache')
+  );
+}
 function client() {
   const current = getSupabase();
   if (current === null) throw new ApsEntryError('unavailable');
@@ -232,7 +273,9 @@ interface RawDraftLine {
 function parseDraftLine(value: unknown): RawDraftLine {
   const row = record(value);
   const amount = parseLetterAmount(row?.amount);
-  const pair = row?.paired_line_id === null ? null : nullableId(row?.paired_line_id);
+  // New rows have no paired_line_id at all; absence and null both mean a
+  // free line. A non-null legacy value must still be a real line id.
+  const pair = row?.paired_line_id == null ? null : nullableId(row?.paired_line_id);
   if (
     !isEntryOptionId(row?.id) ||
     !isEntryOptionId(row?.warehouse_id) ||
@@ -240,7 +283,7 @@ function parseDraftLine(value: unknown): RawDraftLine {
     (row?.direction !== 'in' && row?.direction !== 'out') ||
     amount === null ||
     amount === '0.00' ||
-    (row?.paired_line_id !== null && pair === null)
+    (row?.paired_line_id != null && pair === null)
   )
     throw new ApsEntryError('invalid');
   return {
@@ -293,9 +336,18 @@ export function parseEntryDraft(
     const destinations = rows.filter((row) => row.direction === 'in');
     if (sources.length !== destinations.length || sources.some((row) => row.pair !== null))
       throw new ApsEntryError('invalid');
+    // The current transfer screen edits pair-shaped rows. Legacy drafts keep
+    // their explicit pairing; drafts written to the free-line schema by this
+    // same screen are stored source, destination, source, destination, so
+    // zipping the two ordered sides restores exactly those rows. A richer
+    // many-to-many free draft is for the forthcoming transfer screen and is
+    // refused here instead of being reshaped incorrectly.
+    const hasLegacyPairs = destinations.some((row) => row.pair !== null);
     const claimed = new Set<string>();
-    lines = sources.map((source) => {
-      const matches = destinations.filter((destination) => destination.pair === source.id);
+    lines = sources.map((source, index) => {
+      const matches = hasLegacyPairs
+        ? destinations.filter((destination) => destination.pair === source.id)
+        : [destinations[index]].filter((destination) => destination !== undefined);
       const destination = matches[0];
       if (
         matches.length !== 1 ||
@@ -348,7 +400,9 @@ export function parseEntryDraft(
       partyId,
       sisterId,
       direction: type === 'external_transfer' && rows[0]?.direction === 'out' ? 'out' : 'in',
-      reason: text(header.reclassification_reason) ?? '',
+      // The form field keeps its old name for this compatibility patch; the
+      // database statement may arrive under either schema's column name.
+      reason: text(header.reclassification_note) ?? text(header.reclassification_reason) ?? '',
       lines,
     },
   };
@@ -357,13 +411,20 @@ export function parseEntryDraft(
 export async function fetchEntryDraft(id: string, actorId: string): Promise<LoadedDraft> {
   if (!isLetterId(id)) throw new ApsEntryError('notFound');
   const current = client();
-  const header = await current
-    .from('letters')
-    .select(
-      'id, fiscal_year_id, letter_type, letter_number, letter_number_raw, letter_date, issuer_reference, party_id, sister_company_id, reclassification_reason, status, created_by, updated_at',
-    )
-    .eq('id', id)
-    .maybeSingle();
+  const readHeader = (statementColumn: 'reclassification_note' | 'reclassification_reason') =>
+    current
+      .from('letters')
+      .select(
+        `id, fiscal_year_id, letter_type, letter_number, letter_number_raw, letter_date, issuer_reference, party_id, sister_company_id, ${statementColumn}, status, created_by, updated_at`,
+      )
+      .eq('id', id)
+      .maybeSingle();
+  let header = await readHeader('reclassification_note');
+  // A newly deployed client may reach the database minutes before its
+  // migration. Retry only that one recognised schema-cache failure.
+  if (header.error && isMissingColumnError(header.error, 'reclassification_note')) {
+    header = await readHeader('reclassification_reason');
+  }
   assertResponse(header);
   if (header.data === null) throw new ApsEntryError('notFound');
   const headerRow = record(header.data);
@@ -376,7 +437,9 @@ export async function fetchEntryDraft(id: string, actorId: string): Promise<Load
   const lines = await current
     .from('letter_lines')
     .select(
-      'id, direction, party_id, warehouse_id, classification_id, amount::text, paired_line_id',
+      // Omitting the retired pairing column is safe under both schemas; the
+      // parser still understands it if an older response includes it.
+      'id, direction, party_id, warehouse_id, classification_id, amount::text',
     )
     .eq('letter_id', id)
     .order('line_number', { ascending: true })
@@ -411,10 +474,13 @@ export async function saveEntryDraft(
   updatedAt: string | null,
   form: EntryForm,
 ): Promise<{ id: string; updatedAt: string }> {
-  const lines = form.lines.map((line) => {
+  const normalizedLines = form.lines.map((line) => {
     const amount = normalizeEntryAmount(line.amount);
     if (amount === null) throw new ApsEntryError('invalid');
-    return form.type === 'internal_transfer'
+    return { line, amount };
+  });
+  const legacyLines = normalizedLines.map(({ line, amount }) =>
+    form.type === 'internal_transfer'
       ? {
           source_warehouse_id: line.warehouseId,
           source_classification_id: line.classificationId,
@@ -429,9 +495,30 @@ export async function saveEntryDraft(
           ...(form.type === 'inbound' || form.type === 'outbound'
             ? { party_id: line.partyId }
             : {}),
-        };
-  });
-  const response = await client().rpc('aps_save_letter_draft', {
+        },
+  );
+  // The current screen still thinks in source/destination rows. To the new
+  // database each such row is simply one `out` free line followed by its
+  // equal `in` free line; no pair relationship is written or needed.
+  const lines =
+    form.type === 'internal_transfer'
+      ? normalizedLines.flatMap(({ line, amount }) => [
+          {
+            direction: 'out',
+            warehouse_id: line.warehouseId,
+            classification_id: line.classificationId,
+            amount,
+          },
+          {
+            direction: 'in',
+            warehouse_id: line.destinationWarehouseId,
+            classification_id: line.destinationClassificationId,
+            amount,
+          },
+        ])
+      : legacyLines;
+  const statement = form.type === 'internal_transfer' ? form.reason : null;
+  const commonArgs = {
     p_letter_id: id,
     p_expected_updated_at: updatedAt,
     p_fiscal_year_id: form.yearId,
@@ -445,10 +532,23 @@ export async function saveEntryDraft(
         : null,
     p_sister_company_id: form.type === 'external_transfer' ? form.sisterId : null,
     p_direction: form.type === 'external_transfer' ? form.direction : null,
-    p_reclassification_reason: form.type === 'internal_transfer' ? form.reason : null,
-    p_lines: lines,
     p_issuer_reference: form.letterCode === '' ? null : form.letterCode,
+  };
+  let response = await client().rpc('aps_save_letter_draft', {
+    ...commonArgs,
+    p_reclassification_note: statement,
+    p_lines: lines,
   });
+  // PGRST202 proves the new signature was not found and therefore was not
+  // executed, so the pre-migration signature can be tried exactly once
+  // without any risk of a double save.
+  if (response.error && isMissingSaveNoteSignature(response.error)) {
+    response = await client().rpc('aps_save_letter_draft', {
+      ...commonArgs,
+      p_reclassification_reason: statement,
+      p_lines: legacyLines,
+    });
+  }
   assertResponse(response);
   const result = record(response.data);
   const version = text(result?.updated_at);
