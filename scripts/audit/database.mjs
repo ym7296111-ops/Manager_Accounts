@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 63);
+    assert.equal(migrations.length, 64);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2013,6 +2013,7 @@ try {
     // lists settled by the letter-level balance.
     assert.ok(migrations.includes('20261120000000_aps_internal_transfer_free_lines.sql'));
     assert.ok(migrations.includes('20261121000000_aps_active_fiscal_month.sql'));
+    assert.ok(migrations.includes('20261121010000_aps_letter_period_columns.sql'));
     assert.ok(migrations.includes('20261001130000_core_security_hardening.sql'));
     assert.ok(migrations.includes('20261001140000_support_system_schema.sql'));
     assert.ok(migrations.includes('20261001160000_localization_system_schema.sql'));
@@ -2640,6 +2641,143 @@ try {
       await db.query('delete from public.fiscal_months where fiscal_year_id=any($1::uuid[])', [
         yearIds,
       ]);
+      await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [yearIds]);
+    }
+  });
+  await test('letter period: the month is stored, derived when absent, and frozen after approval', async () => {
+    const yearIds = [randomUUID(), randomUUID()];
+    const suffix = randomUUID().slice(0, 8);
+
+    try {
+      await db.query(
+        `insert into public.fiscal_years(id,start_date,end_date)
+           values ($1,'2026-07-01','2027-06-30'),($2,'2025-07-01','2026-06-30')`,
+        [yearIds[0], yearIds[1]],
+      );
+      const months = (
+        await db.query(
+          `select id,month_number,name,start_date,end_date
+             from public.fiscal_months where fiscal_year_id=$1 order by month_number`,
+          [yearIds[0]],
+        )
+      ).rows;
+      const october = months[3];
+      const november = months[4];
+      assert.equal(october.name, 'أكتوبر 2026');
+
+      // The columns, the FK and the index the period screens rely on.
+      const columns = await db.query(
+        `select column_name,is_nullable from information_schema.columns
+          where table_schema='public' and table_name='letters'
+            and column_name in ('fiscal_month_id','document_date') order by column_name`,
+      );
+      assert.deepEqual(columns.rows, [
+        { column_name: 'document_date', is_nullable: 'YES' },
+        { column_name: 'fiscal_month_id', is_nullable: 'NO' },
+      ]);
+      const foreignKey = await db.query(
+        `select confdeltype from pg_constraint
+          where conrelid='public.letters'::regclass
+            and confrelid='public.fiscal_months'::regclass and contype='f'`,
+      );
+      assert.deepEqual(foreignKey.rows, [{ confdeltype: 'r' }]);
+      const index = await db.query(
+        `select indexdef from pg_indexes
+          where schemaname='public' and indexname='letters_fiscal_month_date_idx'`,
+      );
+      assert.ok(index.rows[0].indexdef.includes('letter_date DESC'));
+
+      const insertLetter = (number, date, extra = '') =>
+        db.query(
+          `insert into public.letters
+             (fiscal_year_id,letter_type,letter_number,letter_date,created_by${extra ? ',fiscal_month_id' : ''})
+           values ($1,'internal_transfer',$2,$3::date,$4${extra ? ',$5' : ''})
+           returning id,fiscal_month_id,fiscal_year_id,letter_date,document_date`,
+          extra ? [yearIds[0], number, date, A, extra] : [yearIds[0], number, date, A],
+        );
+
+      // 1) No month supplied (the client A.2 ships alongside): derived from the date.
+      const created = await insertLetter(`A2-${suffix}-1`, '2026-10-20');
+      const letterId = created.rows[0].id;
+      assert.equal(created.rows[0].fiscal_month_id, october.id);
+      assert.equal(created.rows[0].document_date, null);
+      assert.equal(created.rows[0].fiscal_year_id, yearIds[0]);
+
+      // 2) A date the calendar does not cover is refused, never guessed.
+      await expectCode('23514', () => insertLetter(`A2-${suffix}-2`, '2027-08-01'));
+
+      // 3) An explicit month that does not contain the date is refused.
+      await expectCode('23514', () => insertLetter(`A2-${suffix}-3`, '2026-10-20', november.id));
+
+      // 4) The pre-A.3 client edits a date and knows nothing about months: the
+      //    month follows the date instead of failing the save.
+      const movedToNovember = await db.query(
+        "update public.letters set letter_date='2026-11-05' where id=$1 returning fiscal_month_id",
+        [letterId],
+      );
+      assert.equal(movedToNovember.rows[0].fiscal_month_id, november.id);
+      const movedBack = await db.query(
+        'update public.letters set letter_date=$2::date, fiscal_month_id=$3 where id=$1 returning fiscal_year_id',
+        [letterId, '2026-10-02', october.id],
+      );
+      assert.equal(movedBack.rows[0].fiscal_year_id, yearIds[0]);
+
+      // 5) The month decides the year: a year change that contradicts it fails.
+      await expectCode('23514', () =>
+        db.query('update public.letters set fiscal_year_id=$2 where id=$1', [letterId, yearIds[1]]),
+      );
+
+      // 6) document_date is optional display data — and frozen once approved,
+      //    like every other content column (D7).
+      await db.query("update public.letters set document_date='2026-10-25' where id=$1", [
+        letterId,
+      ]);
+      await db.query(
+        `update public.letters
+            set status='approved', approved_by=$2, approved_at=now(),
+                source_total=100, destination_total=100
+          where id=$1`,
+        [letterId, A],
+      );
+      await expectCode('23514', () =>
+        db.query("update public.letters set document_date='2026-10-26' where id=$1", [letterId]),
+      );
+      await expectCode('23514', () =>
+        db.query('update public.letters set fiscal_month_id=$2 where id=$1', [
+          letterId,
+          november.id,
+        ]),
+      );
+      await expectCode('23514', () =>
+        db.query("update public.letters set letter_date='2026-11-05' where id=$1", [letterId]),
+      );
+
+      // 7) The measurements A.2 promises: every letter has a month, and the
+      //    periods add up to the whole.
+      const coverage = await db.query(
+        `select count(*)::int as letters,
+                count(fiscal_month_id)::int as with_month,
+                count(document_date)::int as with_document_date
+           from public.letters`,
+      );
+      assert.equal(coverage.rows[0].letters, coverage.rows[0].with_month);
+      const perMonth = await db.query(
+        `select m.id, count(l.id)::int as letters
+           from public.fiscal_months m left join public.letters l on l.fiscal_month_id=m.id
+          where m.fiscal_year_id=$1 group by m.id`,
+        [yearIds[0]],
+      );
+      const perMonthTotal = perMonth.rows.reduce((sum, row) => sum + row.letters, 0);
+      const yearLetters = await db.query(
+        'select count(*)::int as n from public.letters where fiscal_year_id=$1',
+        [yearIds[0]],
+      );
+      assert.equal(perMonthTotal, yearLetters.rows[0].n);
+
+      // 8) The settlement path still names the month (study §1.16) — the
+      //    reconciliation test later in this audit creates a real settlement.
+    } finally {
+      await db.query('delete from public.letters where fiscal_year_id=any($1::uuid[])', [yearIds]);
       await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [yearIds]);
     }
   });
