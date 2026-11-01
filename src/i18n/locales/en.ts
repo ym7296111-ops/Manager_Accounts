@@ -1073,6 +1073,28 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.periods.closedHint':
     'The year or month is closed; its current period cannot be changed.',
   'settings.project.fiscal.periods.success.saved': 'Current period updated.',
+  'settings.project.fiscal.periods.activate': 'Activate',
+  'settings.project.fiscal.periods.activating': 'Activating…',
+  'settings.project.fiscal.periods.activateMonth': 'Activate {month}',
+  'settings.project.fiscal.periods.activeBadge': 'Active',
+  'settings.project.fiscal.periods.alreadyActive': 'This is the currently active month',
+  'settings.project.fiscal.periods.activateHint':
+    'Make this month the project posting period; its current period number stays unchanged.',
+  'settings.project.fiscal.periods.activateSuccess': 'The month is now the project posting period.',
+  'settings.project.fiscal.periods.noActiveMonth':
+    'No month is active yet. Choose Activate beside the desired month to set the posting period.',
+  'settings.project.fiscal.periods.activateClosedTitle': 'Activate a closed period',
+  'settings.project.fiscal.periods.activateClosedBody':
+    '{month} or its fiscal year is closed. A written reason is required to activate this period.',
+  'settings.project.fiscal.periods.activateProtectedHint':
+    'Only the owner or a super admin may activate a closed period. The reason is recorded in the audit trail.',
+  'settings.project.fiscal.periods.activateReason': 'Activation reason',
+  'settings.project.fiscal.periods.activateReasonHint':
+    'Enter a clear reason of at least 10 characters.',
+  'settings.project.fiscal.periods.activateForbidden':
+    'The database refused activation. Check your project-settings permission; a closed period also requires the owner or a super admin.',
+  'settings.project.fiscal.periods.closeDialog': 'Close activation dialog',
+  'settings.project.fiscal.periods.cancel': 'Cancel',
   'settings.project.fiscal.periods.noActiveYear.title': 'No active fiscal year',
   'settings.project.fiscal.periods.noActiveYear.description':
     'Activate a fiscal year in Annual settings before changing its periods.',

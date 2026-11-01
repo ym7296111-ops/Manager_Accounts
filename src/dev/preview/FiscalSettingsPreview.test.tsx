@@ -57,6 +57,19 @@ describe('fiscal settings with the preview-only Supabase stand-in', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save period' }));
     await screen.findByText('We are now in period 4 of July 2035.');
 
+    fireEvent.click(screen.getByRole('button', { name: 'Activate July 2035' }));
+    await screen.findByText('The month is now the project posting period.');
+    fireEvent.click(screen.getByRole('button', { name: 'Activate August 2035' }));
+    await waitFor(() => {
+      const activeRows = screen
+        .getAllByTestId('fiscal-period-month')
+        .filter((row) => row.getAttribute('data-active') === 'true');
+      expect(activeRows).toHaveLength(1);
+      expect(
+        within(activeRows[0]!).getByRole('button', { name: 'Activate August 2035' }),
+      ).toHaveProperty('disabled', true);
+    });
+
     fireEvent.click(screen.getByRole('tab', { name: 'Opening balances' }));
     await screen.findByRole('button', { name: 'Show warehouses for المحطة الرئيسية' });
     fireEvent.click(screen.getByRole('button', { name: 'Show warehouses for المحطة الرئيسية' }));
@@ -91,13 +104,30 @@ describe('fiscal settings with the preview-only Supabase stand-in', () => {
 
     const { data: monthRows, error: monthError } = await getPreviewSupabase()
       .from('fiscal_months')
-      .select('month_number, current_period')
+      .select('month_number, current_period, is_active')
       .eq('fiscal_year_id', year!.id);
     expect(monthError).toBeNull();
     expect(monthRows as { month_number: number }[]).toHaveLength(12);
     expect(
       (monthRows as { month_number: number; current_period: number }[])[0]?.current_period,
     ).toBe(4);
+    expect(
+      (monthRows as { month_number: number; is_active: boolean }[])
+        .filter((month) => month.is_active)
+        .map((month) => month.month_number),
+    ).toEqual([2]);
+
+    const { data: activeRows, error: activeError } = await getPreviewSupabase()
+      .from('fiscal_months')
+      .select('id')
+      .eq('is_active', true);
+    expect(activeError).toBeNull();
+    expect(activeRows).toHaveLength(1);
+    const { error: directWriteError } = await getPreviewSupabase()
+      .from('fiscal_months')
+      .update({ is_active: true })
+      .eq('month_number', 1);
+    expect(directWriteError).toMatchObject({ code: '42501' });
 
     const { data: balanceRows, error: balanceError } = await getPreviewSupabase()
       .from('opening_balances')

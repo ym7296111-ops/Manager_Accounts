@@ -1032,6 +1032,27 @@ export const ar = {
   'settings.project.fiscal.periods.closedHint':
     'السنة أو الشهر مغلق؛ لا يمكن تعديل الفترة الجارية.',
   'settings.project.fiscal.periods.success.saved': 'تم تحديث الفترة الجارية.',
+  'settings.project.fiscal.periods.activate': 'تنشيط',
+  'settings.project.fiscal.periods.activating': 'جارٍ التنشيط…',
+  'settings.project.fiscal.periods.activateMonth': 'تنشيط شهر {month}',
+  'settings.project.fiscal.periods.activeBadge': 'فعال',
+  'settings.project.fiscal.periods.alreadyActive': 'هذا هو الشهر الفعّال حالياً',
+  'settings.project.fiscal.periods.activateHint':
+    'اجعل هذا الشهر هو فترة الترحيل للمشروع؛ لا يتغير رقم الفترة الجارية.',
+  'settings.project.fiscal.periods.activateSuccess': 'تم تنشيط الشهر ليصبح فترة الترحيل للمشروع.',
+  'settings.project.fiscal.periods.noActiveMonth':
+    'لا يوجد شهر فعّال حالياً. اضغط «تنشيط» بجانب الشهر المطلوب لتحديد فترة الترحيل.',
+  'settings.project.fiscal.periods.activateClosedTitle': 'تنشيط فترة مغلقة',
+  'settings.project.fiscal.periods.activateClosedBody':
+    'شهر {month} أو سنته المالية مغلقة. يلزم سبب مكتوب لتنشيط هذه الفترة.',
+  'settings.project.fiscal.periods.activateProtectedHint':
+    'تنشيط فترة مغلقة متاح فقط للمالك أو مدير النظام، ويُُسجَّل السبب في سجل التدقيق.',
+  'settings.project.fiscal.periods.activateReason': 'سبب التنشيط',
+  'settings.project.fiscal.periods.activateReasonHint': 'اكتب سبباً واضحاً لا يقل عن 10 أحرف.',
+  'settings.project.fiscal.periods.activateForbidden':
+    'رفضت قاعدة البيانات التنشيط. تحقق من صلاحية إدارة ضبط المشروع؛ الفترة المغلقة تتطلب أيضاً المالك أو مدير النظام.',
+  'settings.project.fiscal.periods.closeDialog': 'إغلاق نافذة التنشيط',
+  'settings.project.fiscal.periods.cancel': 'إلغاء',
   'settings.project.fiscal.periods.noActiveYear.title': 'لا توجد سنة مالية نشطة',
   'settings.project.fiscal.periods.noActiveYear.description':
     'فعّل سنة مالية من الضبط السنوي لتتمكن من تعديل فتراتها.',

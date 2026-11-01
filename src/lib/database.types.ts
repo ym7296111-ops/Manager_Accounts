@@ -532,6 +532,8 @@ export type Database = {
           end_date: string;
           fiscal_year_id: string;
           id: string;
+          /** The project posting month; write only through aps_activate_fiscal_month. */
+          is_active: boolean;
           is_closed: boolean;
           month_number: number;
           name: string;
@@ -544,12 +546,15 @@ export type Database = {
           end_date: string;
           fiscal_year_id: string;
           id?: string;
+          /** The database rejects a month created active. */
+          is_active?: false;
           is_closed?: boolean;
           month_number: number;
           name: string;
           start_date: string;
           updated_at?: string;
         };
+        /** is_active is intentionally absent: activation must use the RPC. */
         Update: {
           created_at?: string;
           current_period?: number;
@@ -823,6 +828,10 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      aps_activate_fiscal_month: {
+        Args: { p_fiscal_month_id: string; p_reason?: string | null };
+        Returns: Json;
+      };
       admin_update_project_settings: {
         Args: {
           p_admin_email?: string | null;

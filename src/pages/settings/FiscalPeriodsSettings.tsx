@@ -1,9 +1,10 @@
-import { CalendarRange, Minus, Plus, Save } from 'lucide-react';
+import { CalendarRange, Check, LoaderCircle, Minus, Plus, Save } from 'lucide-react';
 import { useState } from 'react';
 import { EmptyState } from '@/components/ui/EmptyState';
 import {
   classifyFiscalSettingsReadError,
   classifyFiscalSettingsWriteError,
+  useActivateFiscalMonth,
   useFiscalMonths,
   useFiscalYears,
   useUpdateFiscalPeriod,
@@ -12,6 +13,7 @@ import {
 } from '@/hooks/useFiscalSettings';
 import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import { FiscalBanner, FiscalLoading } from './FiscalSettingsFeedback';
+import { FiscalMonthActivationDialog } from './FiscalMonthActivationDialog';
 import { formatFiscalDate, formatFiscalMonthName } from './fiscalSettingsUtils';
 
 const READ_ERROR_KEYS: Record<
@@ -43,7 +45,10 @@ export default function FiscalPeriodsSettings() {
   const activeYear = yearsQuery.data?.find((year) => year.is_active) ?? null;
   const monthsQuery = useFiscalMonths(activeYear?.id ?? null);
   const updatePeriod = useUpdateFiscalPeriod();
+  const activateMonth = useActivateFiscalMonth();
   const [selectedMonthId, setSelectedMonthId] = useState<string | null>(null);
+  const [activationTarget, setActivationTarget] = useState<FiscalMonth | null>(null);
+  const [activationError, setActivationError] = useState<TranslationKey | null>(null);
   const [drafts, setDrafts] = useState<Readonly<Record<string, string>>>({});
   const [banner, setBanner] = useState<{
     readonly tone: 'error' | 'success';
@@ -117,9 +122,46 @@ export default function FiscalPeriodsSettings() {
   const isDirty = currentDraft !== undefined && parsedPeriod !== selectedMonth.current_period;
   const canEdit = !activeYear.is_closed && !selectedMonth.is_closed;
   const displayPeriod = validPeriod ? parsedPeriod : selectedMonth.current_period;
+  const busy = updatePeriod.isPending || activateMonth.isPending;
+  const hasActiveMonth = months.some((month) => month.is_active);
+
+  const activate = async (month: FiscalMonth, reason: string | null = null) => {
+    if (busy || month.is_active) return;
+    setBanner(null);
+    setActivationError(null);
+    try {
+      await activateMonth.mutateAsync({
+        fiscalYearId: activeYear.id,
+        monthId: month.id,
+        reason,
+      });
+      setActivationTarget(null);
+      setBanner({ tone: 'success', key: 'settings.project.fiscal.periods.activateSuccess' });
+    } catch (error) {
+      const code = classifyFiscalSettingsWriteError(error, 'activateMonth');
+      const key =
+        code === 'forbidden'
+          ? 'settings.project.fiscal.periods.activateForbidden'
+          : WRITE_ERROR_KEYS[code];
+      if (activationTarget !== null) {
+        setActivationError(key);
+      } else {
+        setBanner({ tone: 'error', key });
+      }
+    }
+  };
+
+  const requestActivation = (month: FiscalMonth) => {
+    if (month.is_closed || activeYear.is_closed) {
+      setActivationError(null);
+      setActivationTarget(month);
+    } else {
+      void activate(month);
+    }
+  };
 
   const savePeriod = async () => {
-    if (!validPeriod || !isDirty || !canEdit) {
+    if (!validPeriod || !isDirty || !canEdit || busy) {
       return;
     }
     setBanner(null);
@@ -175,6 +217,15 @@ export default function FiscalPeriodsSettings() {
         ) : null}
       </header>
 
+      {!hasActiveMonth ? (
+        <p
+          role="status"
+          className="border-warning/30 bg-warning/10 text-warning rounded-xl border px-4 py-3 text-sm"
+        >
+          {t('settings.project.fiscal.periods.noActiveMonth')}
+        </p>
+      ) : null}
+
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.2fr)]">
         <nav
           aria-label={t('settings.project.fiscal.periods.monthList')}
@@ -182,36 +233,81 @@ export default function FiscalPeriodsSettings() {
         >
           {months.map((month) => {
             const selected = month.id === selectedMonth.id;
+            const monthName = formatFiscalMonthName(month.start_date, locale);
+            const activating =
+              activateMonth.isPending && activateMonth.variables?.monthId === month.id;
             return (
-              <button
+              <div
                 key={month.id}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => {
-                  setSelectedMonthId(month.id);
-                  setBanner(null);
-                }}
+                data-testid="fiscal-period-month"
+                data-active={month.is_active}
                 className={[
-                  'border-border flex items-center justify-between gap-3 rounded-xl border px-3.5 py-3 text-start transition-colors',
-                  'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-                  selected ? 'border-primary/50 bg-primary/5' : 'bg-card hover:bg-muted/35',
+                  'flex min-w-0 items-center gap-1 rounded-xl border p-1 transition-colors',
+                  month.is_active ? 'border-success/50 bg-success/5' : 'border-border bg-card',
+                  selected ? 'ring-primary/40 ring-1' : '',
                 ].join(' ')}
               >
-                <span className="min-w-0">
-                  <span className="text-foreground block truncate text-sm font-semibold">
-                    {formatFiscalMonthName(month.start_date, locale)}
+                {/* Selection and activation are siblings, never nested buttons. */}
+                <button
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => {
+                    setSelectedMonthId(month.id);
+                    setBanner(null);
+                  }}
+                  className="focus-visible:ring-ring min-w-0 flex-1 rounded-lg px-2.5 py-2 text-start focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-foreground text-sm font-semibold">{monthName}</span>
+                    {month.is_active ? (
+                      <span className="bg-success/10 text-success inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold">
+                        <Check className="size-3" aria-hidden="true" />
+                        {t('settings.project.fiscal.periods.activeBadge')}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="text-muted-foreground mt-0.5 block text-xs">
+                  <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
                     {formatFiscalDate(month.start_date, locale)} –{' '}
                     {formatFiscalDate(month.end_date, locale)}
                   </span>
-                </span>
-                <span className="text-muted-foreground shrink-0 text-xs">
-                  {t('settings.project.fiscal.periods.periodLabel', {
-                    period: month.current_period,
+                  <span className="text-muted-foreground mt-1 block text-xs">
+                    {t('settings.project.fiscal.periods.periodLabel', {
+                      period: month.current_period,
+                    })}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => requestActivation(month)}
+                  disabled={busy || month.is_active}
+                  aria-label={t('settings.project.fiscal.periods.activateMonth', {
+                    month: monthName,
                   })}
-                </span>
-              </button>
+                  aria-busy={activating}
+                  title={
+                    month.is_active
+                      ? t('settings.project.fiscal.periods.alreadyActive')
+                      : t('settings.project.fiscal.periods.activateHint')
+                  }
+                  className={[
+                    'focus-visible:ring-ring flex min-w-14 shrink-0 flex-col items-center justify-center gap-1 self-stretch rounded-lg border px-2 py-2 text-xs font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none disabled:cursor-not-allowed',
+                    month.is_active
+                      ? 'border-success/25 text-success'
+                      : 'border-border text-foreground hover:bg-muted/50 disabled:opacity-50',
+                  ].join(' ')}
+                >
+                  {activating ? (
+                    <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Check className="size-4" aria-hidden="true" />
+                  )}
+                  <span>
+                    {activating
+                      ? t('settings.project.fiscal.periods.activating')
+                      : t('settings.project.fiscal.periods.activate')}
+                  </span>
+                </button>
+              </div>
             );
           })}
         </nav>
@@ -258,7 +354,7 @@ export default function FiscalPeriodsSettings() {
                 step={1}
                 inputMode="numeric"
                 value={inputValue}
-                disabled={!canEdit || updatePeriod.isPending}
+                disabled={!canEdit || busy}
                 onChange={(event) =>
                   setDrafts((current) => ({ ...current, [selectedMonth.id]: event.target.value }))
                 }
@@ -270,7 +366,7 @@ export default function FiscalPeriodsSettings() {
                 type="button"
                 aria-label={t('settings.project.fiscal.periods.decrement')}
                 onClick={() => changeBy(-1)}
-                disabled={!canEdit || updatePeriod.isPending || displayPeriod <= 1}
+                disabled={!canEdit || busy || displayPeriod <= 1}
                 className="border-border hover:bg-muted/50 grid size-10 place-items-center rounded-lg border disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Minus className="size-4" aria-hidden="true" />
@@ -279,7 +375,7 @@ export default function FiscalPeriodsSettings() {
                 type="button"
                 aria-label={t('settings.project.fiscal.periods.increment')}
                 onClick={() => changeBy(1)}
-                disabled={!canEdit || updatePeriod.isPending}
+                disabled={!canEdit || busy}
                 className="border-border hover:bg-muted/50 grid size-10 place-items-center rounded-lg border disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Plus className="size-4" aria-hidden="true" />
@@ -288,7 +384,7 @@ export default function FiscalPeriodsSettings() {
             <button
               type="button"
               onClick={() => void savePeriod()}
-              disabled={!canEdit || !validPeriod || !isDirty || updatePeriod.isPending}
+              disabled={!canEdit || !validPeriod || !isDirty || busy}
               className="bg-primary text-primary-foreground inline-flex min-h-10 items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Save className="size-4" aria-hidden="true" />
@@ -305,6 +401,19 @@ export default function FiscalPeriodsSettings() {
           ) : null}
         </section>
       </div>
+      {activationTarget !== null ? (
+        <FiscalMonthActivationDialog
+          key={activationTarget.id}
+          monthName={formatFiscalMonthName(activationTarget.start_date, locale)}
+          busy={activateMonth.isPending}
+          error={activationError}
+          onSubmit={(reason) => void activate(activationTarget, reason)}
+          onClose={() => {
+            setActivationTarget(null);
+            setActivationError(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
