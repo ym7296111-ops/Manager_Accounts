@@ -2,6 +2,7 @@ import { ArrowDownLeft, ArrowUpRight, Plus, Scale, Trash2 } from 'lucide-react';
 import { SearchCombobox, type SearchComboboxOption } from '@/components/ui/SearchCombobox';
 import { useI18n } from '@/i18n/I18nContext';
 import {
+  entryTransferDuplicateKeys,
   entryTransferTotals,
   newEntryLine,
   type EntryDirection,
@@ -32,7 +33,7 @@ export function ApsTransferTables({
   warehouses,
   classifications,
   maxLines,
-  highlightedKey,
+  highlightedKeys,
   onLinesChange,
 }: {
   readonly lines: readonly EntryLine[];
@@ -40,12 +41,14 @@ export function ApsTransferTables({
   readonly warehouses: readonly SearchComboboxOption[];
   readonly classifications: readonly EntryOption[];
   readonly maxLines: number;
-  /** The row a validation error points at, or null. */
-  readonly highlightedKey: string | null;
+  /** Rows a validation error or a live duplicate check points at. */
+  readonly highlightedKeys: ReadonlySet<string>;
   readonly onLinesChange: (lines: readonly EntryLine[]) => void;
 }) {
   const { t, locale } = useI18n();
   const totals = entryTransferTotals(lines);
+  const duplicateKeys = entryTransferDuplicateKeys(lines);
+  const highlighted = (key: string) => highlightedKeys.has(key) || duplicateKeys.has(key);
   const add = (direction: EntryDirection) =>
     onLinesChange([...lines, newEntryLine('', '', direction)]);
   const remove = (key: string) => onLinesChange(lines.filter((line) => line.key !== key));
@@ -105,7 +108,7 @@ export function ApsTransferTables({
                 <th scope="col" className="w-20 pb-1 text-start font-semibold sm:w-28">
                   {t('aps.letters.amount')}
                 </th>
-                <th scope="col" className="w-10 pb-1 sm:w-11">
+                <th scope="col" className="w-11 pb-1">
                   <span className="sr-only">{t('aps.entry.transfer.removeColumn')}</span>
                 </th>
               </tr>
@@ -116,8 +119,8 @@ export function ApsTransferTables({
                 return (
                   <tr
                     key={line.key}
-                    data-highlighted={line.key === highlightedKey ? 'true' : undefined}
-                    className={line.key === highlightedKey ? 'bg-destructive/5' : undefined}
+                    data-highlighted={highlighted(line.key) ? 'true' : undefined}
+                    className={highlighted(line.key) ? 'bg-destructive/10' : undefined}
                   >
                     <td className="min-w-0 py-1 pe-1">
                       <SearchCombobox
@@ -184,7 +187,7 @@ export function ApsTransferTables({
                           { number: row },
                         )}
                         onClick={() => remove(line.key)}
-                        className="text-muted-foreground hover:text-destructive grid size-10 place-items-center rounded-lg"
+                        className="text-muted-foreground hover:text-destructive focus-visible:ring-ring grid size-11 place-items-center rounded-lg focus-visible:ring-2 focus-visible:outline-none"
                       >
                         <Trash2 className="size-4" aria-hidden="true" />
                       </button>
@@ -200,7 +203,7 @@ export function ApsTransferTables({
           type="button"
           disabled={full}
           onClick={() => add(direction)}
-          className="border-primary/25 text-primary hover:bg-primary/5 mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
+          className="border-primary/25 text-primary hover:bg-primary/5 focus-visible:ring-ring mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border px-3 text-sm font-semibold focus-visible:ring-2 focus-visible:outline-none disabled:opacity-50"
         >
           <Plus className="size-4" aria-hidden="true" />
           {t(source ? 'aps.entry.transfer.addSource' : 'aps.entry.transfer.addDestination')}

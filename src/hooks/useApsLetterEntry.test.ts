@@ -439,6 +439,12 @@ describe('APS letter entry transport', () => {
     expect(classifyEntryError({ code: 'P0001', message: 'aps_entry_duplicate_letter_code' })).toBe(
       'duplicateLetterCode',
     );
+    expect(classifyEntryError({ code: 'P0001', message: 'aps_entry_duplicate_party_line' })).toBe(
+      'duplicatePartyLine',
+    );
+    expect(
+      classifyEntryError({ code: 'P0001', message: 'aps_entry_duplicate_transfer_line' }),
+    ).toBe('duplicateTransferLine');
     expect(classifyEntryError({ code: '42501' })).toBe('forbidden');
     expect(classifyEntryError({ code: '22023' })).toBe('invalid');
     expect(classifyEntryError(new TypeError('Failed to fetch'))).toBe('network');
@@ -562,6 +568,29 @@ describe('APS letter entry transport', () => {
     const internalLines = internalBody.p_lines as Record<string, unknown>[];
     expect(internalLines.every((line) => !('paired_line_id' in line))).toBe(true);
     expect(internalLines.every((line) => !('party_id' in line))).toBe(true);
+
+    /* An empty or whitespace-only statement is null on the wire, matching the
+       database's own normalization; a typed statement is trimmed, not blanked. */
+    for (const reason of ['', '   ']) {
+      const emptyNoteRequests = setupTransport(() =>
+        json({ id: id(901), updated_at: '2026-03-04T11:00:00+00:00' }),
+      );
+      await saveEntryDraft(id(901), null, { ...form, type: 'internal_transfer', reason });
+      expect(JSON.parse(emptyNoteRequests[0]!.body)).toMatchObject({
+        p_reclassification_note: null,
+      });
+    }
+    const trimmedRequests = setupTransport(() =>
+      json({ id: id(902), updated_at: '2026-03-04T11:00:00+00:00' }),
+    );
+    await saveEntryDraft(id(902), null, {
+      ...form,
+      type: 'internal_transfer',
+      reason: '  بيان مختصر  ',
+    });
+    expect(JSON.parse(trimmedRequests[0]!.body)).toMatchObject({
+      p_reclassification_note: 'بيان مختصر',
+    });
   });
 
   it('sends the letter code as one field and never sends the letter date', async () => {

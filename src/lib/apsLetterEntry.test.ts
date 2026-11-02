@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   entryHasReclassification,
+  entryTransferDuplicateKeys,
+  ENTRY_MAX_LINES,
   entryScreenPeriod,
   entryTotal,
   entryTransferTotals,
@@ -257,7 +259,7 @@ describe('APS letter entry validation', () => {
               key: 'line-in-2',
               partyId: '',
               warehouseId: id(100),
-              classificationId: id(201),
+              classificationId: id(202),
               direction: 'in',
               amount: '50',
             },
@@ -276,6 +278,58 @@ describe('APS letter entry validation', () => {
         options,
       ),
     ).toEqual({ code: 'lineReference', line: 1 });
+  });
+
+  it('refuses a repeated transfer triple on the same side and paints both rows', () => {
+    const form = transferForm();
+    const duplicate = {
+      ...form.lines[1]!,
+      key: 'line-in-2',
+      classificationId: id(201),
+    };
+    const repeated = { ...form, lines: [...form.lines, duplicate] };
+    expect(validateEntry(repeated, options)).toEqual({ code: 'duplicateTransferLine', line: 3 });
+    expect([...entryTransferDuplicateKeys(repeated.lines)]).toEqual(['line-in', 'line-in-2']);
+    /* The opposite side may name the same warehouse and classification. */
+    expect(entryTransferDuplicateKeys(transferForm().lines).size).toBe(0);
+    /* Changing the classification resolves the repeat without merging rows. */
+    expect(
+      validateEntry(
+        { ...repeated, lines: [...form.lines, { ...duplicate, classificationId: id(202) }] },
+        options,
+      ),
+    ).toBeNull();
+  });
+
+  it('allows up to the database line cap and refuses one line more', () => {
+    const base = transferForm();
+    /* 250 source rows and 250 destination rows, each with its own classification,
+       so the cap is tested without tripping the duplicate rule. */
+    const manyOptions: EntryOptions = {
+      ...options,
+      classifications: Array.from({ length: ENTRY_MAX_LINES }, (_, index) => ({
+        id: id(1000 + index),
+        name: `صنف ${index}`,
+        code: `CL-${index}`,
+      })),
+    };
+    const lines = Array.from({ length: ENTRY_MAX_LINES }, (_, index) => ({
+      ...base.lines[0]!,
+      key: `line-${index}`,
+      classificationId: id(1000 + index),
+      direction: index < ENTRY_MAX_LINES / 2 ? ('out' as const) : ('in' as const),
+      amount: '1',
+    }));
+    expect(ENTRY_MAX_LINES).toBe(500);
+    expect(validateEntry({ ...base, lines }, manyOptions)).toBeNull();
+    expect(
+      validateEntry(
+        { ...base, lines: [...lines, { ...lines[0]!, key: 'one-too-many' }] },
+        manyOptions,
+      ),
+    ).toEqual({
+      code: 'lines',
+    });
   });
 
   it('treats the reclassification statement as optional but notices a change', () => {

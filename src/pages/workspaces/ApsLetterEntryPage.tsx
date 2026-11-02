@@ -36,6 +36,8 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   APS_LETTER_NEW_PATH,
   entryHasReclassification,
+  entryTransferDuplicateKeys,
+  ENTRY_MAX_LINES,
   entryScreenPeriod,
   entryTotal,
   entryTransferTotals,
@@ -141,6 +143,7 @@ const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   duplicate: 'aps.entry.errorDuplicate',
   duplicateLetterCode: 'aps.entry.errorDuplicateCode',
   duplicatePartyLine: 'aps.entry.errorDuplicateLine',
+  duplicateTransferLine: 'aps.entry.errorDuplicateTransferLine',
   existing: 'aps.entry.errorExisting',
   stale: 'aps.entry.errorStale',
   invalid: 'aps.entry.errorInvalid',
@@ -360,7 +363,19 @@ function EntryEditor({
   const counterpartyTree = form.type === 'inbound' || form.type === 'outbound';
   /* Validation names a line by its 1-based position; the tree wants keys.
      A duplicate triple blames both of its rows, not just the repeat. */
+  const transferDuplicateKeys = useMemo(
+    () => (transfer ? entryTransferDuplicateKeys(form.lines) : NO_HIGHLIGHTED_LINES),
+    [transfer, form.lines],
+  );
   const highlightedKeys = useMemo<ReadonlySet<string>>(() => {
+    if (transfer) {
+      const keys = new Set(transferDuplicateKeys);
+      if (validation?.line !== undefined) {
+        const target = form.lines[validation.line - 1];
+        if (target !== undefined) keys.add(target.key);
+      }
+      return keys;
+    }
     if (!counterpartyTree || validation === null || validation.line === undefined) {
       return NO_HIGHLIGHTED_LINES;
     }
@@ -378,7 +393,7 @@ function EntryEditor({
       if (first !== undefined) keys.add(first.key);
     }
     return keys;
-  }, [counterpartyTree, form.lines, validation]);
+  }, [counterpartyTree, form.lines, transfer, transferDuplicateKeys, validation]);
   /* The badges read the physical balance as of the day this letter carries:
      today for a new letter, the draft's own accounting date when resuming. */
   const balances = useLetterBalances(form.yearId, draft?.letterDate ?? localToday());
@@ -521,7 +536,11 @@ function EntryEditor({
             kind === 'network'
               ? 'aps.entry.approveUnknown'
               : kind === 'unbalanced'
-                ? 'aps.entry.approveUnbalanced'
+                ? transfer && !form.lines.some((line) => (line.direction ?? 'out') === 'out')
+                  ? 'aps.entry.approveUnbalancedEmptySource'
+                  : transfer && !form.lines.some((line) => line.direction === 'in')
+                    ? 'aps.entry.approveUnbalancedEmptyDestination'
+                    : 'aps.entry.approveUnbalanced'
                 : 'aps.entry.approveFailedSaved',
           error: true,
           showDraft: true,
@@ -913,8 +932,8 @@ function EntryEditor({
               lines={form.lines}
               warehouses={warehouses}
               classifications={options.classifications}
-              maxLines={250}
-              highlightedKey={form.lines.find((line) => highlightedKeys.has(line.key))?.key ?? null}
+              maxLines={ENTRY_MAX_LINES}
+              highlightedKeys={highlightedKeys}
               onLinesChange={(lines) => patch({ lines })}
             />
           ) : (
@@ -922,9 +941,9 @@ function EntryEditor({
               <div className="flex flex-wrap items-start justify-end gap-3">
                 <button
                   type="button"
-                  disabled={form.lines.length >= 500}
+                  disabled={form.lines.length >= ENTRY_MAX_LINES}
                   onClick={() => patch({ lines: [...form.lines, newEntryLine()] })}
-                  className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
+                  className="border-primary/25 text-primary hover:bg-primary/5 inline-flex min-h-11 items-center gap-2 rounded-xl border px-3 text-sm font-semibold disabled:opacity-50"
                 >
                   <Plus className="size-4" aria-hidden="true" />
                   {t('aps.entry.addLine')}

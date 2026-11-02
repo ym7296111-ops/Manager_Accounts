@@ -1967,7 +1967,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 65);
+    assert.equal(migrations.length, 66);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1982,6 +1982,7 @@ try {
     assert.ok(migrations.includes('20261031000000_user_lifecycle_auto_suspend_and_kpis.sql'));
     assert.ok(migrations.includes('20261101000000_delegation_notifications_and_profile.sql'));
     assert.ok(migrations.includes('20261102000000_fix_password_reset_notification_recipients.sql'));
+    assert.ok(migrations.includes('20261122000000_aps_transfer_line_unique.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -4330,6 +4331,33 @@ try {
       );
       assert.equal(
         (await db.query('select id from public.letters where id=$1', [missingDirection])).rowCount,
+        0,
+      );
+
+      // A repeated (direction, warehouse, classification) triple on one side is
+      // one line typed twice. The RPC refuses it with the named token the entry
+      // screen translates, and the failed save leaves no header behind. The
+      // opposite side may still name the same warehouse and classification.
+      const duplicateTransfer = randomUUID();
+      ids.push(duplicateTransfer);
+      const duplicateError = await captureApsError(() =>
+        saveApsEntry(E, {
+          id: duplicateTransfer,
+          yearId: fixture.firstYear.id,
+          type: 'internal_transfer',
+          number: '97',
+          date: '2040-08-15',
+          lines: [
+            { ...transferLines[0], amount: '60.00' },
+            { ...transferLines[0], amount: '40.00' },
+            transferLines[2],
+          ],
+        }),
+      );
+      assert.equal(duplicateError.code, 'P0001');
+      assert.match(duplicateError.message, /aps_entry_duplicate_transfer_line/);
+      assert.equal(
+        (await db.query('select id from public.letters where id=$1', [duplicateTransfer])).rowCount,
         0,
       );
       for (const [type, number, partyId, sisterId, direction] of [
