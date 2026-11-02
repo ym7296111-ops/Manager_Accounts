@@ -63,6 +63,16 @@ async function expectCode(code, fn) {
   await assert.rejects(fn, (error) => error.code === code);
 }
 
+/** Run `fn` and return the error it raised, so a message can be asserted. */
+async function captureApsError(fn) {
+  try {
+    await fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected the call to fail');
+}
+
 // Revoked table privileges surface as either RLS denial (42501) or a plain
 // privilege refusal (42505) depending on the layer reached first; both mean
 // "the direct write path is closed".
@@ -1967,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 66);
+    assert.equal(migrations.length, 67);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1983,6 +1993,7 @@ try {
     assert.ok(migrations.includes('20261101000000_delegation_notifications_and_profile.sql'));
     assert.ok(migrations.includes('20261102000000_fix_password_reset_notification_recipients.sql'));
     assert.ok(migrations.includes('20261122000000_aps_transfer_line_unique.sql'));
+    assert.ok(migrations.includes('20261123000000_aps_letter_hardening.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -2652,7 +2663,7 @@ try {
       await db.query('delete from public.fiscal_years where id=any($1::uuid[])', [yearIds]);
     }
   });
-  await test('letter period: the month is stored, derived when absent, and frozen after approval', async () => {
+  await test('letter period: the month is mandatory, validated, and frozen after approval', async () => {
     const yearIds = [randomUUID(), randomUUID()];
     const suffix = randomUUID().slice(0, 8);
 
@@ -2695,33 +2706,59 @@ try {
       );
       assert.ok(index.rows[0].indexdef.includes('letter_date DESC'));
 
-      const insertLetter = (number, date, extra = '') =>
+      const insertLetter = (number, date, monthId) =>
         db.query(
           `insert into public.letters
-             (fiscal_year_id,letter_type,letter_number,letter_date,created_by${extra ? ',fiscal_month_id' : ''})
-           values ($1,'internal_transfer',$2,$3::date,$4${extra ? ',$5' : ''})
+             (fiscal_year_id,letter_type,letter_number,letter_date,created_by,fiscal_month_id)
+           values ($1,'internal_transfer',$2,$3::date,$4,$5)
            returning id,fiscal_month_id,fiscal_year_id,letter_date,document_date`,
-          extra ? [yearIds[0], number, date, A, extra] : [yearIds[0], number, date, A],
+          [yearIds[0], number, date, A, monthId],
         );
 
-      // 1) No month supplied (the client A.2 ships alongside): derived from the date.
-      const created = await insertLetter(`A2-${suffix}-1`, '2026-10-20');
+      // 1) A.4: no silent derivation. A write that does not name its month is
+      //    refused with a named token, not repaired from the date.
+      const missing = await captureApsError(() =>
+        insertLetter(`A2-${suffix}-0`, '2026-10-20', null),
+      );
+      assert.equal(missing.code, 'P0001');
+      assert.match(missing.message, /aps_missing_fiscal_month/);
+
+      // 2) An explicit, consistent month is stored as sent.
+      const created = await insertLetter(`A2-${suffix}-1`, '2026-10-20', october.id);
       const letterId = created.rows[0].id;
       assert.equal(created.rows[0].fiscal_month_id, october.id);
       assert.equal(created.rows[0].document_date, null);
       assert.equal(created.rows[0].fiscal_year_id, yearIds[0]);
 
-      // 2) A date the calendar does not cover is refused, never guessed.
-      await expectCode('23514', () => insertLetter(`A2-${suffix}-2`, '2027-08-01'));
+      // 3) A date the calendar does not cover is refused, never guessed.
+      const uncovered = await captureApsError(() =>
+        insertLetter(`A2-${suffix}-2`, '2027-08-01', october.id),
+      );
+      assert.equal(uncovered.code, 'P0001');
+      assert.match(uncovered.message, /aps_letter_date_mismatch/);
 
-      // 3) An explicit month that does not contain the date is refused.
-      await expectCode('23514', () => insertLetter(`A2-${suffix}-3`, '2026-10-20', november.id));
+      // 4) An explicit month that does not contain the date is refused.
+      const mismatch = await captureApsError(() =>
+        insertLetter(`A2-${suffix}-3`, '2026-10-20', november.id),
+      );
+      assert.equal(mismatch.code, 'P0001');
+      assert.match(mismatch.message, /aps_letter_date_mismatch/);
 
-      // 4) The pre-A.3 client edits a date and knows nothing about months: the
-      //    month follows the date instead of failing the save.
+      // 5) A.4 anti-tampering: editing only the date no longer moves the month.
+      const tamper = await captureApsError(() =>
+        db.query("update public.letters set letter_date='2026-11-05' where id=$1", [letterId]),
+      );
+      assert.equal(tamper.code, 'P0001');
+      assert.match(tamper.message, /aps_letter_date_mismatch/);
+      assert.equal(
+        (await db.query('select fiscal_month_id from public.letters where id=$1', [letterId]))
+          .rows[0].fiscal_month_id,
+        october.id,
+      );
+      // An explicit, consistent move is still a normal draft edit.
       const movedToNovember = await db.query(
-        "update public.letters set letter_date='2026-11-05' where id=$1 returning fiscal_month_id",
-        [letterId],
+        'update public.letters set letter_date=$2::date, fiscal_month_id=$3 where id=$1 returning fiscal_month_id',
+        [letterId, '2026-11-05', november.id],
       );
       assert.equal(movedToNovember.rows[0].fiscal_month_id, november.id);
       const movedBack = await db.query(
@@ -2730,12 +2767,12 @@ try {
       );
       assert.equal(movedBack.rows[0].fiscal_year_id, yearIds[0]);
 
-      // 5) The month decides the year: a year change that contradicts it fails.
+      // 6) The month decides the year: a year change that contradicts it fails.
       await expectCode('23514', () =>
         db.query('update public.letters set fiscal_year_id=$2 where id=$1', [letterId, yearIds[1]]),
       );
 
-      // 6) document_date is optional display data — and frozen once approved,
+      // 7) document_date is optional display data — and frozen once approved,
       //    like every other content column (D7).
       await db.query("update public.letters set document_date='2026-10-25' where id=$1", [
         letterId,
@@ -2760,7 +2797,7 @@ try {
         db.query("update public.letters set letter_date='2026-11-05' where id=$1", [letterId]),
       );
 
-      // 7) The measurements A.2 promises: every letter has a month, and the
+      // 8) The measurements A.2 promises: every letter has a month, and the
       //    periods add up to the whole.
       const coverage = await db.query(
         `select count(*)::int as letters,
@@ -2782,7 +2819,7 @@ try {
       );
       assert.equal(perMonthTotal, yearLetters.rows[0].n);
 
-      // 8) The settlement path still names the month (study §1.16) — the
+      // 9) The settlement path still names the month (study §1.16) — the
       //    reconciliation test later in this audit creates a real settlement.
     } finally {
       await db.query('delete from public.letters where fiscal_year_id=any($1::uuid[])', [yearIds]);
@@ -3243,24 +3280,38 @@ try {
     };
   };
 
-  const insertApsLetter = (fixture, input) =>
-    asRole('authenticated', A, (c) =>
+  const insertApsLetter = async (fixture, input) => {
+    const yearId = input.yearId ?? fixture.firstYear.id;
+    const date = input.date ?? '2040-08-15';
+    // A.4 retired the trigger's silent date->month derivation: a direct write
+    // must name its month. The harness resolves it the same way the backfill did.
+    const month = (
+      await db.query(
+        `select id from public.fiscal_months
+          where fiscal_year_id=$1 and start_date <= $2::date and $2::date <= end_date
+          limit 1`,
+        [yearId, date],
+      )
+    ).rows[0];
+    return asRole('authenticated', A, (c) =>
       c.query(
         `insert into public.letters
-           (fiscal_year_id, letter_type, letter_number, letter_date, party_id, sister_company_id)
-         values ($1,$2,$3,$4::date,$5,$6)
+           (fiscal_year_id, fiscal_month_id, letter_type, letter_number, letter_date, party_id, sister_company_id)
+         values ($1,$2,$3,$4,$5::date,$6,$7)
          returning id, letter_number, letter_number_raw, status,
                    source_total, destination_total, counterparty_code, counterparty_name`,
         [
-          input.yearId ?? fixture.firstYear.id,
+          yearId,
+          month?.id ?? null,
           input.type,
           input.number,
-          input.date ?? '2040-08-15',
+          date,
           input.partyId ?? null,
           input.sisterId ?? null,
         ],
       ),
     );
+  };
 
   // Since the multi-party tree, a counterparty line carries its own party and
   // the line guard refuses a direct insert without one; transfer and
@@ -3289,16 +3340,6 @@ try {
     asRole('authenticated', A, (c) =>
       c.query('select public.aps_cancel_letter($1,$2)', [letterId, reason]),
     );
-
-  /** Run `fn` and return the error it raised, so a message can be asserted. */
-  const captureApsError = async (fn) => {
-    try {
-      await fn();
-    } catch (error) {
-      return error;
-    }
-    throw new Error('expected the call to fail');
-  };
 
   // A.3: a new letter is dated by the active posting month, so the entry
   // fixture opens one and closes it again afterwards.
@@ -3822,11 +3863,11 @@ try {
       const firstId = randomUUID();
       ids.push(firstId);
       const created = (
-        await saveApsEntry(E, entryFor(firstId, { date: '2040-09-20', documentDate: '2040-07-15' }))
+        await saveApsEntry(E, entryFor(firstId, { date: '2040-09-20', documentDate: '2026-07-15' }))
       ).rows[0].result;
       assert.equal(created.letter_date, augustMonth.start_date);
       assert.equal(created.fiscal_month_id, augustMonth.id);
-      assert.equal(created.document_date, '2040-07-15');
+      assert.equal(created.document_date, '2026-07-15');
       assert.equal(created.current_period, 1);
       const firstRow = await rowOf(firstId);
       assert.equal(firstRow.letter_date, augustMonth.start_date);
@@ -3859,13 +3900,13 @@ try {
             version,
             date: '2040-09-20',
             expectedMonthId: september.id,
-            documentDate: '2040-09-21',
+            documentDate: '2026-09-21',
           }),
         )
       ).rows[0].result;
       assert.equal(reopened.letter_date, augustMonth.start_date);
       assert.equal(reopened.fiscal_month_id, augustMonth.id);
-      assert.equal(reopened.document_date, '2040-09-21');
+      assert.equal(reopened.document_date, '2026-09-21');
       const reopenedRow = await rowOf(firstId);
       assert.equal(reopenedRow.letter_date, augustMonth.start_date);
       assert.equal(reopenedRow.fiscal_month_id, augustMonth.id);
@@ -3895,7 +3936,7 @@ try {
       ).rows[0];
       assert.equal(audit.metadata.fiscal_month_id, augustMonth.id);
       assert.equal(audit.metadata.current_period, 1);
-      assert.equal(audit.metadata.document_date, '2040-09-21');
+      assert.equal(audit.metadata.document_date, '2026-09-21');
 
       // 5) No active period: a clear token on save and no invented cutoff.
       await clearApsPeriod([fixture.firstYear.id, fixture.secondYear.id]);
@@ -3922,8 +3963,8 @@ try {
         ).rows[0].options.active_period,
         null,
       );
-      // The monthly approval block still refuses a closed month, and a draft is
-      // still saveable inside a closed month (only approval is blocked).
+      // A.4 closes the save path too: the hardening test below proves that a
+      // closed month refuses a draft save, not only an approval.
     });
   });
 
@@ -4101,6 +4142,274 @@ try {
     });
   });
 
+  await test('APS letter hardening: closed/missing/mismatched period saves are refused and durably audited', async () => {
+    await withApsEntryFixture(async (fixture, ids, augustMonth) => {
+      const entryFor = (id, extra = {}) => ({
+        id,
+        yearId: fixture.firstYear.id,
+        type: 'internal_transfer',
+        number: `A4-${id.slice(0, 8)}`,
+        expectedMonthId: augustMonth.id,
+        lines: [
+          {
+            direction: 'out',
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafA,
+            amount: '5.00',
+          },
+          {
+            direction: 'in',
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafB,
+            amount: '5.00',
+          },
+        ],
+        ...extra,
+      });
+      const rejectedReasons = async (letterId) =>
+        (
+          await db.query(
+            `select actor_id, metadata->>'reason' as reason, metadata->>'via' as via
+               from public.audit_logs
+              where action='aps.letter_rejected' and entity='letters' and entity_id=$1::text
+              order by created_at`,
+            [letterId],
+          )
+        ).rows;
+
+      // 1) A closed active month refuses the normal save RPC. The refusal is
+      //    written to audit_logs on a separate connection, so it survives the
+      //    rolled-back INSERT.
+      await db.query('update public.fiscal_months set is_closed=true where id=$1', [
+        augustMonth.id,
+      ]);
+      const closedId = randomUUID();
+      ids.push(closedId);
+      const closedSave = await captureApsError(() =>
+        saveApsEntry(E, entryFor(closedId, { number: '8801' })),
+      );
+      assert.equal(closedSave.code, 'P0001');
+      assert.match(closedSave.message, /aps_closed_period/);
+      assert.equal(
+        (await db.query('select count(*)::int as n from public.letters where id=$1', [closedId]))
+          .rows[0].n,
+        0,
+      );
+      const closedAudit = await rejectedReasons(closedId);
+      assert.equal(closedAudit.length, 1);
+      assert.equal(closedAudit[0].actor_id, E);
+      assert.equal(closedAudit[0].reason, 'aps_closed_period');
+      assert.equal(closedAudit[0].via, 'trigger');
+
+      // 2) The same closed month refuses a direct table write, so bypassing the
+      //    RPC/UI does not bypass the rule.
+      const directClosedId = randomUUID();
+      ids.push(directClosedId);
+      const directClosed = await captureApsError(() =>
+        asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letters
+               (id,fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,created_by)
+             values ($1,$2,$3,'internal_transfer','8802',$4::date,$5)`,
+            [directClosedId, fixture.firstYear.id, augustMonth.id, '2040-08-15', E],
+          ),
+        ),
+      );
+      assert.equal(directClosed.code, 'P0001');
+      assert.match(directClosed.message, /aps_closed_period/);
+      const directClosedAudit = await rejectedReasons(directClosedId);
+      assert.equal(directClosedAudit.length, 1);
+      assert.equal(directClosedAudit[0].reason, 'aps_closed_period');
+
+      await db.query('update public.fiscal_months set is_closed=false where id=$1', [
+        augustMonth.id,
+      ]);
+
+      // 3) No active period: the save RPC refuses before any row is written,
+      //    and the refusal is still audited.
+      await clearApsPeriod([fixture.firstYear.id, fixture.secondYear.id]);
+      const noPeriodId = randomUUID();
+      ids.push(noPeriodId);
+      const noPeriod = await captureApsError(() =>
+        saveApsEntry(E, entryFor(noPeriodId, { number: '8803' })),
+      );
+      assert.equal(noPeriod.code, 'P0001');
+      assert.match(noPeriod.message, /aps_no_active_period/);
+      const noPeriodAudit = await rejectedReasons(noPeriodId);
+      assert.equal(noPeriodAudit.length, 1);
+      assert.equal(noPeriodAudit[0].actor_id, E);
+      assert.equal(noPeriodAudit[0].reason, 'aps_no_active_period');
+      assert.equal(noPeriodAudit[0].via, 'rpc');
+      await activateApsMonth(fixture.firstYear.id, 2);
+
+      // 4) A date outside the supplied fiscal month is refused on a direct
+      //    write; the month is never silently moved to match the date.
+      const mismatchId = randomUUID();
+      ids.push(mismatchId);
+      const mismatch = await captureApsError(() =>
+        asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letters
+               (id,fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,created_by)
+             values ($1,$2,$3,'internal_transfer','8804',$4::date,$5)`,
+            [mismatchId, fixture.firstYear.id, augustMonth.id, '2040-09-20', E],
+          ),
+        ),
+      );
+      assert.equal(mismatch.code, 'P0001');
+      assert.match(mismatch.message, /aps_letter_date_mismatch/);
+      const mismatchAudit = await rejectedReasons(mismatchId);
+      assert.equal(mismatchAudit.length, 1);
+      assert.equal(mismatchAudit[0].reason, 'aps_letter_date_mismatch');
+
+      // 5) Missing fiscal_month_id is a named refusal, not a derived repair.
+      const missingMonthId = randomUUID();
+      ids.push(missingMonthId);
+      const missingMonth = await captureApsError(() =>
+        asRole('authenticated', E, (c) =>
+          c.query(
+            `insert into public.letters
+               (id,fiscal_year_id,letter_type,letter_number,letter_date,created_by)
+             values ($1,$2,'internal_transfer','8805',$3::date,$4)`,
+            [missingMonthId, fixture.firstYear.id, '2040-08-15', E],
+          ),
+        ),
+      );
+      assert.equal(missingMonth.code, 'P0001');
+      assert.match(missingMonth.message, /aps_missing_fiscal_month/);
+      assert.equal((await rejectedReasons(missingMonthId))[0].reason, 'aps_missing_fiscal_month');
+
+      // 6) A reclassification note is only legal on internal_transfer.
+      const inboundId = randomUUID();
+      ids.push(inboundId);
+      await saveApsEntry(E, {
+        ...entryFor(inboundId, { number: '8806' }),
+        type: 'inbound',
+        partyId: fixture.party.id,
+        lines: [
+          {
+            direction: 'in',
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafA,
+            amount: '10.00',
+            party_id: fixture.party.id,
+          },
+        ],
+      });
+      const noteRefusal = await captureApsError(() =>
+        asRole('authenticated', E, (c) =>
+          c.query("update public.letters set reclassification_note='سبب' where id=$1", [inboundId]),
+        ),
+      );
+      assert.equal(noteRefusal.code, 'P0001');
+      assert.match(noteRefusal.message, /aps_reclassification_note_type/);
+      assert.equal((await rejectedReasons(inboundId))[0].reason, 'aps_reclassification_note_type');
+
+      // 7) A future paper date is refused using the project clock.
+      const futureDate = (
+        await db.query("select to_char(public.aps_project_today() + 1,'YYYY-MM-DD') as d")
+      ).rows[0].d;
+      const futureId = randomUUID();
+      ids.push(futureId);
+      const future = await captureApsError(() =>
+        saveApsEntry(E, entryFor(futureId, { number: '8807', documentDate: futureDate })),
+      );
+      assert.equal(future.code, 'P0001');
+      assert.match(future.message, /aps_document_date_future/);
+      assert.equal((await rejectedReasons(futureId))[0].reason, 'aps_document_date_future');
+
+      // The audit rows are durable: they are still present after every failed
+      // transaction above was rolled back by asRole/saveApsEntry.
+      const durable = await db.query(
+        `select count(*)::int as n from public.audit_logs
+          where action='aps.letter_rejected' and entity_id = any($1::text[])`,
+        [ids],
+      );
+      assert.equal(durable.rows[0].n, 7);
+    });
+  });
+
+  await test('APS letter hardening: a dblink outage preserves the original refusal and warns', async () => {
+    await withApsEntryFixture(async (fixture, ids, augustMonth) => {
+      const letterId = randomUUID();
+      ids.push(letterId);
+      await db.query('update public.fiscal_months set is_closed=true where id=$1', [
+        augustMonth.id,
+      ]);
+
+      // Simulate the production risk the reviewer asked about: the dblink
+      // extension is unavailable. The closed-period refusal must still be the
+      // original named P0001, and the server must emit an audit warning that
+      // carries that same original reason.
+      await db.query('drop extension if exists dblink');
+      const notices = [];
+      let refusal;
+      const client = await connect();
+      client.on('notice', (notice) => notices.push(notice.message ?? String(notice)));
+      try {
+        await client.query('begin');
+        await client.query('set local role authenticated');
+        await client.query("select set_config('request.jwt.claim.sub', $1, true)", [E]);
+        await client.query("select set_config('request.jwt.claim.role', 'authenticated', true)");
+        try {
+          await client.query(
+            `insert into public.letters
+               (id,fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,created_by)
+             values ($1,$2,$3,'internal_transfer','8808',$4::date,$5)`,
+            [letterId, fixture.firstYear.id, augustMonth.id, '2040-08-15', E],
+          );
+        } catch (error) {
+          refusal = error;
+        }
+        await client.query('rollback');
+      } finally {
+        await client.end();
+      }
+
+      assert.ok(refusal, 'the closed-period write must still be refused');
+      assert.equal(refusal.code, 'P0001');
+      assert.match(refusal.message, /aps_closed_period/);
+      assert.doesNotMatch(refusal.message, /dblink/);
+      assert.equal(
+        (await db.query('select count(*)::int as n from public.letters where id=$1', [letterId]))
+          .rows[0].n,
+        0,
+      );
+      assert.ok(
+        notices.some(
+          (message) =>
+            message.includes('aps letter rejection audit could not be made durable') &&
+            message.includes('reason=aps_closed_period'),
+        ),
+        `expected an audit warning carrying the original reason, got: ${notices.join(' | ')}`,
+      );
+
+      // Restore the extension and the migration's privilege posture so the
+      // rest of the audit runs against the intended final state.
+      await db.query('create schema if not exists extensions');
+      await db.query('create extension if not exists dblink with schema extensions');
+      await db.query(`
+        do $restore_dblink$
+        declare
+          v_function regprocedure;
+        begin
+          for v_function in
+            select p.oid::regprocedure
+              from pg_catalog.pg_proc as p
+             where p.pronamespace = 'extensions'::regnamespace
+               and p.proname like 'dblink%'
+          loop
+            execute format('revoke all on function %s from public, anon, authenticated, service_role', v_function);
+          end loop;
+        end
+        $restore_dblink$;
+      `);
+      await db.query('update public.fiscal_months set is_closed=false where id=$1', [
+        augustMonth.id,
+      ]);
+    });
+  });
+
   await test('APS letter code: one series per fiscal year', async () => {
     await withApsEntryFixture(async (fixture, ids) => {
       const build = (id, yearId, date, number) => {
@@ -4132,12 +4441,26 @@ try {
       // on the table.
       const otherYearId = randomUUID();
       ids.push(otherYearId);
+      const otherMonth = (
+        await db.query(
+          `select id from public.fiscal_months
+            where fiscal_year_id=$1 and start_date <= '2041-08-15'::date
+              and '2041-08-15'::date <= end_date limit 1`,
+          [fixture.secondYear.id],
+        )
+      ).rows[0];
       await asRole('authenticated', E, (c) =>
         c.query(
           `insert into public.letters
-             (id, fiscal_year_id, letter_type, letter_number, letter_date, party_id, issuer_reference)
-           values ($1,$2,'inbound','902','2041-08-15',$3,$4)`,
-          [otherYearId, fixture.secondYear.id, fixture.party.id, `${fixture.issuerCode}:1`],
+             (id, fiscal_year_id, fiscal_month_id, letter_type, letter_number, letter_date, party_id, issuer_reference)
+           values ($1,$2,$5,'inbound','902','2041-08-15',$3,$4)`,
+          [
+            otherYearId,
+            fixture.secondYear.id,
+            fixture.party.id,
+            `${fixture.issuerCode}:1`,
+            otherMonth.id,
+          ],
         ),
       );
     });
@@ -4159,8 +4482,11 @@ try {
       // A draft written without a date is dated today by the column default.
       const inserted = await db.query(
         `insert into public.letters
-           (id,fiscal_year_id,letter_type,letter_number,party_id,issuer_reference,created_by)
-         values ($1,$2,'inbound','91',$3,'YM:7',$4)
+           (id,fiscal_year_id,fiscal_month_id,letter_type,letter_number,party_id,issuer_reference,created_by)
+         values ($1,$2,
+                 (select id from public.fiscal_months
+                   where fiscal_year_id=$2 and start_date <= current_date and current_date <= end_date limit 1),
+                 'inbound','91',$3,'YM:7',$4)
          returning to_char(letter_date,'YYYY-MM-DD') as letter_date, issuer_reference`,
         [letterId, yearId, partyId, A],
       );
@@ -4522,12 +4848,20 @@ try {
           ),
         )
       ).rows[0];
+      const snapshotMonth = (
+        await db.query(
+          `select id from public.fiscal_months
+            where fiscal_year_id=$1 and start_date <= '2040-08-15'::date
+              and '2040-08-15'::date <= end_date limit 1`,
+          [fixture.firstYear.id],
+        )
+      ).rows[0];
       const letter = (
         await asRole('authenticated', E, (c) =>
           c.query(
-            `insert into public.letters (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
-         values ($1,'inbound','77','2040-08-15',$2) returning id`,
-            [fixture.firstYear.id, fixture.party.id],
+            `insert into public.letters (fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,party_id)
+         values ($1,$3,'inbound','77','2040-08-15',$2) returning id`,
+            [fixture.firstYear.id, fixture.party.id, snapshotMonth.id],
           ),
         )
       ).rows[0];
@@ -4961,12 +5295,20 @@ try {
         ).rows[0].n,
         0,
       );
+      const viewerMonth = (
+        await db.query(
+          `select id from public.fiscal_months
+            where fiscal_year_id=$1 and start_date <= '2040-09-01'::date
+              and '2040-09-01'::date <= end_date limit 1`,
+          [fixture.firstYear.id],
+        )
+      ).rows[0];
       await expectCode('42501', () =>
         asRole('authenticated', V, (c) =>
           c.query(
-            `insert into public.letters (fiscal_year_id, letter_type, letter_number, letter_date, party_id, created_by)
-             values ($1,'inbound','900',$2::date,$3,$4)`,
-            [fixture.firstYear.id, '2040-09-01', fixture.party.id, V],
+            `insert into public.letters (fiscal_year_id, fiscal_month_id, letter_type, letter_number, letter_date, party_id, created_by)
+             values ($1,$5,'inbound','900',$2::date,$3,$4)`,
+            [fixture.firstYear.id, '2040-09-01', fixture.party.id, V, viewerMonth.id],
           ),
         ),
       );
@@ -5267,10 +5609,9 @@ try {
       );
 
       // ---- D8(a+b): a closed month blocks approval until supplements open. --
-      await db.query(
-        'update public.fiscal_months set is_closed=true where fiscal_year_id=$1 and month_number=2',
-        [fixture.secondYear.id],
-      );
+      // A.4: the draft is prepared while the month is still open; once closed,
+      // neither a new save nor an approval may enter it (approval keeps the
+      // supplements_open exception).
       const closed = (
         await insertApsLetter(fixture, {
           yearId: fixture.secondYear.id,
@@ -5281,7 +5622,6 @@ try {
         })
       ).rows[0];
       createdIds.push(closed.id);
-      // A draft may be prepared for a closed period...
       await insertApsLine(closed.id, {
         direction: 'out',
         warehouseId: fixture.warehouseId,
@@ -5289,7 +5629,11 @@ try {
         amount: 40,
         partyId: fixture.partyOut.id,
       });
-      // ...but it cannot post.
+      await db.query(
+        'update public.fiscal_months set is_closed=true where fiscal_year_id=$1 and month_number=2',
+        [fixture.secondYear.id],
+      );
+      // The closed month cannot post.
       assert.match(
         (await captureApsError(() => approveApsLetter(closed.id))).message,
         /month containing .* is closed/,
@@ -5785,10 +6129,17 @@ try {
         asRole('authenticated', actor, (c) =>
           c.query(
             `insert into public.letters
-               (fiscal_year_id,letter_type,letter_number,letter_date,status,created_by,
+               (fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,status,created_by,
                 reconciliation_session_id,settlement_reason)
-             values ($1,'settlement','80',$2::date,'draft',$3,$4,$5)`,
-            [fixture.firstYear.id, fixture.month1.end_date, actor, sessionId, reason],
+             values ($1,$6,'settlement','80',$2::date,'draft',$3,$4,$5)`,
+            [
+              fixture.firstYear.id,
+              fixture.month1.end_date,
+              actor,
+              sessionId,
+              reason,
+              fixture.month1.id,
+            ],
           ),
         );
       for (const reason of [
@@ -5805,9 +6156,9 @@ try {
         asRole('authenticated', A, (c) =>
           c.query(
             `insert into public.letters
-               (fiscal_year_id,letter_type,letter_number,letter_date,party_id,settlement_reason)
-             values ($1,'inbound','79',$2::date,$3,'not a settlement')`,
-            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id],
+               (fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,party_id,settlement_reason)
+             values ($1,$4,'inbound','79',$2::date,$3,'not a settlement')`,
+            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id, fixture.month1.id],
           ),
         ),
       );
@@ -5820,9 +6171,9 @@ try {
         await asRole('authenticated', E, (c) =>
           c.query(
             `insert into public.letters
-               (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
-             values ($1,'inbound','81',$2::date,$3) returning id`,
-            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id],
+               (fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,party_id)
+             values ($1,$4,'inbound','81',$2::date,$3) returning id`,
+            [fixture.firstYear.id, fixture.month1.end_date, fixture.partyIn.id, fixture.month1.id],
           ),
         )
       ).rows[0].id;
@@ -6061,9 +6412,16 @@ try {
           await asRole('authenticated', E, (c) =>
             c.query(
               `insert into public.letters
-                 (fiscal_year_id,letter_type,letter_number,letter_date,party_id)
-               values ($1,$2,$3,$4::date,$5) returning id`,
-              [fixture.firstYear.id, type, number, fixture.month1.end_date, partyId],
+                 (fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,party_id)
+               values ($1,$6,$2,$3,$4::date,$5) returning id`,
+              [
+                fixture.firstYear.id,
+                type,
+                number,
+                fixture.month1.end_date,
+                partyId,
+                fixture.month1.id,
+              ],
             ),
           )
         ).rows[0].id;
@@ -7111,19 +7469,19 @@ try {
       // no other letter type may point at a session at all.
       await expectCode('23514', () =>
         db.query(
-          "insert into public.letters(fiscal_year_id,letter_type,letter_number,letter_date,status,created_by,reconciliation_session_id) values ($1,'settlement','90',$2::date,'draft',$3,$4)",
+          "insert into public.letters(fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,status,created_by,reconciliation_session_id) values ($1,(select id from public.fiscal_months where fiscal_year_id=$1 and start_date <= $2::date and $2::date <= end_date limit 1),'settlement','90',$2::date,'draft',$3,$4)",
           [fixture.firstYear.id, '2043-07-10', A, sessionId],
         ),
       );
       await expectCode('23503', () =>
         db.query(
-          "insert into public.letters(fiscal_year_id,letter_type,letter_number,letter_date,status,created_by,reconciliation_session_id) values ($1,'settlement','91',$2::date,'draft',$3,$4)",
+          "insert into public.letters(fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,status,created_by,reconciliation_session_id) values ($1,(select id from public.fiscal_months where fiscal_year_id=$1 and start_date <= $2::date and $2::date <= end_date limit 1),'settlement','91',$2::date,'draft',$3,$4)",
           [fixture.firstYear.id, '2043-07-10', A, randomUUID()],
         ),
       );
       await expectCode('23514', () =>
         db.query(
-          "insert into public.letters(fiscal_year_id,letter_type,letter_number,letter_date,status,created_by,party_id,reconciliation_session_id) values ($1,'inbound','92',$2::date,'draft',$3,$4,$5)",
+          "insert into public.letters(fiscal_year_id,fiscal_month_id,letter_type,letter_number,letter_date,status,created_by,party_id,reconciliation_session_id) values ($1,(select id from public.fiscal_months where fiscal_year_id=$1 and start_date <= $2::date and $2::date <= end_date limit 1),'inbound','92',$2::date,'draft',$3,$4,$5)",
           [fixture.firstYear.id, '2043-07-10', A, fixture.partyIn.id, sessionId],
         ),
       );
