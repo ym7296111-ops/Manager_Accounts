@@ -1977,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 67);
+    assert.equal(migrations.length, 68);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1994,6 +1994,7 @@ try {
     assert.ok(migrations.includes('20261102000000_fix_password_reset_notification_recipients.sql'));
     assert.ok(migrations.includes('20261122000000_aps_transfer_line_unique.sql'));
     assert.ok(migrations.includes('20261123000000_aps_letter_hardening.sql'));
+    assert.ok(migrations.includes('20261124000000_aps_balance_default_end_date.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -3965,6 +3966,46 @@ try {
       );
       // A.4 closes the save path too: the hardening test below proves that a
       // closed month refuses a draft save, not only an approval.
+    });
+  });
+
+  await test('APS balance badge defaults to end of active month, not start', async () => {
+    // The active month is August 2040 (2040-08-01 to 2040-08-31). A letter
+    // dated mid-month (2040-08-15) must appear in the balance when no cutoff
+    // is sent, proving the default is end_date, not start_date.
+    await withApsEntryFixture(async (fixture, ids, augustMonth) => {
+      const letterId = randomUUID();
+      ids.push(letterId);
+      await saveApsEntry(E, {
+        id: letterId,
+        yearId: fixture.firstYear.id,
+        type: 'inbound',
+        number: '901',
+        date: '2040-08-15',
+        lines: [
+          {
+            warehouse_id: fixture.warehouseId,
+            classification_id: fixture.leafA,
+            amount: '10.00',
+            party_id: fixture.party.id,
+          },
+        ],
+      });
+      await asRole('authenticated', A, (c) =>
+        c.query('select public.aps_approve_letter($1)', [letterId]),
+      );
+      const balances = (
+        await asRole('authenticated', E, (c) =>
+          c.query('select * from public.aps_letter_balances($1)', [fixture.firstYear.id]),
+        )
+      ).rows;
+      assert.deepEqual(balances, [
+        {
+          warehouse_id: fixture.warehouseId,
+          classification_id: fixture.leafA,
+          balance: '10.00',
+        },
+      ]);
     });
   });
 
