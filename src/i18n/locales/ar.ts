@@ -588,6 +588,13 @@ export const ar = {
   'aps.entry.errorUnbalanced':
     'لا يمكن اعتماد تحويل غير متوازن — اجعل إجمالي المصدر مساوياً لإجمالي الوجهة.',
   'aps.entry.errorUnknown': 'تعذّر الحفظ. حاول مجدداً أو تواصل مع المسؤول.',
+  // A.5: period refusals from the database letter guard.
+  'aps.entry.errorNoActivePeriod':
+    'لا توجد فترة محاسبية نشطة. لا يمكن حفظ الخطاب إلا داخل فترة مفتوحة.',
+  'aps.entry.errorPeriodChanged':
+    'تغيرت الفترة المحاسبية النشطة منذ فتح الصفحة. يُرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.',
+  'aps.entry.errorClosedPeriod':
+    'الفترة المحاسبية مغلقة. لا يمكن حفظ أو اعتماد خطابات في فترة مغلقة.',
   'aps.entry.validate.number': 'أدخل رقم النظام (EPS) بالأرقام فقط، من 1 إلى 64 رقماً.',
   'aps.entry.validate.letterCode': 'اختر المُصدر ثم اكتب رقم كود الخطاب بالأرقام فقط (مثل YM:63).',
   'aps.entry.validate.issuerCode': 'بادئة كود الخطاب ليست مُصدراً مسجلاً ونشطاً.',

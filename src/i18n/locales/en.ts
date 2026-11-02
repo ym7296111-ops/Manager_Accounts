@@ -606,6 +606,13 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.errorUnbalanced':
     'An unbalanced transfer cannot be approved — make the source total equal the destination total.',
   'aps.entry.errorUnknown': 'Could not save. Try again or contact your administrator.',
+  // A.5: period refusals from the database letter guard.
+  'aps.entry.errorNoActivePeriod':
+    'No active accounting period. Letters can only be saved within an open period.',
+  'aps.entry.errorPeriodChanged':
+    'The active accounting period changed since the page was opened. Please reload and try again.',
+  'aps.entry.errorClosedPeriod':
+    'The accounting period is closed. Letters cannot be saved or approved in a closed period.',
   'aps.entry.validate.number': 'Enter the system number (EPS) in digits only, 1 to 64 digits.',
   'aps.entry.validate.letterCode':
     'Choose the issuer, then type the letter-code number in digits only (for example YM:63).',
