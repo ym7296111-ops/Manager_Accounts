@@ -37,7 +37,11 @@ export type EntryErrorCode =
   /** An internal transfer whose two sides differ; approval refuses it. */
   | 'unbalanced'
   | 'notFound'
-  | 'unknown';
+  | 'unknown'
+  /** A.5: period refusals from the database letter guard. */
+  | 'noActivePeriod'
+  | 'periodChanged'
+  | 'closedPeriod';
 
 export class ApsEntryError extends Error {
   readonly code: EntryErrorCode;
@@ -74,6 +78,10 @@ export function classifyEntryError(error: unknown, status?: number): EntryErrorC
     return 'duplicateTransferLine';
   if (code === 'P0001' && message.includes('aps_entry_id_exists')) return 'existing';
   if (code === 'P0001' && message.includes('aps_entry_stale_draft')) return 'stale';
+  // A.5: database period guards refuse with named P0001 tokens.
+  if (code === 'P0001' && message.includes('aps_no_active_period')) return 'noActivePeriod';
+  if (code === 'P0001' && message.includes('aps_period_changed')) return 'periodChanged';
+  if (code === 'P0001' && message.includes('aps_closed_period')) return 'closedPeriod';
   // `aps_assert_letter_consistent` refuses an unbalanced transfer with 23514
   // and says so in words; that refusal deserves its own message, not "bad data".
   if (code === '23514' && message.includes('does not balance')) return 'unbalanced';

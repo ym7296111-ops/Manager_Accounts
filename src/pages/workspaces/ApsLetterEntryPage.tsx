@@ -150,6 +150,10 @@ const WRITE_ERROR: Record<EntryErrorCode, TranslationKey> = {
   unbalanced: 'aps.entry.errorUnbalanced',
   notFound: 'aps.entry.draftUnavailable',
   unknown: 'aps.entry.errorUnknown',
+  // A.5: database period refusals translated to UI messages.
+  noActivePeriod: 'aps.entry.errorNoActivePeriod',
+  periodChanged: 'aps.entry.errorPeriodChanged',
+  closedPeriod: 'aps.entry.errorClosedPeriod',
 };
 
 interface CachedEntry {
@@ -394,9 +398,6 @@ function EntryEditor({
     }
     return keys;
   }, [counterpartyTree, form.lines, transfer, transferDuplicateKeys, validation]);
-  /* The badges read the physical balance as of the day this letter carries:
-     today for a new letter, the draft's own accounting date when resuming. */
-  const balances = useLetterBalances(form.yearId, draft?.letterDate ?? localToday());
   const year = options.years.find((item) => item.id === form.yearId);
   /* The screen states the period the database will actually write into: the
      active month for a new letter, and a draft's own month for a draft (A.3
@@ -406,6 +407,12 @@ function EntryEditor({
   const running = entryScreenPeriod(options, draft?.letterDate ?? null);
   const period = running !== null && running.year.id === form.yearId ? running : null;
   const activeYear = year ?? running?.year ?? null;
+  // C.2: read balances as of the active period's end date for a new letter,
+  // not the browser's today — the letter will be posted into the active period.
+  const balances = useLetterBalances(
+    form.yearId,
+    draft?.letterDate ?? period?.month.endDate ?? localToday(),
+  );
   const letterCodeId = 'aps-letter-code';
   const letterCodeHelpId = 'aps-letter-code-help';
   /* One stored column (`issuer_reference`, e.g. `YM:63`) answered by two
