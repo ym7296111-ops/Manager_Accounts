@@ -384,6 +384,30 @@ export function entryTransferTotals(lines: readonly EntryLine[]): EntryTransferT
   };
 }
 
+/**
+ * The rows a transfer table must paint red: every row whose
+ * (direction, warehouse, classification) triple appears more than once on the
+ * same side. Incomplete references are not duplicates yet.
+ */
+export function entryTransferDuplicateKeys(lines: readonly EntryLine[]): ReadonlySet<string> {
+  const first = new Map<string, string>();
+  const duplicates = new Set<string>();
+  for (const line of lines) {
+    if (line.warehouseId === '' || line.classificationId === '') continue;
+    const triple = `${line.direction ?? 'out'}:${line.warehouseId}:${line.classificationId}`;
+    const previous = first.get(triple);
+    if (previous === undefined) {
+      first.set(triple, line.key);
+    } else {
+      duplicates.add(previous);
+      duplicates.add(line.key);
+    }
+  }
+  return duplicates;
+}
+
+export const ENTRY_MAX_LINES = 500;
+
 export type EntryValidationCode =
   | 'number'
   | 'letterCode'
@@ -394,6 +418,7 @@ export type EntryValidationCode =
   | 'lineReference'
   | 'lineParty'
   | 'duplicateLine'
+  | 'duplicateTransferLine'
   | 'amount'
   | 'total';
 export interface EntryValidationError {
@@ -425,13 +450,10 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     !options.sisters.some((item) => item.id === form.sisterId)
   )
     return { code: 'sister' };
-  if (
-    form.lines.length === 0 ||
-    form.lines.length > (form.type === 'internal_transfer' ? 250 : 500)
-  )
-    return { code: 'lines' };
+  if (form.lines.length === 0 || form.lines.length > ENTRY_MAX_LINES) return { code: 'lines' };
   const counterparty = form.type === 'inbound' || form.type === 'outbound';
   const seenTriples = new Set<string>();
+  const seenTransferLines = new Set<string>();
   let total = 0n;
   for (const [index, line] of form.lines.entries()) {
     // The party lives on the line now: every counterparty line must name an
@@ -455,6 +477,14 @@ export function validateEntry(form: EntryForm, options: EntryOptions): EntryVali
     // side. There is no second pair of references to complete.
     if (!hasWarehouse || !hasClassification) {
       return { code: 'lineReference', line: index + 1 };
+    }
+    // A transfer side is a set of (direction, warehouse, classification) lines:
+    // the same triple twice on the same side is one line typed twice. The
+    // opposite side may of course name the same warehouse and classification.
+    if (form.type === 'internal_transfer') {
+      const triple = `${line.direction ?? 'out'}:${line.warehouseId}:${line.classificationId}`;
+      if (seenTransferLines.has(triple)) return { code: 'duplicateTransferLine', line: index + 1 };
+      seenTransferLines.add(triple);
     }
     const amount = normalizeEntryAmount(line.amount);
     if (amount === null) return { code: 'amount', line: index + 1 };

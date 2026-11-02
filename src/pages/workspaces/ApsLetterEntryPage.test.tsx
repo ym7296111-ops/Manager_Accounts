@@ -303,9 +303,62 @@ describe('APS letter entry screen', () => {
     expect(form.lines[0]?.direction).toBe('out');
     expect(within(screen.getByTestId('transfer-balance')).getByText('غير متوازن')).toBeTruthy();
 
-    /* Approval is refused by the database, and the screen says why. */
+    /* Approval is refused by the database, and the screen names the empty side. */
     fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
-    expect(await screen.findByText(/التحويل غير متوازن/)).toBeTruthy();
+    expect(await screen.findByText(/التحويل غير متوازن — الجانب الوارد فارغ/)).toBeTruthy();
+  });
+
+  it('names the empty source side when only destination lines exist', async () => {
+    approve.mockRejectedValue(new ApsEntryError('unbalanced'));
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '92' } });
+    const source = screen.getByRole('region', { name: 'المصدر (صادر)' });
+    const destination = screen.getByRole('region', { name: 'الوجهة (وارد)' });
+    fireEvent.click(within(source).getByRole('button', { name: 'حذف السطر 1 من المصدر' }));
+    fireEvent.click(within(destination).getByRole('button', { name: 'إضافة سطر وارد' }));
+    pick('الوجهة (وارد) — السطر 1 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('الوجهة (وارد) — السطر 1 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('الوجهة (وارد) — السطر 1 — القيمة'), {
+      target: { value: '10' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'اعتماد الخطاب' }));
+    expect(await screen.findByText(/التحويل غير متوازن — الجانب الصادر فارغ/)).toBeTruthy();
+  });
+
+  it('paints duplicate transfer rows red, refuses the save, and clears after a fix', async () => {
+    const view = mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل داخلي/ }));
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '93' } });
+    const source = screen.getByRole('region', { name: 'المصدر (صادر)' });
+    pick('المصدر (صادر) — السطر 1 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('المصدر (صادر) — السطر 1 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('المصدر (صادر) — السطر 1 — القيمة'), {
+      target: { value: '10' },
+    });
+    fireEvent.click(within(source).getByRole('button', { name: 'إضافة سطر صادر' }));
+    pick('المصدر (صادر) — السطر 2 — المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('المصدر (صادر) — السطر 2 — التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('المصدر (صادر) — السطر 2 — القيمة'), {
+      target: { value: '5' },
+    });
+
+    /* The repeat is visible before any save attempt: both rows are red. */
+    expect(source.querySelectorAll('tr[data-highlighted="true"]')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    expect(await screen.findByText(/هذا السطر مكرر في نفس الجانب/)).toBeTruthy();
+    expect(save).not.toHaveBeenCalled();
+
+    /* A different classification resolves the repeat and the save goes through. */
+    pick('المصدر (صادر) — السطر 2 — التصنيف', 'تشغيل');
+    expect(source.querySelectorAll('tr[data-highlighted="true"]')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const form = (save.mock.calls[0] as [string, string | null, EntryForm])[2];
+    expect(form.lines.map((line) => line.classificationId)).toEqual([id(201), id(202)]);
+    expect(view.container.querySelectorAll('[data-highlighted="true"]')).toHaveLength(0);
   });
 
   it('reports a duplicate number without losing the entered data', async () => {

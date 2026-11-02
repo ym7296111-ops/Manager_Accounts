@@ -132,7 +132,7 @@ export function SearchCombobox({
             open && activeOption !== undefined ? `${listboxId}-${activeOption.value}` : undefined
           }
           autoComplete="off"
-          className="border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 w-full min-w-0 rounded-xl border py-2 ps-9 pe-9 text-sm font-normal outline-none focus:ring-2"
+          className="border-input bg-card text-foreground focus:border-primary/60 focus:ring-primary/25 min-h-11 w-full min-w-0 rounded-xl border py-2 ps-9 pe-11 text-sm font-normal outline-none focus:ring-2"
           placeholder={open ? searchPlaceholder : placeholder}
           value={shown}
           onFocus={() => {
@@ -180,12 +180,12 @@ export function SearchCombobox({
                 setQuery('');
                 setOpen(false);
               }}
-              className="text-muted-foreground hover:text-foreground grid size-9 place-items-center rounded-lg"
+              className="text-muted-foreground hover:text-foreground focus-visible:ring-ring grid size-11 place-items-center rounded-lg focus-visible:ring-2 focus-visible:outline-none"
             >
               <X className="size-4" aria-hidden="true" />
             </button>
           ) : (
-            <span className="text-muted-foreground grid size-9 place-items-center">
+            <span className="text-muted-foreground grid size-11 place-items-center">
               <ChevronDown className="size-4" aria-hidden="true" />
             </span>
           )}

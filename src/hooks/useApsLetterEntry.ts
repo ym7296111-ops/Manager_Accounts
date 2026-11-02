@@ -30,6 +30,7 @@ export type EntryErrorCode =
   | 'duplicate'
   | 'duplicateLetterCode'
   | 'duplicatePartyLine'
+  | 'duplicateTransferLine'
   | 'existing'
   | 'stale'
   | 'invalid'
@@ -69,6 +70,8 @@ export function classifyEntryError(error: unknown, status?: number): EntryErrorC
     return 'duplicateLetterCode';
   if (code === 'P0001' && message.includes('aps_entry_duplicate_party_line'))
     return 'duplicatePartyLine';
+  if (code === 'P0001' && message.includes('aps_entry_duplicate_transfer_line'))
+    return 'duplicateTransferLine';
   if (code === 'P0001' && message.includes('aps_entry_id_exists')) return 'existing';
   if (code === 'P0001' && message.includes('aps_entry_stale_draft')) return 'stale';
   // `aps_assert_letter_consistent` refuses an unbalanced transfer with 23514
@@ -565,7 +568,9 @@ export async function saveEntryDraft(
       ...(form.type === 'inbound' || form.type === 'outbound' ? { party_id: line.partyId } : {}),
     };
   });
-  const statement = form.type === 'internal_transfer' ? form.reason : null;
+  // The optional statement is null when empty, exactly as the database stores
+  // it; a blank string is not a second representation of "no statement".
+  const statement = form.type === 'internal_transfer' ? form.reason.trim() || null : null;
   const commonArgs = {
     p_letter_id: id,
     p_expected_updated_at: updatedAt,

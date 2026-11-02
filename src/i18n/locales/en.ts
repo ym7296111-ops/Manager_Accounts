@@ -540,6 +540,8 @@ export const en: Record<TranslationKey, string> = {
     'The warehouse physical balance — shown under more than one party.',
   'aps.entry.balance.show': 'Show the warehouse and classification balance',
   'aps.entry.validate.lineParty': 'Choose an active party from the correct branch for line {line}.',
+  'aps.entry.validate.duplicateTransferLine':
+    'This line repeats the same side, warehouse and classification. Merge it with the earlier line or change the warehouse/classification.',
   'aps.entry.validate.duplicateLine':
     'This classification is already under the same party and warehouse (line {line}). Merge them into one line.',
   'aps.entry.errorDuplicateLine':
@@ -564,6 +566,10 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.approving': 'Approving letter...',
   'aps.entry.saved': 'Draft saved. You can edit or approve it later.',
   'aps.entry.approved': 'The letter was approved.',
+  'aps.entry.approveUnbalancedEmptySource':
+    'The draft was saved, but approval failed: the transfer does not balance — the source side is empty. Add at least one source line, then equalize the totals.',
+  'aps.entry.approveUnbalancedEmptyDestination':
+    'The draft was saved, but approval failed: the transfer does not balance — the destination side is empty. Add at least one destination line, then equalize the totals.',
   'aps.entry.approveUnbalanced':
     'The draft is saved, but it could not be approved: the transfer is unbalanced — make the source total equal the destination total.',
   'aps.entry.approveFailedSaved':
@@ -595,6 +601,8 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.errorForbidden': 'You cannot create letters or edit this draft.',
   'aps.entry.errorInvalid':
     'Could not save the letter. Check its values, fiscal year, classifications and period.',
+  'aps.entry.errorDuplicateTransferLine':
+    'A transfer line repeats the same direction, warehouse and classification. Merge the duplicate lines into one.',
   'aps.entry.errorUnbalanced':
     'An unbalanced transfer cannot be approved — make the source total equal the destination total.',
   'aps.entry.errorUnknown': 'Could not save. Try again or contact your administrator.',

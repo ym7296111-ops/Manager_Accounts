@@ -492,6 +492,15 @@ function saveMockDraft(input: MockEntrySave): Response {
       .filter((line) => line.direction === 'in')
       .reduce((sum, line) => sum + cents(line.amount), 0n),
   );
+  if (input.p_letter_type === 'internal_transfer') {
+    const triples = new Set<string>();
+    for (const createdLine of created) {
+      const triple = `${createdLine.direction}:${createdLine.warehouse_id}:${createdLine.classification_id}`;
+      if (triples.has(triple))
+        return response({ code: 'P0001', message: 'aps_entry_duplicate_transfer_line' }, 400);
+      triples.add(triple);
+    }
+  }
   if (input.p_letter_type === 'inbound' || input.p_letter_type === 'outbound') {
     const triples = new Set<string>();
     for (const createdLine of created) {
