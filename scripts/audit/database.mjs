@@ -4410,6 +4410,75 @@ try {
     });
   });
 
+  await test('APS letter hardening hotfix: dblink REVOKE is ownership-safe on Supabase-like owners', async () => {
+    const migration = await readFile(
+      `${ROOT}supabase/migrations/20261123000000_aps_letter_hardening.sql`,
+      'utf8',
+    );
+    const revokeBlock = migration.match(/do \$revoke_dblink\$[\s\S]*?\$revoke_dblink\$;/)?.[0];
+    assert.ok(revokeBlock, 'the migration must keep the named dblink revoke block');
+
+    const ownerRole = `aps_hotfix_owner_${randomUUID().slice(0, 8)}`;
+    const runnerRole = `aps_hotfix_runner_${randomUUID().slice(0, 8)}`;
+    const probeFunction = 'extensions.dblink_hotfix_owner_probe()';
+    try {
+      await db.query(`create role ${ownerRole} nosuperuser`);
+      await db.query(`create role ${runnerRole} nosuperuser`);
+      await db.query(`grant usage on schema extensions to ${runnerRole}`);
+
+      // Supabase-like shape: the platform owns the sensitive dblink function,
+      // while the migration runner is a different, non-superuser role.
+      await db.query(`alter function extensions.dblink_connect_u(text) owner to ${ownerRole}`);
+      await db.query(`create function ${probeFunction} returns void language sql as 'select 1'`);
+      await db.query(`alter function ${probeFunction} owner to ${runnerRole}`);
+      await db.query(`grant execute on function ${probeFunction} to public`);
+
+      const notices = [];
+      const client = await connect();
+      client.on('notice', (notice) => notices.push(notice.message ?? String(notice)));
+      try {
+        await client.query(`set role ${runnerRole}`);
+        await client.query(revokeBlock);
+        await client.query('reset role');
+      } finally {
+        await client.end();
+      }
+
+      // The runner could revoke its own function, but not the platform-owned
+      // dblink_connect_u; the block must skip the latter instead of raising 42501.
+      assert.equal(
+        (
+          await db.query(
+            `select has_function_privilege('public', $1::regprocedure, 'execute') as allowed`,
+            [probeFunction],
+          )
+        ).rows[0].allowed,
+        false,
+      );
+      assert.ok(
+        notices.some(
+          (message) =>
+            message.includes('skipping REVOKE') && message.includes('dblink_connect_u(text)'),
+        ),
+        `expected an ownership skip notice, got: ${notices.join(' | ')}`,
+      );
+    } finally {
+      await db.query(`drop function if exists ${probeFunction}`);
+      await db.query(`
+        do $restore_owner$
+        begin
+          if to_regprocedure('extensions.dblink_connect_u(text)') is not null then
+            execute 'alter function extensions.dblink_connect_u(text) owner to postgres';
+          end if;
+        end
+        $restore_owner$;
+      `);
+      await db.query(`revoke usage on schema extensions from ${runnerRole}`);
+      await db.query(`drop role if exists ${runnerRole}`);
+      await db.query(`drop role if exists ${ownerRole}`);
+    }
+  });
+
   await test('APS letter code: one series per fiscal year', async () => {
     await withApsEntryFixture(async (fixture, ids) => {
       const build = (id, yearId, date, number) => {
