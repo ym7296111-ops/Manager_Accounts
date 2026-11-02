@@ -24,12 +24,14 @@
 --   transaction aborts. No remote host, password, or application connection
 --   string is used: the helper connects over the server's own Unix socket to
 --   current_database() as the function owner, with connect_timeout=2. Direct
---   dblink execution is revoked from the API roles; only the definer helpers
---   can use it. If the extension or the loopback connection is unavailable,
---   the helper raises a WARNING containing the original refusal reason and
---   returns; aps_reject_letter() then raises the original P0001 refusal. An
---   audit transport failure can never turn a refusal into a save, and it can
---   never replace the original refusal with a dblink error.
+--   dblink execution is revoked from the API roles where the migration runner
+--   owns the extension functions; on Supabase the functions may be owned by
+--   supabase_admin and already restricted, so the revoke is ownership-safe.
+--   If the extension or the loopback connection is unavailable, the helper
+--   raises a WARNING containing the original refusal reason and returns;
+--   aps_reject_letter() then raises the original P0001 refusal. An audit
+--   transport failure can never turn a refusal into a save, and it can never
+--   replace the original refusal with a dblink error.
 --
 -- No UI change is included here. A.5 owns translating the named P0001 tokens.
 
@@ -45,20 +47,37 @@ alter type public.audit_action
 create schema if not exists extensions;
 create extension if not exists dblink with schema extensions;
 
--- The extension ships with PUBLIC execute. Remove that default so an API
--- caller cannot open loopback connections itself; the definer helpers below
--- retain execute as their owner.
+-- The extension can ship with PUBLIC execute. Remove that default so an API
+-- caller cannot open loopback connections itself, but only when this runner
+-- is allowed to change the function ACL. On Supabase, dblink is commonly
+-- owned by supabase_admin while the SQL editor/migration runner is postgres;
+-- a blind REVOKE then fails with 42501 even though the platform already
+-- restricts those functions. Skip functions we do not own instead of aborting
+-- the whole hardening migration.
 do $revoke_dblink$
 declare
   v_function regprocedure;
+  v_owner oid;
+  v_current_role oid;
+  v_is_superuser boolean;
 begin
-  for v_function in
-    select p.oid::regprocedure
+  select r.oid, r.rolsuper
+    into v_current_role, v_is_superuser
+    from pg_catalog.pg_roles as r
+   where r.rolname = current_user;
+
+  for v_function, v_owner in
+    select p.oid::regprocedure, p.proowner
       from pg_catalog.pg_proc as p
      where p.pronamespace = 'extensions'::regnamespace
        and p.proname like 'dblink%'
   loop
-    execute format('revoke all on function %s from public, anon, authenticated, service_role', v_function);
+    if v_is_superuser or v_owner = v_current_role then
+      execute format('revoke all on function %s from public, anon, authenticated, service_role', v_function);
+    else
+      raise notice 'aps letter hardening: skipping REVOKE on % because it is owned by %, not %',
+        v_function, pg_catalog.pg_get_userbyid(v_owner), current_user;
+    end if;
   end loop;
 end
 $revoke_dblink$;
