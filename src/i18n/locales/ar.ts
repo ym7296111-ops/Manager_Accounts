@@ -654,7 +654,7 @@ export const ar = {
   'settings.project.tabs.stations': 'المحطات والمخازن',
   'settings.project.tabs.classifications': 'التصنيفات',
   'settings.project.tabs.parties': 'جهات الوارد وأغراض الصرف',
-  'settings.project.tabs.sisterCompanies': 'الشركات الشقيقة',
+  'settings.project.tabs.sisterCompanies': 'الشركات الشقيقة والغير',
   'settings.project.tabs.general': 'عام',
   'settings.project.tabs.issuers': 'أكواد المُصدرين',
   'settings.project.stations.add': 'إضافة محطة',
@@ -904,6 +904,7 @@ export const ar = {
     'الاتصال بقاعدة البيانات غير مُهيّأ في هذه البيئة.',
   'settings.project.sisterCompanies.writeError.network': 'تعذّر الاتصال بالخادم، حاول مرة أخرى.',
   'settings.project.sisterCompanies.writeError.validation': 'الاسم غير صالح.',
+  'settings.project.sisterCompanies.writeError.invalidType': 'نوع الشركة غير صالح.',
   'settings.project.sisterCompanies.writeError.immutable':
     'لا يمكن تغيير الشركة الأم أو الكود أو المستوى بعد الإنشاء.',
   'settings.project.sisterCompanies.writeError.hasBranches':
@@ -913,6 +914,15 @@ export const ar = {
   'settings.project.sisterCompanies.writeError.notFound':
     'هذه الشركة لم تعد موجودة. حدّث الشجرة وحاول مرة أخرى.',
   'settings.project.sisterCompanies.writeError.unknown': 'تعذّر إتمام العملية، حاول مرة أخرى.',
+  'settings.project.sisterCompanies.type.sister': 'شقيقة',
+  'settings.project.sisterCompanies.type.nonSister': 'غير شقيقة',
+  'settings.project.sisterCompanies.dialog.typeHint':
+    'النوع يُحدد كيف تُعالج الشركة في التقارير والتحويل الخارجي.',
+  'settings.project.sisterCompanies.dialog.type': 'نوع الشركة',
+  'settings.project.sisterCompanies.dialog.typeBody':
+    'سيصبح نوع «{name}» ({code}) من «{current}» إلى النوع المختار.',
+  'settings.project.sisterCompanies.dialog.changeType': 'تعديل نوع الشركة',
+  'settings.project.sisterCompanies.action.changeType': 'تعديل النوع',
   'settings.project.issuers.heading': 'أكواد المُصدرين',
   'settings.project.issuers.description':
     'حرفان إنجليزيان يحددان مُصدر الخطاب الورقي (مثل YM = ياسر)، ويظهر الكود في قائمة «كود الخطاب» بشاشة الإدخال. الحرفان ثابتان بعد الإنشاء، والاسم اختياري، والتعطيل يُخفي الكود من الإدخال ويحفظ تاريخه.',

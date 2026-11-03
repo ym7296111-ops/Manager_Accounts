@@ -628,7 +628,9 @@ describe('APS letter entry transport', () => {
       stationName: 'غرب القاهرة',
       stationCode: 'ST-01',
     });
-    expect(options.issuers).toEqual([{ id: id(701), code: 'YM', name: 'ياسر' }]);
+    expect(options.issuers).toEqual([
+      { id: id(701), code: 'YM', name: 'ياسر', companyType: 'sister' },
+    ]);
     expect(options.months[0]).toMatchObject({ name: 'مارس', period: 2, yearId: id(400) });
     expect(() =>
       parseEntryOptions({ ...optionsPayload, issuers: [{ id: id(701), code: 'Y', name: 'x' }] }),

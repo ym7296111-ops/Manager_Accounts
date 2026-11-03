@@ -677,7 +677,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.tabs.stations': 'Stations & Warehouses',
   'settings.project.tabs.classifications': 'Classifications',
   'settings.project.tabs.parties': 'Inbound & Outbound',
-  'settings.project.tabs.sisterCompanies': 'Sister companies',
+  'settings.project.tabs.sisterCompanies': 'Sister & Non-Sister Companies',
   'settings.project.tabs.general': 'General',
   'settings.project.tabs.issuers': 'Issuer codes',
   'settings.project.stations.add': 'Add station',
@@ -936,6 +936,7 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.sisterCompanies.writeError.network':
     'Could not reach the server. Please try again.',
   'settings.project.sisterCompanies.writeError.validation': 'The name is not valid.',
+  'settings.project.sisterCompanies.writeError.invalidType': 'Invalid company type.',
   'settings.project.sisterCompanies.writeError.immutable':
     'The parent company, code and level cannot be changed after creation.',
   'settings.project.sisterCompanies.writeError.hasBranches':
@@ -945,6 +946,15 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.sisterCompanies.writeError.notFound':
     'This company no longer exists. Refresh the tree and try again.',
   'settings.project.sisterCompanies.writeError.unknown': 'The operation failed. Please try again.',
+  'settings.project.sisterCompanies.type.sister': 'Sister',
+  'settings.project.sisterCompanies.type.nonSister': 'Non-Sister',
+  'settings.project.sisterCompanies.dialog.typeHint':
+    'The type determines how the company is handled in reports and external transfers.',
+  'settings.project.sisterCompanies.dialog.type': 'Company type',
+  'settings.project.sisterCompanies.dialog.typeBody':
+    '“{name}” ({code}) will change from “{current}” to the selected type.',
+  'settings.project.sisterCompanies.dialog.changeType': 'Change company type',
+  'settings.project.sisterCompanies.action.changeType': 'Change type',
   'settings.project.issuers.heading': 'Issuer codes',
   'settings.project.issuers.description':
     'Two Latin letters identify who issued a paper letter (YM = ياسر), and they are the choices in the letter-code dropdown on the entry screen. The letters are fixed after creation, the name is optional, and deactivating a code hides it from entry while keeping its history.',

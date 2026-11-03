@@ -246,7 +246,7 @@ describe('ProjectSettings', () => {
     expect(tabs[1]?.textContent).toBe('التصنيفات');
     expect(tabs[2]?.textContent).toBe('جهات الوارد وأغراض الصرف');
     /* Sister companies is a top-level tab of its own, ahead of General. */
-    expect(tabs[3]?.textContent).toBe('الشركات الشقيقة');
+    expect(tabs[3]?.textContent).toBe('الشركات الشقيقة والغير');
     expect(tabs[4]?.textContent).toBe('عام');
     /* The issuer register sits last: it is the list behind the entry screen. */
     expect(tabs[5]?.textContent).toBe('أكواد المُصدرين');

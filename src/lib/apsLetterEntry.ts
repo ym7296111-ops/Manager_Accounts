@@ -10,6 +10,8 @@ export interface EntryOption {
   readonly id: string;
   readonly name: string;
   readonly code: string;
+  /** 'sister' (intercompany) or 'non_sister' (external). */
+  readonly companyType?: 'sister' | 'non_sister';
 }
 /**
  * A warehouse choice always carries its station, because the register and the

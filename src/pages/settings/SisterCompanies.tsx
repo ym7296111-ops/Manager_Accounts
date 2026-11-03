@@ -3,6 +3,8 @@ import {
   Building2,
   CheckCircle2,
   ChevronDown,
+  Globe,
+  Handshake,
   Loader2,
   Network,
   Pencil,
@@ -27,6 +29,7 @@ import {
   useDeleteSisterCompany,
   useRenameSisterCompany,
   useSetSisterCompanyActive,
+  useSetSisterCompanyType,
   type SisterCompanyWriteErrorCode,
   type SisterCompanyWriteOperation,
 } from '@/hooks/useSisterCompaniesMutations';
@@ -34,6 +37,7 @@ import { useI18n, type TranslationKey } from '@/i18n/I18nContext';
 import {
   SisterCompanyDeleteDialog,
   SisterCompanyFormDialog,
+  SisterCompanyTypeDialog,
   type SisterCompanyFormKind,
 } from './SisterCompanyDialogs';
 
@@ -79,6 +83,7 @@ const WRITE_ERROR_KEY: Record<SisterCompanyWriteErrorCode, TranslationKey> = {
   unavailable: 'settings.project.sisterCompanies.writeError.unavailable',
   network: 'settings.project.sisterCompanies.writeError.network',
   validation: 'settings.project.sisterCompanies.writeError.validation',
+  invalidType: 'settings.project.sisterCompanies.writeError.invalidType',
   immutable: 'settings.project.sisterCompanies.writeError.immutable',
   hasBranches: 'settings.project.sisterCompanies.writeError.hasBranches',
   missingParent: 'settings.project.sisterCompanies.writeError.missingParent',
@@ -124,6 +129,24 @@ type FormTarget =
       readonly kind: SisterCompanyFormKind;
       readonly company: SisterCompany;
     };
+
+function CompanyTypeIcon({ company }: { readonly company: SisterCompany }) {
+  const { t } = useI18n();
+  const Icon = company.companyType === 'sister' ? Handshake : Globe;
+  const label =
+    company.companyType === 'sister'
+      ? t('settings.project.sisterCompanies.type.sister')
+      : t('settings.project.sisterCompanies.type.nonSister');
+  const colorClass =
+    company.companyType === 'sister'
+      ? 'text-emerald-600 dark:text-emerald-400'
+      : 'text-muted-foreground dark:text-muted-foreground/60';
+  return (
+    <span className={`size-3.5 shrink-0 ${colorClass}`} aria-hidden="true" title={label}>
+      <Icon className="size-3.5" />
+    </span>
+  );
+}
 
 function CompanyStatus({ isActive }: { readonly isActive: boolean }) {
   const { t } = useI18n();
@@ -201,12 +224,14 @@ function BranchRow({
   onEdit,
   onToggleActive,
   onDelete,
+  onChangeType,
 }: {
   readonly branch: SisterCompany;
   readonly busy: boolean;
   readonly onEdit: () => void;
   readonly onToggleActive: () => void;
   readonly onDelete: () => void;
+  readonly onChangeType: () => void;
 }) {
   return (
     <li className="border-border bg-card flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2">
@@ -218,6 +243,18 @@ function BranchRow({
         <span className="text-foreground truncate text-sm font-medium">{branch.name}</span>
         <span className="text-muted-foreground/70 shrink-0 font-mono text-xs">{branch.code}</span>
       </span>
+      <CompanyTypeIcon company={branch} />
+      <button
+        type="button"
+        onClick={onChangeType}
+        disabled={busy}
+        aria-label={`Change type ${branch.name}`}
+        className={ACTION_CLASS}
+      >
+        <span className="size-3.5 shrink-0" aria-hidden="true">
+          {branch.companyType === 'sister' ? '🤝' : '🌐'}
+        </span>
+      </button>
       <CompanyStatus isActive={branch.isActive} />
       <RowActions
         company={branch}
@@ -238,11 +275,13 @@ export default function SisterCompanies() {
   const createCompany = useCreateSisterCompany();
   const renameCompany = useRenameSisterCompany();
   const toggleCompany = useSetSisterCompanyActive();
+  const setCompanyType = useSetSisterCompanyType();
   const deleteCompany = useDeleteSisterCompany();
 
   const [openCompanies, setOpenCompanies] = useState<ReadonlySet<string>>(() => new Set());
   const [form, setForm] = useState<FormTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [typeTarget, setTypeTarget] = useState<SisterCompany | null>(null);
   const [banner, setBanner] = useState<Banner | null>(null);
 
   const busy =
@@ -328,6 +367,23 @@ export default function SisterCompanies() {
     toggleCompany.mutate(
       { id: company.id, isActive: !company.isActive },
       { onError: (error) => failWith(error, 'toggle') },
+    );
+  }
+
+  function changeCompanyType(company: SisterCompany, companyType: 'sister' | 'non_sister') {
+    setBanner(null);
+    setCompanyType.mutate(
+      { id: company.id, companyType },
+      {
+        onSuccess: () => {
+          setTypeTarget(null);
+          succeedWith('settings.project.sisterCompanies.success.saved');
+        },
+        onError: (error) => {
+          setTypeTarget(null);
+          failWith(error, 'toggle');
+        },
+      },
     );
   }
 
@@ -473,12 +529,27 @@ export default function SisterCompanies() {
                         {company.code}
                       </span>
                     </span>
+                    <CompanyTypeIcon company={company} />
                     <span className="text-muted-foreground hidden shrink-0 text-xs sm:inline">
                       {t('settings.project.sisterCompanies.branchCount', {
                         count: company.branches.length,
                       })}
                     </span>
                     <CompanyStatus isActive={company.isActive} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBanner(null);
+                      setTypeTarget(company);
+                    }}
+                    disabled={busy}
+                    aria-label={`${t('settings.project.sisterCompanies.action.changeType')} ${company.name}`}
+                    className={ACTION_CLASS}
+                  >
+                    <span className="size-3.5 shrink-0" aria-hidden="true">
+                      {company.companyType === 'sister' ? '🤝' : '🌐'}
+                    </span>
                   </button>
                   <RowActions
                     company={company}
@@ -555,6 +626,10 @@ export default function SisterCompanies() {
                                 code: branch.code,
                               });
                             }}
+                            onChangeType={() => {
+                              setBanner(null);
+                              setTypeTarget(branch);
+                            }}
                           />
                         ))}
                       </ul>
@@ -572,6 +647,15 @@ export default function SisterCompanies() {
       )}
 
       {formDialog}
+
+      {typeTarget !== null ? (
+        <SisterCompanyTypeDialog
+          company={typeTarget}
+          busy={busy || setCompanyType.isPending}
+          onConfirm={(companyType) => changeCompanyType(typeTarget, companyType)}
+          onClose={() => setTypeTarget(null)}
+        />
+      ) : null}
 
       {deleteTarget !== null ? (
         <SisterCompanyDeleteDialog

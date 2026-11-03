@@ -1977,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 68);
+    assert.equal(migrations.length, 69);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1995,6 +1995,7 @@ try {
     assert.ok(migrations.includes('20261122000000_aps_transfer_line_unique.sql'));
     assert.ok(migrations.includes('20261123000000_aps_letter_hardening.sql'));
     assert.ok(migrations.includes('20261124000000_aps_balance_default_end_date.sql'));
+    assert.ok(migrations.includes('20261125000000_aps_sister_company_type.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -4518,6 +4519,38 @@ try {
       await db.query(`drop role if exists ${runnerRole}`);
       await db.query(`drop role if exists ${ownerRole}`);
     }
+  });
+
+  await test('A.6 sister_companies company_type default and check constraint', async () => {
+    // Default value: every new sister company is 'sister' unless overridden.
+    const defaulted = (
+      await db.query(
+        `insert into public.sister_companies(name) values ($1) returning id, code, company_type`,
+        ['A.6 Default Company'],
+      )
+    ).rows[0];
+    assert.equal(defaulted.company_type, 'sister');
+
+    // Explicit non_sister is accepted.
+    const nonSister = (
+      await db.query(
+        `insert into public.sister_companies(name, company_type) values ($1, 'non_sister') returning id, code, company_type`,
+        ['A.6 Non-Sister Company'],
+      )
+    ).rows[0];
+    assert.equal(nonSister.company_type, 'non_sister');
+
+    // The CHECK rejects any other value.
+    await assert.rejects(
+      () =>
+        db.query(`insert into public.sister_companies(name, company_type) values ($1, 'bogus')`, [
+          'A.6 Bad Company',
+        ]),
+      (error) => error.code === '23514',
+    );
+
+    // Cleanup.
+    await db.query(`delete from public.sister_companies where name like 'A.6 %'`);
   });
 
   await test('APS letter code: one series per fiscal year', async () => {
@@ -8364,7 +8397,7 @@ try {
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ['id', 'parent_id', 'level', 'name', 'code', 'is_active', 'created_at', 'updated_at'],
+      ['id', 'parent_id', 'level', 'name', 'code', 'is_active', 'created_at', 'updated_at', 'company_type'],
     );
 
     // No currency/exchange-rate columns yet: they belong to the letters phase.

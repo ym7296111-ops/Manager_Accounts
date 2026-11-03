@@ -146,7 +146,8 @@ function parseOption(value: unknown): EntryOption {
   const code = text(row?.code);
   if (!isEntryOptionId(row?.id) || name === null || code === null)
     throw new ApsEntryError('invalid');
-  return { id: row.id, name, code };
+  const companyType = row?.company_type === 'non_sister' ? 'non_sister' : 'sister';
+  return { id: row.id, name, code, companyType };
 }
 function parseWarehouse(value: unknown): EntryWarehouse {
   const option = parseOption(value);
