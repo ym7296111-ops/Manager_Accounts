@@ -8397,7 +8397,17 @@ try {
     );
     assert.deepEqual(
       columns.rows.map((row) => row.column_name),
-      ['id', 'parent_id', 'level', 'name', 'code', 'is_active', 'created_at', 'updated_at', 'company_type'],
+      [
+        'id',
+        'parent_id',
+        'level',
+        'name',
+        'code',
+        'is_active',
+        'created_at',
+        'updated_at',
+        'company_type',
+      ],
     );
 
     // No currency/exchange-rate columns yet: they belong to the letters phase.
