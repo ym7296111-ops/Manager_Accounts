@@ -1,9 +1,23 @@
-import { Loader2 } from 'lucide-react';
+import { Globe, Handshake, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { MODAL_BUTTON_CLASS, MODAL_FIELD_CLASS, useEscapeKey } from '@/components/ui/modalStyles';
 import { useI18n } from '@/i18n/I18nContext';
 import { validateName } from '@/lib/nameValidation';
+import type { SisterCompany } from '@/hooks/useSisterCompanies';
+import type { TranslationKey } from '@/i18n/locales/ar';
+
+type CompanyType = 'sister' | 'non_sister';
+
+const COMPANY_TYPE_LABEL: Record<CompanyType, TranslationKey> = {
+  sister: 'settings.project.sisterCompanies.type.sister',
+  non_sister: 'settings.project.sisterCompanies.type.nonSister',
+};
+
+const COMPANY_TYPE_ICON: Record<CompanyType, typeof Handshake> = {
+  sister: Handshake,
+  non_sister: Globe,
+};
 
 /**
  * Dialogs for the sister-companies tree.
@@ -35,8 +49,10 @@ export interface SisterCompanyFormDialogProps {
   readonly initialName?: string;
   /** Edit: the stored code, rendered read-only. */
   readonly code?: string;
+  /** Create: the chosen company type, defaults to 'sister'. */
+  readonly initialCompanyType?: CompanyType;
   readonly busy: boolean;
-  readonly onSubmit: (name: string) => void;
+  readonly onSubmit: (name: string, companyType: CompanyType) => void;
   readonly onClose: () => void;
 }
 
@@ -47,6 +63,7 @@ export function SisterCompanyFormDialog({
   parentCode,
   initialName,
   code,
+  initialCompanyType = 'sister',
   busy,
   onSubmit,
   onClose,
@@ -57,6 +74,7 @@ export function SisterCompanyFormDialog({
   const nameRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState(initialName ?? '');
+  const [companyType, setCompanyType] = useState<CompanyType>(initialCompanyType);
   const [error, setError] = useState<'required' | 'tooShort' | null>(null);
 
   useEscapeKey(onClose, !busy);
@@ -80,7 +98,7 @@ export function SisterCompanyFormDialog({
       return;
     }
     setError(null);
-    onSubmit(result.value);
+    onSubmit(result.value, companyType);
   }
 
   return (
@@ -155,6 +173,43 @@ export function SisterCompanyFormDialog({
           ) : null}
         </div>
 
+        {mode === 'create' ? (
+          <div className="space-y-1.5">
+            <span className="text-foreground block text-sm font-medium">
+              {t('settings.project.sisterCompanies.dialog.type')}
+            </span>
+            <div className="flex items-center gap-2">
+              {(['sister', 'non_sister'] as const).map((type) => {
+                const Icon = COMPANY_TYPE_ICON[type];
+                const selected = companyType === type;
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setCompanyType(type)}
+                    className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      selected
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'border-input bg-card text-foreground hover:bg-muted/50'
+                    }`}
+                  >
+                    <Icon
+                      className={`size-3.5 shrink-0 ${selected ? 'text-primary-foreground' : 'text-muted-foreground'}`}
+                      aria-hidden="true"
+                    />
+                    <span>{t(COMPANY_TYPE_LABEL[type])}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {t('settings.project.sisterCompanies.dialog.typeHint')}
+            </p>
+          </div>
+        ) : null}
+
         <div className="flex items-center justify-end gap-2 pt-1">
           <button
             type="button"
@@ -176,6 +231,95 @@ export function SisterCompanyFormDialog({
           </button>
         </div>
       </form>
+    </ModalShell>
+  );
+}
+
+export interface SisterCompanyTypeDialogProps {
+  readonly company: SisterCompany;
+  readonly busy: boolean;
+  readonly onConfirm: (companyType: 'sister' | 'non_sister') => void;
+  readonly onClose: () => void;
+}
+
+export function SisterCompanyTypeDialog({
+  company,
+  busy,
+  onConfirm,
+  onClose,
+}: SisterCompanyTypeDialogProps) {
+  const { t } = useI18n();
+  const titleId = useId();
+
+  useEscapeKey(onClose, !busy);
+
+  const [companyType, setCompanyType] = useState<'sister' | 'non_sister'>(company.companyType);
+
+  return (
+    <ModalShell
+      titleId={titleId}
+      title={t('settings.project.sisterCompanies.dialog.changeType')}
+      closeLabel={t('settings.project.sisterCompanies.dialog.close')}
+      onClose={onClose}
+      busy={busy}
+    >
+      <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
+        {t('settings.project.sisterCompanies.dialog.typeBody', {
+          name: company.name,
+          code: company.code,
+          current: t(COMPANY_TYPE_LABEL[company.companyType]),
+        })}
+      </p>
+      <div className="mt-4 space-y-1.5">
+        <span className="text-foreground block text-sm font-medium">
+          {t('settings.project.sisterCompanies.dialog.type')}
+        </span>
+        <div className="flex items-center gap-2">
+          {(['sister', 'non_sister'] as const).map((type) => {
+            const Icon = COMPANY_TYPE_ICON[type];
+            const selected = companyType === type;
+            return (
+              <button
+                key={type}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setCompanyType(type)}
+                className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                  selected
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'border-input bg-card text-foreground hover:bg-muted/50'
+                }`}
+              >
+                <Icon
+                  className={`size-3.5 shrink-0 ${selected ? 'text-primary-foreground' : 'text-muted-foreground'}`}
+                  aria-hidden="true"
+                />
+                <span>{t(COMPANY_TYPE_LABEL[type])}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-5 flex items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className={`${MODAL_BUTTON_CLASS} border-border text-foreground border`}
+        >
+          {t('settings.project.sisterCompanies.dialog.cancel')}
+        </button>
+        <button
+          type="button"
+          onClick={() => onConfirm(companyType)}
+          disabled={busy}
+          className={`${MODAL_BUTTON_CLASS} bg-primary text-primary-foreground`}
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
+          {t('settings.project.sisterCompanies.dialog.save')}
+        </button>
+      </div>
     </ModalShell>
   );
 }

@@ -109,6 +109,7 @@ describe('parseSisterCompanies', () => {
       parentId: null,
       level: 1,
       code: 'SIS-001',
+      companyType: 'sister',
       name: 'الشركة المتحدة للخدمات اللوجستية',
       isActive: false,
       branches: [],

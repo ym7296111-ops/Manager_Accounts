@@ -118,19 +118,32 @@ beforeEach(() => {
 
 describe('buildCreatePayload', () => {
   it('creates a parent company with a name only', () => {
-    expect(buildCreatePayload({ name: '  شركة الواحة  ' })).toEqual({ name: 'شركة الواحة' });
+    expect(buildCreatePayload({ name: '  شركة الواحة  ' })).toEqual({
+      name: 'شركة الواحة',
+      company_type: 'sister',
+    });
   });
 
   it('adds parent_id for a branch — and never code or level', () => {
     const payload = buildCreatePayload({ name: 'فرع الواحة', parentId: 'sc1' });
-    expect(payload).toEqual({ name: 'فرع الواحة', parent_id: 'sc1' });
+    expect(payload).toEqual({
+      name: 'فرع الواحة',
+      parent_id: 'sc1',
+      company_type: 'sister',
+    });
     expect(payload).not.toHaveProperty('code');
     expect(payload).not.toHaveProperty('level');
   });
 
   it('treats an empty parent id as a parent company', () => {
-    expect(buildCreatePayload({ name: 'شركة', parentId: '' })).toEqual({ name: 'شركة' });
-    expect(buildCreatePayload({ name: 'شركة', parentId: null })).toEqual({ name: 'شركة' });
+    expect(buildCreatePayload({ name: 'شركة', parentId: '' })).toEqual({
+      name: 'شركة',
+      company_type: 'sister',
+    });
+    expect(buildCreatePayload({ name: 'شركة', parentId: null })).toEqual({
+      name: 'شركة',
+      company_type: 'sister',
+    });
   });
 
   it('refuses an invalid name before any request can happen', () => {
@@ -205,7 +218,11 @@ describe('useCreateSisterCompany', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(recorded.table).toBe('sister_companies');
-    expect(recorded.insert).toEqual({ name: 'فرع الاختبار', parent_id: 'sc1' });
+    expect(recorded.insert).toEqual({
+      name: 'فرع الاختبار',
+      parent_id: 'sc1',
+      company_type: 'sister',
+    });
     expect(recorded.insert).not.toHaveProperty('code');
     expect(recorded.insert).not.toHaveProperty('level');
   });

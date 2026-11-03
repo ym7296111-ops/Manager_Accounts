@@ -49,6 +49,7 @@ vi.mock('@/hooks/useSisterCompaniesMutations', async (importOriginal) => {
     useCreateSisterCompany: () => mutations.create,
     useRenameSisterCompany: () => mutations.rename,
     useSetSisterCompanyActive: () => mutations.toggle,
+    useSetSisterCompanyType: () => mutations.toggle,
     useDeleteSisterCompany: () => mutations.remove,
   };
 });
@@ -59,6 +60,7 @@ const TREE: readonly SisterCompany[] = [
     parentId: null,
     level: 1,
     code: 'SIS-001',
+    companyType: 'sister',
     name: 'الشركة المتحدة للخدمات اللوجستية',
     isActive: true,
     branches: [
@@ -67,6 +69,7 @@ const TREE: readonly SisterCompany[] = [
         parentId: 'sc1',
         level: 2,
         code: 'SIS-001-01',
+        companyType: 'sister',
         name: 'المتحدة للنقل الثقيل',
         isActive: true,
         branches: [],
@@ -76,6 +79,7 @@ const TREE: readonly SisterCompany[] = [
         parentId: 'sc1',
         level: 2,
         code: 'SIS-001-02',
+        companyType: 'non_sister',
         name: 'المتحدة للتخليص الجمركي',
         isActive: false,
         branches: [],
@@ -87,6 +91,7 @@ const TREE: readonly SisterCompany[] = [
     parentId: null,
     level: 1,
     code: 'SIS-002',
+    companyType: 'non_sister',
     name: 'شركة الواحة للاستثمار',
     isActive: true,
     branches: [],

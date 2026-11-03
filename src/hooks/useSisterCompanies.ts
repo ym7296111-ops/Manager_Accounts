@@ -30,6 +30,8 @@ export interface SisterCompany {
   /** 1 for a parent company, 2 for a branch. */
   readonly level: number;
   readonly code: string;
+  /** 'sister' (intercompany) or 'non_sister' (external). */
+  readonly companyType: 'sister' | 'non_sister';
   readonly name: string;
   readonly isActive: boolean;
   readonly branches: readonly SisterCompany[];
@@ -50,7 +52,7 @@ export class SisterCompaniesError extends Error {
 export const SISTER_COMPANIES_QUERY_KEY = ['project-settings', 'sister-companies'] as const;
 
 /** Every column the tree renders or the dialog prefills — no more. */
-export const SISTER_COMPANIES_SELECT = 'id, parent_id, level, code, name, is_active';
+export const SISTER_COMPANIES_SELECT = 'id, parent_id, level, code, company_type, name, is_active';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -68,6 +70,7 @@ interface MutableNode {
   parentId: string | null;
   level: number;
   code: string;
+  companyType: 'sister' | 'non_sister';
   name: string;
   isActive: boolean;
   branches: MutableNode[];
@@ -97,6 +100,7 @@ export function parseSisterCompanies(raw: unknown): readonly SisterCompany[] {
     const code = readString(row.code);
     const name = readString(row.name);
     const level = typeof row.level === 'number' ? row.level : null;
+    const companyType = row.company_type === 'non_sister' ? 'non_sister' : 'sister';
     if (id === null || code === null || name === null) {
       continue;
     }
@@ -115,6 +119,7 @@ export function parseSisterCompanies(raw: unknown): readonly SisterCompany[] {
       parentId,
       level,
       code,
+      companyType,
       name,
       isActive: row.is_active === true,
       branches: [],

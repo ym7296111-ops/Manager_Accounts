@@ -41,6 +41,8 @@ export type SisterCompanyWriteErrorCode =
   | 'hasBranches'
   /** 23503 on create: the chosen parent no longer exists. */
   | 'missingParent'
+  /** 23514: the CHECK refused an invalid company_type. */
+  | 'invalidType'
   /** The row no longer exists (deleted elsewhere, or filtered by RLS). */
   | 'notFound'
   | 'unknown';
@@ -76,6 +78,8 @@ function assertKeysAbsent(payload: Record<string, unknown>, keys: readonly strin
 
 export interface CreateSisterCompanyInput {
   readonly name: string;
+  /** 'sister' (intercompany) or 'non_sister' (external); defaults to 'sister'. */
+  readonly companyType?: 'sister' | 'non_sister';
   /** Absent/null creates a parent company; an id creates a branch under it. */
   readonly parentId?: string | null;
 }
@@ -100,6 +104,7 @@ function validateNameOrThrow(raw: string): string {
 export function buildCreatePayload(input: CreateSisterCompanyInput): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     name: validateNameOrThrow(input.name),
+    company_type: input.companyType ?? 'sister',
   };
   if (input.parentId !== undefined && input.parentId !== null && input.parentId !== '') {
     payload.parent_id = input.parentId;
@@ -157,9 +162,9 @@ export function classifySisterCompanyWriteError(
   }
 
   // 23514: the CHECK family — blank name, level outside 1..2, code/level
-  // mismatch.
+  // mismatch, or an invalid company_type.
   if (code === '23514') {
-    return 'validation';
+    return message.includes('company_type') ? 'invalidType' : 'validation';
   }
 
   if (code === 'PGRST116') {
@@ -271,6 +276,36 @@ export function useSetSisterCompanyActive(): UseMutationResult<
   return useMutation({
     mutationFn: async (input) => {
       const payload = buildSetActivePayload(input.isActive);
+      const supabase = requireClient();
+      const { data, error } = await supabase
+        .from('sister_companies')
+        .update(payload)
+        .eq('id', input.id)
+        .select(WRITTEN_COLUMNS)
+        .single();
+      return unwrapSingle<WrittenSisterCompanyRow>(data, error, 'toggle');
+    },
+    onSuccess: invalidate,
+  });
+}
+
+export interface SetSisterCompanyTypeInput {
+  readonly id: string;
+  readonly companyType: 'sister' | 'non_sister';
+}
+
+export function useSetSisterCompanyType(): UseMutationResult<
+  WrittenSisterCompanyRow,
+  SisterCompanyWriteError,
+  SetSisterCompanyTypeInput
+> {
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: async (input) => {
+      const payload: Record<string, unknown> = {
+        company_type: input.companyType,
+      };
+      assertKeysAbsent(payload, IMMUTABLE_UPDATE_COLUMNS);
       const supabase = requireClient();
       const { data, error } = await supabase
         .from('sister_companies')

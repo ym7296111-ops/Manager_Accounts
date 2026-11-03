@@ -712,6 +712,7 @@ export type Database = {
       sister_companies: {
         Row: {
           code: string;
+          company_type: string;
           created_at: string;
           id: string;
           is_active: boolean;
@@ -724,6 +725,7 @@ export type Database = {
         Insert: {
           /** Minted server-side (SIS-001 for a parent, SIS-001-01 for a branch); never send it. */
           code?: string;
+          company_type?: string;
           created_at?: string;
           id?: string;
           is_active?: boolean;
@@ -736,6 +738,7 @@ export type Database = {
         Update: {
           /** Immutable after creation; updating raises 22023. */
           code?: string;
+          company_type?: string;
           created_at?: string;
           id?: string;
           is_active?: boolean;
