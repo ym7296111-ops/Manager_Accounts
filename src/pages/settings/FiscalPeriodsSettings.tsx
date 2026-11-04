@@ -56,6 +56,7 @@ export default function FiscalPeriodsSettings() {
   } | null>(null);
 
   const months = monthsQuery.data ?? [];
+  const activeMonth = months.find((month) => month.is_active) ?? null;
   const selectedMonth: FiscalMonth | null =
     months.find((month) => month.id === selectedMonthId) ?? months[0] ?? null;
 
@@ -115,6 +116,9 @@ export default function FiscalPeriodsSettings() {
   }
 
   const selectedMonthName = formatFiscalMonthName(selectedMonth.start_date, locale);
+  const activeMonthName = activeMonth
+    ? formatFiscalMonthName(activeMonth.start_date, locale)
+    : selectedMonthName;
   const currentDraft = drafts[selectedMonth.id];
   const inputValue = currentDraft ?? String(selectedMonth.current_period);
   const parsedPeriod = /^\d+$/.test(inputValue) ? Number(inputValue) : Number.NaN;
@@ -334,10 +338,19 @@ export default function FiscalPeriodsSettings() {
             className="bg-primary/5 text-foreground border-primary/15 mt-5 rounded-xl border px-4 py-3 text-sm font-semibold"
           >
             {t('settings.project.fiscal.periods.nowInPeriod', {
-              period: selectedMonth.current_period,
-              month: selectedMonthName,
+              period: activeMonth?.current_period ?? selectedMonth.current_period,
+              month: activeMonthName,
             })}
           </p>
+
+          {selectedMonth.id !== activeMonth?.id && (
+            <p
+              role="status"
+              className="border-warning/30 bg-warning/10 text-warning mt-3 rounded-xl border px-4 py-3 text-sm"
+            >
+              {t('settings.project.fiscal.periods.editingInactiveMonth')}
+            </p>
+          )}
 
           <div className="mt-5 flex flex-wrap items-end gap-3">
             <div className="min-w-36 flex-1">

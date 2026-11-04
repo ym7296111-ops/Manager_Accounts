@@ -478,6 +478,8 @@ export const en: Record<TranslationKey, string> = {
   'aps.entry.direction': 'Transfer direction',
   'aps.entry.externalIn': 'Inbound from the company',
   'aps.entry.externalOut': 'Outbound to the company',
+  'aps.entry.externalInWithName': 'Inbound from {name}',
+  'aps.entry.externalOutWithName': 'Outbound to {name}',
   'aps.entry.linesTitle': 'Letter lines',
   'aps.entry.linesHint': 'Add a warehouse, classification and positive value to each line.',
   'aps.entry.tree.inboundTitle': 'Inbound tree',
@@ -1099,6 +1101,8 @@ export const en: Record<TranslationKey, string> = {
   'settings.project.fiscal.periods.periodLabel': 'Period {period}',
   'settings.project.fiscal.periods.nowInPeriod': 'We are now in period {period} of {month}.',
   'settings.project.fiscal.periods.currentPeriod': 'Current period',
+  'settings.project.fiscal.periods.editingInactiveMonth':
+    'You are editing a period for an inactive month',
   'settings.project.fiscal.periods.decrement': 'Decrease period number',
   'settings.project.fiscal.periods.increment': 'Increase period number',
   'settings.project.fiscal.periods.save': 'Save period',
