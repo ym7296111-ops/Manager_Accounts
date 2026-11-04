@@ -961,8 +961,20 @@ function EntryEditor({
                       patch({ direction: event.target.value === 'out' ? 'out' : 'in' })
                     }
                   >
-                    <option value="in">{t('aps.entry.externalIn')}</option>
-                    <option value="out">{t('aps.entry.externalOut')}</option>
+                    <option value="in">
+                      {form.sisterId
+                        ? t('aps.entry.externalInWithName', {
+                            name: options.sisters.find((s) => s.id === form.sisterId)?.name ?? '',
+                          })
+                        : t('aps.entry.externalIn')}
+                    </option>
+                    <option value="out">
+                      {form.sisterId
+                        ? t('aps.entry.externalOutWithName', {
+                            name: options.sisters.find((s) => s.id === form.sisterId)?.name ?? '',
+                          })
+                        : t('aps.entry.externalOut')}
+                    </option>
                   </select>
                 </label>
               )}
