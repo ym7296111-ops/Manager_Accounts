@@ -188,7 +188,20 @@ const entryOptions = {
     { id: uid(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
     { id: uid(505), name: 'صرف عام', code: 'OUT-001', branch: 'outbound' },
   ],
-  sister_companies: [{ id: uid(601), name: 'الشركة الشقيقة — فرع القاهرة', code: 'SIS-002' }],
+  /* Both company types share the register (and its SIS codes, minted by
+     `sister_companies_before_write` regardless of type): the entry picker
+     prints the type as an icon and can filter on it. */
+  sister_companies: [
+    { id: uid(601), name: 'الشركة الشقيقة — فرع القاهرة', code: 'SIS-002', company_type: 'sister' },
+    {
+      id: uid(602),
+      name: 'الشركة الشقيقة — فرع الإسكندرية',
+      code: 'SIS-003',
+      company_type: 'sister',
+    },
+    { id: uid(603), name: 'شركة الدلتا للمقاولات', code: 'SIS-004', company_type: 'non_sister' },
+    { id: uid(604), name: 'مؤسسة الوادي للتوريدات', code: 'SIS-005', company_type: 'non_sister' },
+  ],
 };
 
 /**

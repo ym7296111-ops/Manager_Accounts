@@ -92,7 +92,10 @@ const options: EntryOptions = {
     { id: id(503), name: 'قسم المشروعات', code: 'OUT-003', branch: 'outbound' },
     { id: id(505), name: 'صرف عام', code: 'OUT-001', branch: 'outbound' },
   ],
-  sisters: [{ id: id(601), name: 'الشقيقة', code: 'SIS-001' }],
+  sisters: [
+    { id: id(601), name: 'الشقيقة', code: 'SIS-001', companyType: 'sister' },
+    { id: id(602), name: 'الخارجية', code: 'SIS-002', companyType: 'non_sister' },
+  ],
   issuers: [
     { id: id(701), code: 'YM', name: 'ياسر' },
     { id: id(702), code: 'AA', name: 'أحمد عبد الله' },
@@ -783,6 +786,96 @@ describe('APS letter entry screen', () => {
     expect(screen.getByTestId('shell-header').dataset.tone).toBe('orange');
     // No heading of its own: the sticky header is the only title on the page.
     expect(screen.queryAllByRole('heading', { name: /جديد/ })).toHaveLength(0);
+  });
+
+  it('names the external party field and marks each company with its type icon', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل خارجي/ }));
+    /* The register holds sister and non-sister companies alike, so the field
+       is the external transfer party — never «الشركة الشقيقة». */
+    const field = screen.getByLabelText('جهة التحويل الخارجية');
+    expect(screen.queryByText('الشركة الشقيقة')).toBeNull();
+    expect(screen.queryByLabelText('الشركة الشقيقة')).toBeNull();
+
+    fireEvent.focus(field);
+    const listbox = document.getElementById(field.getAttribute('aria-controls')!)!;
+    expect(within(listbox).getAllByRole('option')).toHaveLength(2);
+    /* Each row states its type: the icon's accessible name and hover tooltip
+       are the type name (Handshake for sister, Globe for non-sister). */
+    const sister = within(listbox).getByRole('option', { name: 'شركة شقيقة الشقيقة' });
+    const sisterIcon = within(sister).getByRole('img', { name: 'شركة شقيقة' });
+    expect(sisterIcon.getAttribute('title')).toBe('شركة شقيقة');
+    expect(sisterIcon.querySelector('svg')).toBeTruthy();
+    const external = within(listbox).getByRole('option', { name: 'شركة غير شقيقة الخارجية' });
+    const externalIcon = within(external).getByRole('img', { name: 'شركة غير شقيقة' });
+    expect(externalIcon.getAttribute('title')).toBe('شركة غير شقيقة');
+    expect(externalIcon.querySelector('svg')).toBeTruthy();
+  });
+
+  it('filters the external parties by type and clears a selection the filter hides', () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل خارجي/ }));
+    const field = screen.getByLabelText<HTMLInputElement>('جهة التحويل الخارجية');
+    const filter = screen.getByRole('group', { name: 'تصفية جهات التحويل الخارجية' });
+    const all = within(filter).getByRole('button', { name: 'الكل' });
+    const sisterOnly = within(filter).getByRole('button', { name: 'شقيقة فقط' });
+    const nonSisterOnly = within(filter).getByRole('button', { name: 'غير شقيقة فقط' });
+    // «الكل» is the default.
+    expect(all.getAttribute('aria-pressed')).toBe('true');
+    function openList() {
+      fireEvent.focus(field);
+      return document.getElementById(field.getAttribute('aria-controls')!)!;
+    }
+
+    fireEvent.click(sisterOnly);
+    expect(sisterOnly.getAttribute('aria-pressed')).toBe('true');
+    let listbox = openList();
+    expect(within(listbox).getAllByRole('option')).toHaveLength(1);
+    expect(within(listbox).getByRole('option', { name: /الشقيقة/ })).toBeTruthy();
+    expect(within(listbox).queryByRole('option', { name: /الخارجية/ })).toBeNull();
+
+    fireEvent.click(nonSisterOnly);
+    listbox = openList();
+    expect(within(listbox).getAllByRole('option')).toHaveLength(1);
+    expect(within(listbox).getByRole('option', { name: /الخارجية/ })).toBeTruthy();
+    expect(within(listbox).queryByRole('option', { name: /الشقيقة/ })).toBeNull();
+
+    // Choose the non-sister company: the closed field keeps its type icon.
+    fireEvent.click(within(listbox).getByRole('option', { name: /الخارجية/ }));
+    expect(field.value).toBe('الخارجية');
+    expect(screen.getByRole('img', { name: 'شركة غير شقيقة' }).getAttribute('title')).toBe(
+      'شركة غير شقيقة',
+    );
+
+    // A filter that hides the chosen company clears it instead of keeping a
+    // value the list cannot show.
+    fireEvent.click(sisterOnly);
+    expect(field.value).toBe('');
+
+    // Back to «الكل»: both companies return.
+    fireEvent.click(all);
+    listbox = openList();
+    expect(within(listbox).getAllByRole('option')).toHaveLength(2);
+  });
+
+  it('saves an external transfer to a non-sister company under the renamed field', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: /تحويل خارجي/ }));
+    fireEvent.change(screen.getByLabelText('رقم النظام (EPS)'), { target: { value: '2458' } });
+    choose('المُصدر', 'YM');
+    fireEvent.change(screen.getByLabelText('الرقم'), { target: { value: '63' } });
+    pick('جهة التحويل الخارجية', 'شركة غير شقيقة الخارجية');
+    pick('المخزن', 'المخزن الرئيسي - غرب القاهرة');
+    pick('التصنيف', 'حديد');
+    fireEvent.change(screen.getByLabelText('القيمة'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حفظ كمسودة' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    const [, , form] = save.mock.calls[0] as [string, string | null, EntryForm];
+    expect(form).toMatchObject({
+      type: 'external_transfer',
+      sisterId: id(602),
+      letterCode: 'YM:63',
+    });
   });
 
   it('refuses to save a chosen issuer without a number', async () => {

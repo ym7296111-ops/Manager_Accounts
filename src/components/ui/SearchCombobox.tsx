@@ -1,5 +1,5 @@
-import { Check, ChevronDown, Search, X } from 'lucide-react';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, Search, X, type LucideIcon } from 'lucide-react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { matchesSearch } from '@/lib/arabicText';
 
 /**
@@ -22,6 +22,14 @@ export interface SearchComboboxOption {
   readonly label: string;
   /** Extra text that should match the search but is not displayed. */
   readonly keywords?: string;
+  /**
+   * Optional glyph beside the name — e.g. the external party's company type
+   * (Handshake for a sister company, Globe for a non-sister one). It also
+   * replaces the magnifier in the closed field once the option is chosen.
+   */
+  readonly icon?: LucideIcon;
+  /** What the icon stands for: its hover tooltip and accessible name. */
+  readonly iconTitle?: string;
 }
 
 export interface SearchComboboxProps {
@@ -41,6 +49,12 @@ export interface SearchComboboxProps {
    * every group is noise, not information.
    */
   readonly hideLabel?: boolean;
+  /**
+   * Optional row between the label and the field — e.g. the sister/non-sister
+   * filter above the external-party list. It filters `options` upstream; the
+   * combobox itself only prints what it is given.
+   */
+  readonly toolbar?: ReactNode;
   readonly onChange: (value: string) => void;
 }
 
@@ -54,6 +68,7 @@ export function SearchCombobox({
   clearLabel,
   missingLabel,
   hideLabel = false,
+  toolbar,
   onChange,
 }: SearchComboboxProps) {
   const inputId = useId();
@@ -119,6 +134,7 @@ export function SearchCombobox({
       <label htmlFor={inputId} className={hideLabel ? 'sr-only' : 'text-foreground block'}>
         {label}
       </label>
+      {toolbar}
       <div className="relative min-w-0">
         <input
           id={inputId}
@@ -166,10 +182,26 @@ export function SearchCombobox({
             }
           }}
         />
-        <Search
-          className="text-muted-foreground pointer-events-none absolute inset-y-0 start-3 my-auto size-4"
-          aria-hidden="true"
-        />
+        {/* A chosen option with a type glyph keeps it visible in the closed
+            field: the magnifier steps aside for it. The span takes pointer
+            events so the tooltip can appear; clicking it focuses the field,
+            exactly what clicking the (pointer-transparent) magnifier did. */}
+        {!open && selected?.icon !== undefined ? (
+          <span
+            role="img"
+            aria-label={selected.iconTitle}
+            title={selected.iconTitle}
+            className="text-muted-foreground absolute inset-y-0 start-3 my-auto grid size-4 place-items-center"
+            onClick={() => inputRef.current?.focus()}
+          >
+            <selected.icon className="size-4" aria-hidden="true" />
+          </span>
+        ) : (
+          <Search
+            className="text-muted-foreground pointer-events-none absolute inset-y-0 start-3 my-auto size-4"
+            aria-hidden="true"
+          />
+        )}
         <span className="absolute inset-y-0 end-1 my-auto grid">
           {value !== '' && !open ? (
             <button
@@ -212,7 +244,25 @@ export function SearchCombobox({
                       onClick={() => choose(option)}
                       className={`flex min-h-10 w-full items-center justify-between gap-2 rounded-lg px-3 text-start text-sm font-normal ${index === boundedIndex ? 'bg-muted' : ''} ${isSelected ? 'text-primary font-semibold' : 'text-foreground'}`}
                     >
-                      <span className="min-w-0 break-words">{option.label}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        {option.icon !== undefined && (
+                          /* The type is stated twice: the glyph for the eye
+                             (with a native hover tooltip) and its name for
+                             the screen reader, inside the option's own name. */
+                          <span
+                            role="img"
+                            aria-label={option.iconTitle}
+                            title={option.iconTitle}
+                            className="text-muted-foreground grid size-5 shrink-0 place-items-center"
+                          >
+                            <option.icon className="size-4" aria-hidden="true" />
+                          </span>
+                        )}
+                        {/* The space keeps the option's accessible name two
+                            words («شركة شقيقة الاسم»); flex layout ignores it. */}
+                        {option.icon !== undefined && ' '}
+                        <span className="min-w-0 break-words">{option.label}</span>
+                      </span>
                       {isSelected && <Check className="size-4 shrink-0" aria-hidden="true" />}
                     </button>
                   </li>
