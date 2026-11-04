@@ -1977,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 70);
+    assert.equal(migrations.length, 71);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1997,6 +1997,7 @@ try {
     assert.ok(migrations.includes('20261124000000_aps_balance_default_end_date.sql'));
     assert.ok(migrations.includes('20261124500000_aps_sister_company_type_audit_action.sql'));
     assert.ok(migrations.includes('20261125000000_aps_sister_company_type.sql'));
+    assert.ok(migrations.includes('20261126000000_aps_reconciliation_close_reopen_month.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
