@@ -8,6 +8,8 @@ import {
   CheckCircle2,
   ClipboardList,
   FilePlus2,
+  Globe,
+  Handshake,
   LoaderCircle,
   Plus,
   Save,
@@ -232,6 +234,102 @@ function OptionSelect({
       noMatches={noMatches}
       clearLabel={clearLabel}
       missingLabel={t('aps.entry.unavailableOption')}
+      onChange={onChange}
+    />
+  );
+}
+/**
+ * The external-transfer party picker: sister and non-sister companies share
+ * one list, so each row carries its type — Handshake for a sister company,
+ * Globe for a non-sister one, the same glyphs the settings tree uses — with
+ * the type name as a hover tooltip. A three-way filter sits above the field
+ * and narrows the list; it is presentation only, never part of the letter.
+ */
+type SisterFilter = 'all' | 'sister' | 'non_sister';
+const SISTER_FILTERS: readonly {
+  value: SisterFilter;
+  label: TranslationKey;
+  icon?: typeof Handshake;
+}[] = [
+  { value: 'all', label: 'aps.entry.sisterFilter.all' },
+  { value: 'sister', label: 'aps.entry.sisterFilter.sister', icon: Handshake },
+  { value: 'non_sister', label: 'aps.entry.sisterFilter.nonSister', icon: Globe },
+];
+function ExternalPartySelect({
+  value,
+  options,
+  onChange,
+}: {
+  readonly value: string;
+  readonly options: readonly EntryOption[];
+  readonly onChange: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const [filter, setFilter] = useState<SisterFilter>('all');
+  const visible = useMemo(
+    () => options.filter((item) => filter === 'all' || (item.companyType ?? 'sister') === filter),
+    [options, filter],
+  );
+  return (
+    <SearchCombobox
+      label={t('aps.entry.sister')}
+      value={value}
+      options={visible.map((item) => {
+        const nonSister = item.companyType === 'non_sister';
+        return {
+          value: item.id,
+          label: item.name,
+          keywords: `${item.name} ${item.code}`,
+          icon: nonSister ? Globe : Handshake,
+          iconTitle: t(
+            nonSister ? 'aps.entry.sisterType.nonSister' : 'aps.entry.sisterType.sister',
+          ),
+        };
+      })}
+      placeholder={t('aps.entry.chooseSister')}
+      searchPlaceholder={t('aps.entry.searchSister')}
+      noMatches={t('aps.entry.noSisterMatches')}
+      clearLabel={t('aps.entry.clearSister')}
+      missingLabel={t('aps.entry.unavailableOption')}
+      toolbar={
+        <div
+          role="group"
+          aria-label={t('aps.entry.sisterFilter.label')}
+          className="border-border bg-muted/45 flex w-fit max-w-full flex-wrap gap-0.5 rounded-lg border p-0.5"
+        >
+          {SISTER_FILTERS.map(({ value: filterValue, label, icon: Icon }) => {
+            const selected = filter === filterValue;
+            return (
+              <button
+                key={filterValue}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => {
+                  if (selected) return;
+                  setFilter(filterValue);
+                  /* A chosen company the new filter would hide is cleared
+                     with it: the field never keeps a value its own list
+                     cannot show. */
+                  if (filterValue !== 'all' && value !== '') {
+                    const chosen = options.find((item) => item.id === value);
+                    if (chosen !== undefined && (chosen.companyType ?? 'sister') !== filterValue) {
+                      onChange('');
+                    }
+                  }
+                }}
+                className={`focus-visible:ring-ring inline-flex min-h-8 items-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-colors focus-visible:ring-2 focus-visible:outline-none ${
+                  selected
+                    ? 'border-border bg-card text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-card/60 border-transparent'
+                }`}
+              >
+                {Icon !== undefined && <Icon className="size-3.5" aria-hidden="true" />}
+                {t(label)}
+              </button>
+            );
+          })}
+        </div>
+      }
       onChange={onChange}
     />
   );
@@ -826,9 +924,10 @@ function EntryEditor({
           </p>
         )}
 
-        {/* Which sister company, and which way: the external transfer keeps its
-            one counterparty row. Inbound and outbound no longer ask here — the
-            party lives inside the tree below, once per line. */}
+        {/* Which external party — sister or non-sister — and which way: the
+            external transfer keeps its one counterparty row. Inbound and
+            outbound no longer ask here — the party lives inside the tree
+            below, once per line. */}
         {form.type === 'external_transfer' && (
           <section className={`${CARD} flex min-w-0 flex-col gap-4 sm:flex-row sm:items-end`}>
             <div className="flex min-w-0 items-start gap-2 sm:w-60 sm:shrink-0">
@@ -846,14 +945,9 @@ function EntryEditor({
             </div>
             <div className="grid min-w-0 flex-1 gap-3 @2xl:grid-cols-2">
               {form.type === 'external_transfer' && (
-                <OptionSelect
-                  label={t('aps.entry.sister')}
+                <ExternalPartySelect
                   value={form.sisterId}
                   options={options.sisters}
-                  placeholder={t('aps.entry.chooseSister')}
-                  searchPlaceholder={t('aps.entry.searchSister')}
-                  noMatches={t('aps.entry.noSisterMatches')}
-                  clearLabel={t('aps.entry.clearSister')}
                   onChange={(sisterId) => patch({ sisterId })}
                 />
               )}

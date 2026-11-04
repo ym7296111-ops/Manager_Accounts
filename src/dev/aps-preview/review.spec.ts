@@ -175,16 +175,22 @@ test('entry creates an inbound draft and approves it through the existing transi
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.goto('/workspaces/aps/letters/new');
   await expect(pageHeader(page).getByText('خطاب وارد جديد')).toBeVisible();
-  for (const name of [/وارد/, /منصرف/, /تحويل داخلي/, /تحويل خارجي/]) {
-    await expect(page.getByRole('button', { name })).toBeVisible();
+  /* The four type buttons live in one switch; the tree below has add/remove
+     buttons of its own, so the names are checked inside the switch only. */
+  const typeSwitch = page.getByRole('group', { name: 'اختر نوع الخطاب' });
+  for (const name of ['وارد', 'منصرف', 'تحويل داخلي', 'تحويل خارجي']) {
+    await expect(typeSwitch.getByRole('button', { name, exact: true })).toBeVisible();
   }
-  await expect(page.getByRole('button', { name: /تسوية/ })).toHaveCount(0);
+  await expect(typeSwitch.getByRole('button', { name: /تسوية/ })).toHaveCount(0);
   await fillHeader(page, '9001');
-  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  /* The party, warehouse and classification are searchable comboboxes inside
+     the inbound tree — names only, the code is search keywords. */
+  await pickOption(page, 'اختر الجهة', 'شركة النيل للمستلزمات');
   await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
-  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await pickOption(page, 'التصنيف', 'حديد وصلب');
   await page.getByLabel('القيمة').fill('120.50');
-  await expect(page.getByText('١٢٠٫٥٠')).toBeVisible();
+  // Totals print Latin digits, matching what the clerk typed.
+  await expect(page.getByText('120.50').first()).toBeVisible();
   await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
   await expect(page.getByText(/حُفظت المسودة بنجاح/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'حفظ التعديلات' })).toBeVisible();
@@ -261,11 +267,84 @@ test('internal transfer writes free source and destination lines and refuses an 
   await expect(page.getByText('تم اعتماد الخطاب بنجاح.')).toBeVisible();
 });
 
+/**
+ * The external-transfer register holds sister and non-sister companies alike:
+ * the field is named for the party (not for sisterhood), every row carries its
+ * type glyph with a hover tooltip, and a three-way filter narrows the list.
+ */
+test('external transfer names the party, marks its type and filters the list', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto('/workspaces/aps/letters/new');
+  await page.getByRole('button', { name: /تحويل خارجي/ }).click();
+  const field = page.getByLabel('جهة التحويل الخارجية', { exact: true });
+  await expect(field).toBeVisible();
+  await expect(page.getByLabel('الشركة الشقيقة', { exact: true })).toHaveCount(0);
+
+  // All four fixture companies, each with its type icon and tooltip.
+  await field.click();
+  const list = page.getByRole('listbox');
+  await expect(list.getByRole('option')).toHaveCount(4);
+  const sisterRow = list.getByRole('option', { name: /فرع القاهرة/ });
+  const nonSisterRow = list.getByRole('option', { name: /الدلتا للمقاولات/ });
+  await expect(sisterRow.getByRole('img', { name: 'شركة شقيقة' })).toHaveAttribute(
+    'title',
+    'شركة شقيقة',
+  );
+  await expect(nonSisterRow.getByRole('img', { name: 'شركة غير شقيقة' })).toHaveAttribute(
+    'title',
+    'شركة غير شقيقة',
+  );
+
+  // Sister only: the two non-sister companies leave the list.
+  const filter = page.getByRole('group', { name: 'تصفية جهات التحويل الخارجية' });
+  await filter.getByRole('button', { name: 'شقيقة فقط', exact: true }).click();
+  await expect(list.getByRole('option')).toHaveCount(2);
+  await expect(list.getByRole('option', { name: /الدلتا/ })).toHaveCount(0);
+  await expect(list.getByRole('option', { name: /الوادي/ })).toHaveCount(0);
+
+  // Non-sister only: the two sister companies leave instead.
+  await filter.getByRole('button', { name: 'غير شقيقة فقط' }).click();
+  await expect(list.getByRole('option')).toHaveCount(2);
+  await expect(list.getByRole('option', { name: /فرع القاهرة/ })).toHaveCount(0);
+  await expect(list.getByRole('option', { name: /فرع الإسكندرية/ })).toHaveCount(0);
+
+  // Choose a non-sister company: the closed field keeps its Globe icon.
+  await list.getByRole('option', { name: /الدلتا للمقاولات/ }).click();
+  await expect(field).toHaveValue('شركة الدلتا للمقاولات');
+  await expect(page.getByRole('img', { name: 'شركة غير شقيقة' })).toHaveAttribute(
+    'title',
+    'شركة غير شقيقة',
+  );
+
+  // A filter that hides the chosen company clears the field with it.
+  await filter.getByRole('button', { name: 'شقيقة فقط', exact: true }).click();
+  await expect(field).toHaveValue('');
+
+  // Back to «الكل»: all four return, and the choice is made from the full list.
+  await filter.getByRole('button', { name: 'الكل', exact: true }).click();
+  await field.click();
+  await expect(list.getByRole('option')).toHaveCount(4);
+  await list.getByRole('option', { name: /فرع الإسكندرية/ }).click();
+  await expect(field).toHaveValue('الشركة الشقيقة — فرع الإسكندرية');
+  await expectNoHorizontalOverflow(page);
+
+  // The filter row and the field fit a phone without sideways scroll.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(filter).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
 test('entry stays usable at 390px with the stacked transfer tables', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/workspaces/aps/letters/new');
   await expect(pageHeader(page).getByText('خطاب وارد جديد')).toBeVisible();
-  await expect(page.getByRole('button', { name: /وارد/ })).toBeVisible();
+  /* Scoped to the type switch: the inbound tree's add/remove buttons also
+     carry «جهة الوارد», so a page-wide /وارد/ matches three buttons. */
+  await expect(
+    page
+      .getByRole('group', { name: 'اختر نوع الخطاب' })
+      .getByRole('button', { name: 'وارد', exact: true }),
+  ).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByRole('button', { name: /تحويل داخلي/ }).click();
   const sourceTable = page.getByRole('region', { name: 'المصدر (صادر)' });
@@ -298,9 +377,9 @@ test('entry options refusal and lost results are reported honestly', async ({ pa
   await expect(page.getByRole('alert')).toContainText('لا تملك صلاحية إنشاء الخطابات');
   await page.goto('/workspaces/aps/letters/new?scenario=save-unknown');
   await fillHeader(page, '9003');
-  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  await pickOption(page, 'اختر الجهة', 'شركة النيل للمستلزمات');
   await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
-  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await pickOption(page, 'التصنيف', 'حديد وصلب');
   await page.getByLabel('القيمة').fill('10');
   await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
   await expect(page.getByRole('alert')).toContainText('قد يكون الحفظ اكتمل');
@@ -400,7 +479,20 @@ test('English entry screen renders left to right', async ({ page }) => {
   await page.goto('/workspaces/aps/letters/new');
   await expect(pageHeader(page).getByText('New inbound letter')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr');
-  await expect(page.getByRole('button', { name: /Inbound/ })).toBeVisible();
+  /* Scoped to the type switch: the inbound tree's own add/remove buttons
+     also name the inbound party, so a page-wide /Inbound/ is ambiguous. */
+  await expect(
+    page
+      .getByRole('group', { name: 'Choose the letter type' })
+      .getByRole('button', { name: 'Inbound', exact: true }),
+  ).toBeVisible();
+  // The renamed field and its filter read in English too.
+  await page.getByRole('button', { name: /External transfer/ }).click();
+  await expect(page.getByLabel('External Transfer Party', { exact: true })).toBeVisible();
+  const filter = page.getByRole('group', { name: 'Filter external transfer parties' });
+  await expect(filter.getByRole('button', { name: 'All', exact: true })).toBeVisible();
+  await expect(filter.getByRole('button', { name: 'Sister only', exact: true })).toBeVisible();
+  await expect(filter.getByRole('button', { name: 'Non-sister only' })).toBeVisible();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -453,9 +545,9 @@ test('an issuer added in settings reaches the entry dropdown, and disabling it r
   await page.getByLabel('رقم النظام (EPS)').fill('9100');
   await page.getByLabel('المُصدر').selectOption('YM');
   await page.getByLabel('الرقم', { exact: true }).fill('63');
-  await page.getByLabel('جهة الوارد').selectOption({ label: 'شركة النيل للمستلزمات — IN-014' });
+  await pickOption(page, 'اختر الجهة', 'شركة النيل للمستلزمات');
   await pickWarehouse(page, 'المخزن', 'مخزن المواد الخام - محطة غرب القاهرة');
-  await page.getByLabel('التصنيف').selectOption({ label: 'حديد وصلب — CL-001' });
+  await pickOption(page, 'التصنيف', 'حديد وصلب');
   await page.getByLabel('القيمة').fill('10');
   await page.getByRole('button', { name: 'حفظ كمسودة' }).click();
   await expect(page.getByText(/حُفظت المسودة بنجاح/)).toBeVisible();
