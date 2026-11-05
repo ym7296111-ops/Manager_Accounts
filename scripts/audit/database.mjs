@@ -1977,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 70);
+    assert.equal(migrations.length, 71);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -1997,6 +1997,7 @@ try {
     assert.ok(migrations.includes('20261124000000_aps_balance_default_end_date.sql'));
     assert.ok(migrations.includes('20261124500000_aps_sister_company_type_audit_action.sql'));
     assert.ok(migrations.includes('20261125000000_aps_sister_company_type.sql'));
+    assert.ok(migrations.includes('20261126000000_aps_reconciliation_schema.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -6858,6 +6859,125 @@ try {
     }
   });
 
+  await test('APS reconciliation schema: one open session and stored generated line difference', async () => {
+    const fixture = await seedApsReconciliation();
+    const sessionIds = [];
+    try {
+      const first = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.aps_reconciliation_sessions
+               (fiscal_year_id,fiscal_month_id,station_id,opened_by,created_by)
+             values ($1,$2,$3,$4,$4)
+             returning id,status`,
+            [fixture.firstYear.id, fixture.month1.id, fixture.stationId, A],
+          ),
+        )
+      ).rows[0];
+      sessionIds.push(first.id);
+      assert.equal(first.status, 'open');
+
+      // The partial unique index permits historical closed sessions but rejects
+      // a second concurrent open session for the same month and station.
+      await expectCode('23505', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.aps_reconciliation_sessions
+               (fiscal_year_id,fiscal_month_id,station_id,opened_by,created_by)
+             values ($1,$2,$3,$4,$4)`,
+            [fixture.firstYear.id, fixture.month1.id, fixture.stationId, A],
+          ),
+        ),
+      );
+
+      const line = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.aps_reconciliation_lines
+               (session_id,classification_id,book_amount,accountant_amount)
+             values ($1,$2,100.00,125.50)
+             returning id,book_amount::text,accountant_amount::text,difference::text`,
+            [first.id, fixture.leafA],
+          ),
+        )
+      ).rows[0];
+      assert.deepEqual(line, {
+        id: line.id,
+        book_amount: '100.00',
+        accountant_amount: '125.50',
+        difference: '25.50',
+      });
+
+      const updated = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            `update public.aps_reconciliation_lines
+                set book_amount=120.00,accountant_amount=95.25
+              where id=$1
+              returning difference::text`,
+            [line.id],
+          ),
+        )
+      ).rows[0];
+      assert.equal(updated.difference, '-24.75');
+
+      await expectCode('23505', () =>
+        asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.aps_reconciliation_lines(session_id,classification_id)
+             values ($1,$2)`,
+            [first.id, fixture.leafA],
+          ),
+        ),
+      );
+
+      await asRole('authenticated', A, (c) =>
+        c.query(
+          `update public.aps_reconciliation_sessions
+              set status='closed',closed_at=now(),closed_by=$2,close_reason='Audit close'
+            where id=$1`,
+          [first.id, A],
+        ),
+      );
+      const second = (
+        await asRole('authenticated', A, (c) =>
+          c.query(
+            `insert into public.aps_reconciliation_sessions
+               (fiscal_year_id,fiscal_month_id,station_id,sequence_number,opened_by,created_by)
+             values ($1,$2,$3,2,$4,$4)
+             returning id`,
+            [fixture.firstYear.id, fixture.month1.id, fixture.stationId, A],
+          ),
+        )
+      ).rows[0];
+      sessionIds.push(second.id);
+
+      // A viewer has the table grant needed to reach RLS but no policy access.
+      const invisible = await asRole('authenticated', V, (c) =>
+        c.query(
+          'select count(*)::int as n from public.aps_reconciliation_lines where session_id=$1',
+          [first.id],
+        ),
+      );
+      assert.equal(invisible.rows[0].n, 0);
+
+      await asRole('authenticated', A, (c) =>
+        c.query('delete from public.aps_reconciliation_sessions where id=$1', [first.id]),
+      );
+      assert.equal(
+        (
+          await db.query('select count(*)::int as n from public.aps_reconciliation_lines where id=$1', [
+            line.id,
+          ])
+        ).rows[0].n,
+        0,
+        'deleting a session cascades to its lines',
+      );
+    } finally {
+      await cleanApsReconciliation(fixture, [], sessionIds);
+    }
+  });
+
   await test('APS reconciliation: book figures from approved letters, dual comparison, frozen on approval', async () => {
     const fixture = await seedApsReconciliation();
     const letterIds = [];
@@ -6889,6 +7009,10 @@ try {
           'cancel_reason',
           'created_at',
           'updated_at',
+          'closed_at',
+          'closed_by',
+          'close_reason',
+          'created_by',
         ],
       );
       assert.deepEqual(
@@ -6960,12 +7084,18 @@ try {
             "select policyname, cmd from pg_policies where schemaname='public' and tablename in ('aps_reconciliation_sessions','aps_reconciliation_items') and permissive='PERMISSIVE' order by policyname",
           )
         ).rows.map((row) => `${row.policyname}:${row.cmd}`),
-        ['aps_reconciliation_items_read:SELECT', 'aps_reconciliation_sessions_read:SELECT'],
+        [
+          'aps_reconciliation_items_read:SELECT',
+          'aps_reconciliation_sessions_project_settings_delete:DELETE',
+          'aps_reconciliation_sessions_project_settings_insert:INSERT',
+          'aps_reconciliation_sessions_project_settings_select:SELECT',
+          'aps_reconciliation_sessions_project_settings_update:UPDATE',
+          'aps_reconciliation_sessions_read:SELECT',
+        ],
       );
-      // The computed columns are not reachable by an API caller at all.
+      // The legacy computed items remain write-protected. The new screen's
+      // session writes are granted above but still constrained by RLS.
       for (const [table, privilege] of [
-        ['aps_reconciliation_sessions', 'INSERT'],
-        ['aps_reconciliation_sessions', 'UPDATE'],
         ['aps_reconciliation_items', 'INSERT'],
         ['aps_reconciliation_items', 'UPDATE'],
         ['aps_reconciliation_items', 'DELETE'],
