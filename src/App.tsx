@@ -23,10 +23,16 @@ import SettingsPage from '@/pages/SettingsPage';
 import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
 import ApsLetterEntryPage from '@/pages/workspaces/ApsLetterEntryPage';
 import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
+import ApsReconciliationPage from '@/pages/workspaces/ApsReconciliationPage';
+import ApsReconciliationSessionPage from '@/pages/workspaces/ApsReconciliationSessionPage';
 import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
 import WorkspacePage from '@/pages/workspaces/WorkspacePage';
 import { APS_LETTER_CREATE_CAPABILITY } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
+import {
+  APS_RECONCILIATION_MANAGE_CAPABILITY,
+  APS_RECONCILIATION_PATH,
+} from '@/lib/apsReconciliation';
 import { WORKSPACES } from '@/lib/workspaces';
 
 /**
@@ -99,6 +105,22 @@ function AppRoutes() {
               element={
                 <RequireCapability requirement={APS_LETTERS_READ_REQUIREMENT}>
                   <ApsLetterDetailPage />
+                </RequireCapability>
+              }
+            />
+            <Route
+              path="reconciliation"
+              element={
+                <RequireCapability requirement={APS_RECONCILIATION_MANAGE_CAPABILITY}>
+                  <ApsReconciliationPage />
+                </RequireCapability>
+              }
+            />
+            <Route
+              path="reconciliation/:sessionId"
+              element={
+                <RequireCapability requirement={APS_RECONCILIATION_MANAGE_CAPABILITY}>
+                  <ApsReconciliationSessionPage />
                 </RequireCapability>
               }
             />
