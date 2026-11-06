@@ -6966,9 +6966,10 @@ try {
       );
       assert.equal(
         (
-          await db.query('select count(*)::int as n from public.aps_reconciliation_lines where id=$1', [
-            line.id,
-          ])
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_lines where id=$1',
+            [line.id],
+          )
         ).rows[0].n,
         0,
         'deleting a session cascades to its lines',
