@@ -1,7 +1,13 @@
 import { Settings2 } from 'lucide-react';
 import { useState } from 'react';
 import { RequireCapability } from '@/components/auth/RequireAuth';
-import { PROJECT_SETTINGS_CAPABILITY } from '@/components/layout/nav-items';
+import {
+  PROJECT_SETTINGS_CAPABILITY,
+  PROJECT_SETTINGS_REQUIREMENT,
+} from '@/components/layout/nav-items';
+import { useAuthCapabilities } from '@/hooks/useAuthCapabilities';
+import { APS_RECONCILIATION_SETTINGS_CAPABILITY } from '@/lib/apsReconciliation';
+import ReconciliationSettings from '@/pages/settings/ReconciliationSettings';
 import { useI18n } from '@/i18n/I18nContext';
 import type { TranslationKey } from '@/i18n/locales/ar';
 import Classifications from '@/pages/settings/Classifications';
@@ -16,8 +22,8 @@ import { UnsavedChangesProvider } from '@/pages/settings/UnsavedChangesProvider'
 /**
  * Project-settings screen (`/settings/project`).
  *
- * The route keeps its own capability gate (`project.settings:manage`) and
- * exposes six tabs under the header, in this order:
+ * The route accepts either project management or reconciliation settings capability.
+ * The original six tabs require project management; reconciliation is separately gated:
  *
  *   1. المحطات والمخازن        stations + warehouses (nested single read)
  *   2. التصنيفات               classifications (flat read assembled into a tree)
@@ -25,6 +31,7 @@ import { UnsavedChangesProvider } from '@/pages/settings/UnsavedChangesProvider'
  *   4. الشركات الشقيقة          sister companies (a two-level parent → branch tree)
  *   5. عام                     financial settings (annual years, periods, opening balances)
  *   6. أكواد المُصدرين          the controlled list behind «كود الخطاب» on entry
+ *   7. ضبط المطابقة             reconciliation classifications
  *
  * Every tab fetches only while its own panel is mounted, so switching tabs
  * costs no background traffic. Sister companies sits at the top level rather
@@ -39,7 +46,13 @@ import { UnsavedChangesProvider } from '@/pages/settings/UnsavedChangesProvider'
  * an in-progress opening balance. Both tab bars ask the provider first.
  */
 type ProjectSettingsTab =
-  'stations' | 'classifications' | 'parties' | 'sisterCompanies' | 'general' | 'issuers';
+  | 'stations'
+  | 'classifications'
+  | 'parties'
+  | 'sisterCompanies'
+  | 'general'
+  | 'issuers'
+  | 'reconciliation';
 
 interface ProjectSettingsTabConfig {
   id: ProjectSettingsTab;
@@ -71,11 +84,12 @@ const TABS: readonly ProjectSettingsTabConfig[] = [
     id: 'issuers',
     labelKey: 'settings.project.tabs.issuers',
   },
+  { id: 'reconciliation', labelKey: 'aps.recon.v2.settingsTab' },
 ] as const;
 
 export default function ProjectSettings() {
   return (
-    <RequireCapability requirement={PROJECT_SETTINGS_CAPABILITY}>
+    <RequireCapability requirement={PROJECT_SETTINGS_REQUIREMENT}>
       <UnsavedChangesProvider>
         <ProjectSettingsScreen />
       </UnsavedChangesProvider>
@@ -93,9 +107,18 @@ export default function ProjectSettings() {
 function ProjectSettingsScreen() {
   const { t } = useI18n();
   const { confirmNavigation } = useUnsavedChanges();
+  const capabilityState = useAuthCapabilities();
+  const canProject =
+    capabilityState.isAuthoritative && capabilityState.hasCapability(PROJECT_SETTINGS_CAPABILITY);
+  const canReconciliation =
+    capabilityState.isAuthoritative &&
+    capabilityState.hasCapability(APS_RECONCILIATION_SETTINGS_CAPABILITY);
+  const visibleTabs = TABS.filter((tab) =>
+    tab.id === 'reconciliation' ? canReconciliation : canProject,
+  );
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>('stations');
-
-  const activeConfig = (TABS.find((tab) => tab.id === activeTab) ?? TABS[0])!;
+  const activeConfig = visibleTabs.find((tab) => tab.id === activeTab) ?? visibleTabs[0];
+  if (!activeConfig) return null;
 
   return (
     <div className="w-full max-w-full min-w-0 space-y-6">
@@ -130,8 +153,8 @@ function ProjectSettingsScreen() {
           aria-label={t('nav.projectSettings')}
           className="border-border flex max-w-full min-w-0 flex-wrap gap-x-1 border-b"
         >
-          {TABS.map((tab) => {
-            const isActive = activeTab === tab.id;
+          {visibleTabs.map((tab) => {
+            const isActive = activeConfig.id === tab.id;
             return (
               <button
                 key={tab.id}
@@ -162,7 +185,9 @@ function ProjectSettingsScreen() {
           aria-labelledby={`project-settings-tab-${activeConfig.id}`}
           className="bg-card border-border w-full max-w-full min-w-0 overflow-hidden rounded-2xl border p-4 shadow-sm sm:p-6"
         >
-          {activeConfig.id === 'stations' ? (
+          {activeConfig.id === 'reconciliation' ? (
+            <ReconciliationSettings />
+          ) : activeConfig.id === 'stations' ? (
             <StationsWarehouses />
           ) : activeConfig.id === 'classifications' ? (
             <Classifications />

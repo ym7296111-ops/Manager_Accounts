@@ -1952,5 +1952,80 @@ export const en: Record<TranslationKey, string> = {
 
   /* ------------------------------------------------------------- common */
   'common.loading': 'Loading...',
+  'aps.recon.v2.settingsTab': 'Reconciliation settings',
+  'aps.recon.v2.settingsIntro':
+    'Select reconciliation classifications. A branch includes all its leaves, including inactive leaves with historical data. A branch and its descendants cannot both be selected. Changes apply to new sessions only.',
+  'aps.recon.v2.settingsEmpty': 'Select at least one classification.',
+  'aps.recon.v2.settingsSaved': 'Settings saved and verified.',
+  'aps.recon.v2.settingsFailed':
+    'Could not save or confirm settings; your selection remains locally.',
+  'aps.recon.v2.inactive': 'Inactive',
+  'aps.recon.v2.v2Description': 'Global monthly reconciliation, without selecting a station.',
+  'aps.recon.v2.monthly': 'Monthly movements',
+  'aps.recon.v2.ytd': 'Year to date',
+  'aps.recon.v2.bookInbound': 'System inbound',
+  'aps.recon.v2.accountantInbound': 'Accountant inbound',
+  'aps.recon.v2.bookOutbound': 'System outbound',
+  'aps.recon.v2.accountantOutbound': 'Accountant outbound',
+  'aps.recon.v2.bookBalance': 'System balance',
+  'aps.recon.v2.accountantBalance': 'Accountant balance',
+  'aps.recon.v2.bookOpening': 'System opening',
+  'aps.recon.v2.accountantOpening': 'Accountant opening',
+  'aps.recon.v2.bookClosing': 'System closing',
+  'aps.recon.v2.accountantClosing': 'Accountant closing',
+  'aps.recon.v2.notEntered': 'Not entered',
+  'aps.recon.v2.openingManual': 'Independent accountant opening',
+  'aps.recon.v2.openingSystem': 'System reference, not independent confirmation',
+  'aps.recon.v2.openingMissing': 'Opening missing',
+  'aps.recon.v2.edit': 'Accountant entry — {name}',
+  'aps.recon.v2.movementSection': 'Monthly and year-to-date movements',
+  'aps.recon.v2.ytdInbound': 'Accountant year-to-date inbound',
+  'aps.recon.v2.ytdOutbound': 'Accountant year-to-date outbound',
+  'aps.recon.v2.openingSection': 'Opening balance',
+  'aps.recon.v2.openingHelp':
+    'The annual opening for this classification is not a monthly movement. It is stored in this month’s session and does not automatically carry to other sessions. If omitted, the system opening is used as a reference when available.',
+  'aps.recon.v2.useManual': 'Enter independent opening',
+  'aps.recon.v2.allRequired':
+    'Enter monthly and year-to-date inbound and outbound; zero is never assumed.',
+  'aps.recon.v2.pendingDraft': 'This line has an unconfirmed local draft.',
+  'aps.recon.v2.refreshSnapshot': 'Refresh system snapshot',
+  'aps.recon.v2.needsReview':
+    'The source changed or the session was reopened. Refresh and review the snapshot before editing or closing.',
+  'aps.recon.v2.inconsistent': 'The snapshot changed between pages. Reload before taking action.',
+  'aps.recon.v2.missingOpening':
+    'Cannot close: system opening is missing for some classifications.',
+  'aps.recon.v2.incomplete': 'Cannot close until required values are complete.',
+  'aps.recon.v2.otherSessions': 'Other sessions prevent closing.',
+  'aps.recon.v2.differences':
+    'Cannot close: a movement or balance differs, even if the net difference is zero.',
+  'aps.recon.v2.noSession': 'There is no v2 reconciliation session for this month.',
+  'aps.recon.v2.v2Open': 'Open reconciliation session',
+  'aps.recon.v2.closeBlocked': 'Closing blocked: {reason}',
+  'aps.recon.v2.refreshRead': 'Reload data',
+  'aps.recon.v2.draftUnconfirmed':
+    'Could not confirm the save with the server; the draft remains local. Reload before retrying.',
+  'aps.recon.v2.openingsSource': 'Accountant opening source',
+  'aps.recon.v2.settingsError': 'Could not load reconciliation settings.',
+  'aps.recon.v2.v2CloseScope':
+    'The server will check every classification and movement before closing the global monthly session.',
+  'aps.recon.v2.v2ReopenScope': 'The reopened session requires review before editing.',
+  'aps.recon.v2.v2Empty': 'No months are available.',
+  'aps.recon.v2.v2Select': 'Select a month to view reconciliation.',
+  'aps.recon.v2.draftSaved': 'Line saved and values confirmed by the server.',
+  'aps.recon.v2.v2Status': 'Reconciliation status',
+  'aps.recon.v2.versionConflict':
+    'The line or session changed; your draft is retained. Reload and review before retrying.',
+  'aps.recon.v2.draftOther':
+    'There are unconfirmed drafts. Reopen the classification to review them.',
+  'aps.recon.v2.confirmClose': 'Confirm closing month',
+  'aps.recon.v2.confirmReopen': 'Confirm reopening month',
+  'aps.recon.v2.currentValues': 'Current values from the last server read',
+  'aps.recon.v2.rebaseDraft': 'Keep draft and continue editing',
+  'aps.recon.v2.rebaseConfirm':
+    'After reviewing current server values, keep your draft and edit it? It will not be saved until you press Save.',
+  'aps.recon.v2.sessionStorageWarning':
+    'Local storage is unavailable; drafts are kept only in this tab and will not survive closing it.',
+  'aps.recon.v2.memoryStorageWarning':
+    'Local and session storage are unavailable; drafts are in memory only and will be lost when leaving, reloading, or closing the page.',
   'common.close': 'Close',
 };

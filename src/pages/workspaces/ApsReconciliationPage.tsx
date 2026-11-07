@@ -1,555 +1,548 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router';
-import { useI18n } from '@/i18n/I18nContext';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useSearchParams } from 'react-router';
+import { ModalShell } from '@/components/ui/ModalShell';
 import { useAuth } from '@/context/AuthContext';
 import {
   closeReconciliation,
   openReconciliation,
   recordReconciliation,
+  refreshReconciliation,
   reopenReconciliation,
   useReconciliationOptions,
   useReconciliationState,
 } from '@/hooks/useApsReconciliation';
+import { useI18n } from '@/i18n/I18nContext';
+import { createDraftStorage } from '@/lib/reconciliationDraftStorage';
 import {
+  makeDraft,
   normalizeReconciliationAmount,
   ReconciliationError,
   type ReconciliationLine,
   type ReconciliationState,
+  type RecordAmounts,
+  type Draft,
 } from '@/lib/apsReconciliation';
 import {
-  ReasonDialog,
-  ReconciliationActions,
-  ReconciliationHeader,
-  ReconciliationStatus,
-  ReconciliationSummary,
-  ReconciliationTable,
-  type Draft,
+  button,
+  EntryDialog,
+  ReconciliationTables,
 } from './reconciliation/ReconciliationComponents';
 
-function loadDrafts(storageKey: string): Record<string, Draft> {
-  try {
-    const raw: unknown = JSON.parse(window.sessionStorage.getItem(storageKey) ?? '{}');
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    const drafts: Record<string, Draft> = {};
-    for (const [id, value] of Object.entries(raw)) {
-      if (
-        !/^[0-9a-f-]{36}$/i.test(id) ||
-        !value ||
-        typeof value !== 'object' ||
-        Array.isArray(value)
-      )
-        continue;
-      const item = value as Record<string, unknown>;
-      if (
-        typeof item.value === 'string' &&
-        item.value.length <= 50 &&
-        typeof item.baseline === 'string' &&
-        /^-?\d+\.\d{2}$/.test(item.baseline)
-      )
-        drafts[id] = { value: item.value, baseline: item.baseline };
-    }
-    return drafts;
-  } catch {
-    return {};
-  }
+function consistent(pages: ReconciliationState[]) {
+  const first = pages[0]?.selected_session;
+  const lines = pages.flatMap((p) => p.selected_lines);
+  return (
+    pages.every(
+      (p) =>
+        p.selected_session?.id === first?.id &&
+        p.selected_session?.snapshot_version === first?.snapshot_version &&
+        p.selected_session?.status === first?.status,
+    ) && new Set(lines.map((l) => l.id)).size === lines.length
+  );
 }
-
+function confirmed(line: ReconciliationLine, draft: Draft) {
+  const a = draft.submitted;
+  return (
+    !!a &&
+    !draft.conflicted &&
+    BigInt(line.version) > BigInt(draft.version) &&
+    line.monthly.accountant_inbound === a.monthlyInbound &&
+    line.monthly.accountant_outbound === a.monthlyOutbound &&
+    line.ytd.accountant_inbound === a.ytdInbound &&
+    line.ytd.accountant_outbound === a.ytdOutbound &&
+    (a.opening === null
+      ? line.ytd.accountant_opening_source !== 'manual'
+      : line.ytd.accountant_opening_source === 'manual' &&
+        line.ytd.accountant_opening === a.opening)
+  );
+}
 export default function ApsReconciliationPage() {
   const { session } = useAuth();
-  return <ReconciliationPage key={session?.user.id ?? ''} actorId={session?.user.id ?? ''} />;
+  return <Page key={session?.user.id ?? ''} actor={session?.user.id ?? ''} />;
 }
-
-function ReconciliationPage({ actorId }: { actorId: string }) {
+function Page({ actor }: { actor: string }) {
   const { t } = useI18n();
-  const location = useLocation();
   const [params, setParams] = useSearchParams();
-  const optionsQuery = useReconciliationOptions();
-  const options = optionsQuery.data;
-  const rawMonth = params.get('month');
-  const rawStation = params.get('station');
-  const badMonth =
-    !!options &&
-    rawMonth !== null &&
-    rawMonth !== '' &&
-    !options.months.some((m) => m.id === rawMonth);
-  const badStation =
-    !!options &&
-    rawStation !== null &&
-    rawStation !== '' &&
-    !options.stations.some((s) => s.id === rawStation);
-  const monthId =
-    !options || badMonth
+  const optionsQuery = useReconciliationOptions(),
+    options = optionsQuery.data;
+  const requested = params.get('month');
+  const invalidMonth = !!options && !!requested && !options.months.some((m) => m.id === requested);
+  const month =
+    !options || invalidMonth
       ? ''
-      : rawMonth === null
+      : requested === null
         ? (options.months.find((m) => m.is_active)?.id ?? '')
-        : rawMonth;
-  const stationId =
-    !options || badStation
-      ? ''
-      : rawStation === null && options.stations.length === 1
-        ? options.stations[0]!.id
-        : (rawStation ?? '');
-  const stateQuery = useReconciliationState(monthId || null, stationId || null);
-  const storageKey = `aps-reconciliation-drafts:${actorId}`;
-  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => loadDrafts(storageKey));
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+        : requested;
+  const query = useReconciliationState(month || null);
+  const pages = query.data?.pages ?? [],
+    first = pages[0],
+    session = first?.selected_session;
+  const lines = pages.flatMap((p) => p.selected_lines),
+    inconsistent = !consistent(pages);
+  const storageKey = `aps-reconciliation-v2-drafts:${actor}`;
+  const [storage] = useState(() => createDraftStorage(storageKey));
+  const storageMode = useSyncExternalStore(storage.subscribe, storage.getMode, storage.getMode);
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => storage.initial);
+  const [editing, setEditing] = useState<string | null>(null),
+    [notice, setNotice] = useState<string | null>(null),
+    [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false),
+    [mustRefresh, setMustRefresh] = useState(false);
+  const [operation, setOperation] = useState<'close' | 'reopen' | null>(null),
+    [reason, setReason] = useState('');
   const locked = useRef(false);
-  const [mustRefresh, setMustRefresh] = useState(false);
-  const pendingSave = useRef<{ lineId: string; amount: string } | null>(null);
-  const [dialog, setDialog] = useState<'close' | 'reopen' | null>(null);
-  const [reason, setReason] = useState('');
-  const [dialogError, setDialogError] = useState<string | null>(null);
-  const dirty = Object.keys(drafts).length > 0;
-  const pages = stateQuery.data?.pages ?? [];
-  const first = pages[0];
-  const current = pages.at(-1);
-  const lines = pages.flatMap((page) => page.selected_lines);
-  const inconsistent =
-    (!!first &&
-      pages.some(
-        (page) =>
-          page.selected_session?.id !== first.selected_session?.id ||
-          page.selected_session?.status !== first.selected_session?.status ||
-          page.selected_session?.flow_type !== first.selected_session?.flow_type ||
-          page.selected_session?.has_legacy_items !== first.selected_session?.has_legacy_items,
-      )) ||
-    new Set(lines.map((line) => line.id)).size !== lines.length;
-  const session = current?.selected_session;
-  const legacy = !!session && (session.flow_type === 'legacy' || session.has_legacy_items);
+  const draftKey = (id: string) => `${month}:${session?.id ?? ''}:${id}`;
+  const monthDrafts = Object.keys(drafts).filter((k) =>
+    k.startsWith(`${month}:${session?.id ?? ''}:`),
+  );
+  const draftIds = new Set(monthDrafts.map((k) => k.slice(k.lastIndexOf(':') + 1)));
+  const selectedLine = lines.find((l) => l.id === editing);
   const readOnly =
+    busy ||
+    mustRefresh ||
+    inconsistent ||
+    query.isError ||
+    query.isFetching ||
     !options?.can_manage ||
     !session ||
     session.status !== 'open' ||
-    legacy ||
-    inconsistent ||
-    mustRefresh ||
-    stateQuery.isError;
-
-  // sessionStorage keeps in-progress amounts within this tab when browser Back
-  // unmounts the screen. Drafts are scoped by actor and are never sent to a table.
+    session.needs_review;
   useEffect(() => {
-    try {
-      if (dirty) window.sessionStorage.setItem(storageKey, JSON.stringify(drafts));
-      else window.sessionStorage.removeItem(storageKey);
-    } catch {
-      /* Browser storage may be disabled; the navigation warning still applies. */
-    }
-  }, [dirty, drafts, storageKey]);
-
+    storage.persist(drafts);
+  }, [drafts, storage]);
   useEffect(() => {
-    if (!dirty) return;
-    const unload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = '';
+    if (!Object.keys(drafts).length) return;
+    const before = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
     };
-    const guard = (event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      )
-        return;
-      const target = event.target instanceof Element ? event.target.closest('a[href]') : null;
-      if (
-        !(target instanceof HTMLAnchorElement) ||
-        target.target === '_blank' ||
-        target.hasAttribute('download')
-      )
-        return;
-      const next = new URL(target.href, window.location.href);
-      if (
-        next.origin !== window.location.origin ||
-        (next.pathname === location.pathname && next.search === location.search)
-      )
-        return;
-      if (!window.confirm(t('aps.recon.unsavedConfirm'))) {
-        event.preventDefault();
-        event.stopPropagation();
-      } else {
-        try {
-          window.sessionStorage.removeItem(storageKey);
-        } catch {
-          /* Storage unavailable. */
-        }
-        setDrafts({});
-      }
-    };
-    window.addEventListener('beforeunload', unload);
-    document.addEventListener('click', guard, true);
-    return () => {
-      window.removeEventListener('beforeunload', unload);
-      document.removeEventListener('click', guard, true);
-    };
-  }, [dirty, location.pathname, location.search, storageKey, t]);
-
-  function choose(key: 'month' | 'station', value: string) {
-    if (busy || (dirty && !window.confirm(t('aps.recon.unsavedConfirm')))) return;
-    setDrafts({});
-    setNotice(null);
-    setMustRefresh(false);
-    pendingSave.current = null;
-    const next = new URLSearchParams(params);
-    next.set(key, value);
-    setParams(next);
+    window.addEventListener('beforeunload', before);
+    return () => window.removeEventListener('beforeunload', before);
+  }, [drafts]);
+  function setDraft(line: ReconciliationLine, draft: Draft) {
+    setDrafts((old) => ({ ...old, [draftKey(line.id)]: draft }));
   }
-  const messageFor = useCallback(
-    (error: unknown) => {
-      const code = error instanceof ReconciliationError ? error.code : 'unknown';
-      if (code === '42501') return t('aps.recon.forbidden');
-      if (
-        code === '22023' ||
-        code === 'P0002' ||
-        code === '02000' ||
-        code === '23505' ||
-        code === '40001'
-      )
-        return t('aps.recon.changed');
-      if (code === 'invalidResponse') return t('aps.recon.invalidResponse');
-      return t('aps.recon.requestError');
-    },
-    [t],
-  );
-
-  async function refresh(): Promise<ReconciliationState[] | null> {
-    const result = await stateQuery.refetch();
-    if (result.isError || !result.data) {
+  function showError(e: unknown) {
+    setError(
+      e instanceof ReconciliationError && e.code === '42501'
+        ? t('aps.recon.forbidden')
+        : t('aps.recon.requestError'),
+    );
+  }
+  async function reload(confirmDrafts = true): Promise<ReconciliationState[] | null> {
+    const result = await query.refetch();
+    if (result.isError || !result.data || !consistent(result.data.pages)) {
       setMustRefresh(true);
       return null;
     }
     const resultPages = result.data.pages;
-    const firstSession = resultPages[0]?.selected_session;
-    const ids = resultPages.flatMap((p) => p.selected_lines.map((line) => line.id));
-    if (
-      resultPages.some(
-        (p) =>
-          p.selected_session?.id !== firstSession?.id ||
-          p.selected_session?.status !== firstSession?.status ||
-          p.selected_session?.flow_type !== firstSession?.flow_type ||
-          p.selected_session?.has_legacy_items !== firstSession?.has_legacy_items,
-      ) ||
-      new Set(ids).size !== ids.length
-    ) {
-      setMustRefresh(true);
-      return null;
-    }
+    const current = resultPages[0]?.selected_session;
+    const currentLines = resultPages.flatMap((p) => p.selected_lines);
+    setDrafts((old) => {
+      const next = { ...old };
+      for (const line of currentLines) {
+        const key = `${month}:${current?.id ?? ''}:${line.id}`;
+        const draft = next[key];
+        if (confirmDrafts && draft && confirmed(line, draft)) delete next[key];
+      }
+      return next;
+    });
     setMustRefresh(false);
-    const pending = pendingSave.current;
-    if (pending) {
-      const latest = resultPages
-        .flatMap((p) => p.selected_lines)
-        .find((line) => line.id === pending.lineId);
-      if (latest?.accountant_amount === pending.amount)
-        setDrafts((old) => {
-          const next = { ...old };
-          delete next[pending.lineId];
-          return next;
-        });
-      pendingSave.current = null;
-    }
     return resultPages;
   }
-  async function doRefresh() {
-    if (locked.current || !monthId || !stationId) return;
+  async function run(action: () => Promise<unknown>, success: string) {
+    if (locked.current) return;
     locked.current = true;
     setBusy(true);
-    try {
-      const updated = await refresh();
-      setNotice(updated ? t('aps.recon.updated') : t('aps.recon.refreshFailed'));
-    } finally {
-      locked.current = false;
-      setBusy(false);
-    }
-  }
-  function changeLine(line: ReconciliationLine, value: string) {
-    if (busy || readOnly) return;
-    setDrafts((old) => ({
-      ...old,
-      [line.id]: { value, baseline: old[line.id]?.baseline ?? line.accountant_amount },
-    }));
-  }
-  async function saveLine(line: ReconciliationLine) {
-    if (
-      locked.current ||
-      readOnly ||
-      stateQuery.isFetching ||
-      !session ||
-      !drafts[line.id] ||
-      drafts[line.id]!.baseline !== line.accountant_amount
-    )
-      return;
-    const amount = normalizeReconciliationAmount(drafts[line.id]!.value);
-    if (amount === null) {
-      setDrafts((old) => ({
-        ...old,
-        [line.id]: { ...old[line.id]!, error: t('aps.recon.invalidAmount') },
-      }));
-      return;
-    }
-    locked.current = true;
-    setBusy(true);
+    setError(null);
     setNotice(null);
     try {
-      await recordReconciliation(session.id, line.classification_id, amount);
-      // RPC numeric fields are JSON numbers and may already be rounded: only
-      // the text amounts from the read RPC are used as financial truth.
-      pendingSave.current = { lineId: line.id, amount };
-      const updated = await refresh();
-      const confirmed = updated
-        ?.flatMap((page) => page.selected_lines)
-        .find((item) => item.id === line.id);
-      setNotice(
-        !updated
-          ? t('aps.recon.savedRefreshFailed')
-          : confirmed?.accountant_amount === amount
-            ? t('aps.recon.saveConfirmed')
-            : t('aps.recon.changed'),
-      );
-    } catch (error) {
-      // Network failures may arrive after commit. Read before permitting retry.
-      if (error instanceof ReconciliationError && error.code === 'network')
-        pendingSave.current = { lineId: line.id, amount };
-      const updated = await refresh();
-      setNotice(updated ? messageFor(error) : t('aps.recon.refreshFailed'));
+      await action();
+      const latest = await reload();
+      setNotice(latest ? success : t('aps.recon.v2.draftUnconfirmed'));
+    } catch (e) {
+      showError(e);
+      setMustRefresh(true);
     } finally {
       locked.current = false;
       setBusy(false);
     }
   }
-  async function open() {
-    if (locked.current || !monthId || !stationId) return;
+  async function save(line: ReconciliationLine, draft: Draft) {
+    if (locked.current || readOnly || draft.version !== line.version || draft.submitted) return;
+    const monthlyInbound = normalizeReconciliationAmount(draft.monthlyInbound),
+      monthlyOutbound = normalizeReconciliationAmount(draft.monthlyOutbound),
+      ytdInbound = normalizeReconciliationAmount(draft.ytdInbound),
+      ytdOutbound = normalizeReconciliationAmount(draft.ytdOutbound),
+      opening = draft.manual ? normalizeReconciliationAmount(draft.opening) : null;
+    if (
+      monthlyInbound === null ||
+      monthlyOutbound === null ||
+      ytdInbound === null ||
+      ytdOutbound === null ||
+      (draft.manual && opening === null)
+    ) {
+      setError(t('aps.recon.invalidAmount'));
+      return;
+    }
+    const amounts: RecordAmounts = {
+      monthlyInbound,
+      monthlyOutbound,
+      ytdInbound,
+      ytdOutbound,
+      opening,
+    };
+    const submitted = { ...draft, submitted: amounts };
+    setDraft(line, submitted);
     locked.current = true;
     setBusy(true);
+    setError(null);
     setNotice(null);
     try {
-      await openReconciliation(monthId, stationId);
-      const updated = await refresh();
-      setNotice(updated ? t('aps.recon.openSuccess') : t('aps.recon.savedRefreshFailed'));
-    } catch (error) {
-      const updated = await refresh();
-      setNotice(updated ? messageFor(error) : t('aps.recon.refreshFailed'));
+      await recordReconciliation(session.id, line.classification_id, amounts, draft.version);
+      const latest = await reload();
+      const fresh = latest?.flatMap((p) => p.selected_lines).find((l) => l.id === line.id);
+      if (fresh && confirmed(fresh, submitted)) {
+        setEditing(null);
+        setNotice(t('aps.recon.v2.draftSaved'));
+      } else {
+        setMustRefresh(true);
+        setError(t('aps.recon.v2.draftUnconfirmed'));
+      }
+    } catch (e) {
+      if (e instanceof ReconciliationError && e.code === '40001') {
+        // The write was rejected, even if another actor stored identical values.
+        setDraft(line, { ...submitted, conflicted: true });
+        const latest = await reload(false);
+        setError(t('aps.recon.v2.versionConflict'));
+        if (!latest) setMustRefresh(true);
+      } else {
+        showError(e);
+        setMustRefresh(true);
+      }
     } finally {
       locked.current = false;
       setBusy(false);
     }
   }
-  async function submitReason() {
-    if (
-      locked.current ||
-      !dialog ||
-      !monthId ||
-      controlBusy ||
-      (dialog === 'close' ? !canClose : !canReopen) ||
-      Array.from(reason.trim()).length < 3 ||
-      Array.from(reason.trim()).length > 500
-    )
-      return;
+  async function rebase(line: ReconciliationLine, draft: Draft) {
+    if (locked.current) return;
     locked.current = true;
     setBusy(true);
-    setDialogError(null);
-    const operation = dialog;
+    setError(null);
     try {
-      if (operation === 'close') await closeReconciliation(monthId, reason.trim());
-      else await reopenReconciliation(monthId, reason.trim());
-      setDialog(null);
-      setReason('');
-      const updated = await refresh();
-      setNotice(
-        updated
-          ? t(operation === 'close' ? 'aps.recon.closeSuccess' : 'aps.recon.reopenSuccess')
-          : t('aps.recon.savedRefreshFailed'),
-      );
-    } catch (error) {
-      const updated = await refresh();
-      setDialogError(updated ? messageFor(error) : t('aps.recon.refreshFailed'));
+      const latest = await reload();
+      const fresh = latest?.flatMap((p) => p.selected_lines).find((l) => l.id === line.id);
+      if (!fresh) {
+        setError(t('aps.recon.v2.draftUnconfirmed'));
+        return;
+      }
+      if (confirmed(fresh, draft)) {
+        setEditing(null);
+        setNotice(t('aps.recon.v2.draftSaved'));
+        return;
+      }
+      setError(t('aps.recon.v2.versionConflict'));
     } finally {
       locked.current = false;
       setBusy(false);
     }
   }
-  const controlBusy =
-    busy || stateQuery.isFetching || stateQuery.isError || mustRefresh || inconsistent;
-  const canOpen =
-    !!options?.can_manage &&
-    !!current &&
-    (!session || session.status !== 'open') &&
-    !(
-      current.month_summary.open_sessions_count === 0 &&
-      current.month_summary.eligible_closed_screen_sessions > 0
-    ) &&
-    !dirty;
-  const canClose = !!options?.can_close && !!current?.flags.can_close_now && !dirty;
-  const showReopen =
-    !!options?.can_reopen_as_owner &&
-    !!current &&
-    current.month_summary.eligible_closed_screen_sessions > 0;
-  const canReopen = showReopen && current.month_summary.open_sessions_count === 0 && !dirty;
-  const loadingOptions = optionsQuery.isPending && !options;
-  const error = optionsQuery.isError
-    ? optionsQuery.error
-    : stateQuery.isError && !current
-      ? stateQuery.error
-      : null;
-
+  function acceptCurrent(line: ReconciliationLine, draft: Draft) {
+    if (mustRefresh || query.isError || query.isFetching || inconsistent || busy) return;
+    if (window.confirm(t('aps.recon.v2.rebaseConfirm'))) {
+      setDraft(line, {
+        ...draft,
+        version: line.version,
+        submitted: undefined,
+        conflicted: undefined,
+      });
+      setError(null);
+    }
+  }
+  const reasons: Record<string, string> = {
+    no_eligible_open_sessions: t('aps.recon.noEligible'),
+    other_open_sessions: t('aps.recon.v2.otherSessions'),
+    needs_review: t('aps.recon.v2.needsReview'),
+    incomplete: t('aps.recon.v2.incomplete'),
+    missing_system_opening: t('aps.recon.v2.missingOpening'),
+    nonzero_differences: t('aps.recon.v2.differences'),
+  };
   return (
-    <main className="space-y-5" aria-label={t('aps.recon.title')}>
-      <div>
-        <h2 className="text-xl font-bold">{t('aps.recon.title')}</h2>
-        <p className="text-muted-foreground text-sm">{t('aps.recon.description')}</p>
-      </div>
-      {loadingOptions && <ReconciliationStatus message={t('aps.recon.loading')} />}
-      {error && (
-        <ReconciliationStatus
-          message={messageFor(error)}
-          retry={() => {
-            if (optionsQuery.isError) void optionsQuery.refetch();
-            else void stateQuery.refetch();
-          }}
-        />
+    <div className="space-y-5">
+      <header>
+        <h1 className="text-xl font-bold">{t('aps.recon.title')}</h1>
+        <p className="text-muted-foreground text-sm">{t('aps.recon.v2.v2Description')}</p>
+      </header>
+      {storageMode !== 'local' && (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-300">
+          {t(
+            storageMode === 'session'
+              ? 'aps.recon.v2.sessionStorageWarning'
+              : 'aps.recon.v2.memoryStorageWarning',
+          )}
+        </p>
+      )}
+      {optionsQuery.isPending && <p>{t('aps.recon.loading')}</p>}
+      {optionsQuery.isError && (
+        <div role="alert">
+          <p>{t('aps.recon.requestError')}</p>
+          <button type="button" className={button} onClick={() => void optionsQuery.refetch()}>
+            {t('aps.recon.retry')}
+          </button>
+        </div>
       )}
       {options && (
-        <ReconciliationHeader
-          months={options.months}
-          stations={options.stations}
-          monthId={monthId}
-          stationId={stationId}
-          onMonthChange={(v) => choose('month', v)}
-          onStationChange={(v) => choose('station', v)}
-          disabled={busy}
-        />
+        <label className="grid max-w-sm gap-1 text-sm font-semibold">
+          {t('aps.recon.month')}
+          <select
+            className="bg-card border-border rounded border p-2"
+            value={month}
+            disabled={busy}
+            onChange={(e) => {
+              const next = new URLSearchParams(params);
+              next.set('month', e.target.value);
+              next.delete('station');
+              setParams(next);
+              setEditing(null);
+              setError(null);
+              setNotice(null);
+              setMustRefresh(false);
+            }}
+          >
+            <option value="">{t('aps.recon.chooseMonth')}</option>
+            {options.months.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
-      {(badMonth || badStation) && (
-        <ReconciliationStatus message={t('aps.recon.invalidSelection')} />
+      {invalidMonth && <p role="alert">{t('aps.recon.v2.v2Select')}</p>}
+      {options && !options.months.length && <p>{t('aps.recon.v2.v2Empty')}</p>}
+      {month && query.isPending && <p>{t('aps.recon.loading')}</p>}
+      {query.isError && (
+        <div role="alert">
+          <p>{t('aps.recon.requestError')}</p>
+          {!first && (
+            <button
+              type="button"
+              className={button}
+              onClick={() => void run(async () => {}, t('aps.recon.updated'))}
+            >
+              {t('aps.recon.retry')}
+            </button>
+          )}
+        </div>
       )}
-      {options && !badMonth && !badStation && (!monthId || !stationId) && (
-        <ReconciliationStatus message={t('aps.recon.selectBoth')} />
-      )}
-      {monthId && stationId && stateQuery.isPending && (
-        <ReconciliationStatus message={t('aps.recon.loading')} />
-      )}
-      {current && options && (
+      {notice && <p role="status">{notice}</p>}
+      {error && !editing && <p role="alert">{error}</p>}
+      {first && (
         <>
-          <ReconciliationSummary
-            summary={current.month_summary}
-            fiscalClosed={current.fiscal_month.is_fiscal_closed}
-            onStation={(v) => choose('station', v)}
-          />
-          <ReconciliationActions
-            canOpen={canOpen}
-            canClose={canClose}
-            showReopen={showReopen}
-            canReopen={canReopen}
-            busy={controlBusy}
-            onOpen={() => void open()}
-            onClose={() => {
-              setDialog('close');
-              setReason('');
-              setDialogError(null);
-            }}
-            onReopen={() => {
-              setDialog('reopen');
-              setReason('');
-              setDialogError(null);
-            }}
-          />
-          {current.flags.close_blocked_reason === 'nonzero_differences' && (
-            <ReconciliationStatus message={t('aps.recon.closeDifferences')} />
-          )}
-          {current.flags.close_blocked_reason === 'no_eligible_open_sessions' && (
-            <ReconciliationStatus message={t('aps.recon.noEligible')} />
-          )}
-          {current.month_summary.open_sessions_count === 0 &&
-            current.month_summary.eligible_closed_screen_sessions > 0 && (
-              <ReconciliationStatus message={t('aps.recon.monthClosed')} />
-            )}
-          {session && (
-            <p className="text-sm font-semibold">
-              {t('aps.recon.sessionStatus')}: {t(`aps.recon.status.${session.status}`)} (
-              {session.sequence_number})
-            </p>
-          )}
-          {(pages.length > 1 || current.pagination.has_more) && (
-            <p className="text-muted-foreground text-sm">{t('aps.recon.paginationWarning')}</p>
-          )}
-          {legacy && (
-            <ReconciliationStatus
-              message={t(
-                session?.flow_type === 'legacy' ? 'aps.recon.legacy' : 'aps.recon.mixedLegacy',
-              )}
-            />
-          )}
-          {!session && <ReconciliationStatus message={t('aps.recon.noSession')} />}
-          {session && !legacy && !inconsistent && (
-            <ReconciliationTable
-              lines={lines}
-              drafts={drafts}
-              readOnly={readOnly}
-              busy={busy || stateQuery.isFetching}
-              hasMore={!!stateQuery.hasNextPage}
-              loadingMore={stateQuery.isFetchingNextPage}
-              onChange={changeLine}
-              onSave={(line) => void saveLine(line)}
-              onDiscard={(id) =>
-                setDrafts((old) => {
-                  const next = { ...old };
-                  delete next[id];
-                  return next;
-                })
+          <div className="flex flex-wrap items-center gap-2">
+            <span>
+              {t('aps.recon.v2.v2Status')}:{' '}
+              {session
+                ? t(session.status === 'open' ? 'aps.recon.status.open' : 'aps.recon.status.closed')
+                : t('aps.recon.v2.noSession')}
+            </span>
+            <button
+              type="button"
+              className={button}
+              disabled={busy}
+              onClick={() => void run(async () => {}, t('aps.recon.updated'))}
+            >
+              {t('aps.recon.v2.refreshRead')}
+            </button>
+            <button
+              type="button"
+              className={button}
+              disabled={
+                busy ||
+                query.isError ||
+                query.isFetching ||
+                mustRefresh ||
+                inconsistent ||
+                !options?.can_manage ||
+                !!session
               }
-              onMore={() => {
-                if (!stateQuery.isFetching) void stateQuery.fetchNextPage();
-              }}
-            />
-          )}
-          {(inconsistent || mustRefresh || stateQuery.isError) && (
-            <ReconciliationStatus message={t('aps.recon.refreshFailed')} />
-          )}
-          {notice && (
-            <div role="status" className="text-sm">
-              {notice}
-            </div>
-          )}
-          {dirty && (
-            <div className="text-sm text-amber-700 dark:text-amber-300">
-              <p>{t('aps.recon.dirtyWarning')}</p>
+              onClick={() => void run(() => openReconciliation(month), t('aps.recon.openSuccess'))}
+            >
+              {t('aps.recon.v2.v2Open')}
+            </button>
+            {session?.status === 'open' && (
               <button
                 type="button"
-                className="border-border mt-2 rounded-lg border px-3 py-2"
-                disabled={busy}
+                className={button}
+                disabled={
+                  busy ||
+                  query.isError ||
+                  query.isFetching ||
+                  mustRefresh ||
+                  inconsistent ||
+                  !options?.can_manage
+                }
+                onClick={() =>
+                  void run(() => refreshReconciliation(session.id), t('aps.recon.updated'))
+                }
+              >
+                {t('aps.recon.v2.refreshSnapshot')}
+              </button>
+            )}
+            <button
+              type="button"
+              className={button}
+              disabled={
+                busy ||
+                query.isError ||
+                query.isFetching ||
+                mustRefresh ||
+                inconsistent ||
+                !!monthDrafts.length ||
+                !options?.can_close ||
+                !first.flags.can_close_now
+              }
+              onClick={() => {
+                setOperation('close');
+                setReason('');
+              }}
+            >
+              {t('aps.recon.closeMonth')}
+            </button>
+            {options?.can_reopen_as_owner && session?.status === 'closed' && (
+              <button
+                type="button"
+                className={button}
+                disabled={
+                  busy ||
+                  query.isError ||
+                  query.isFetching ||
+                  mustRefresh ||
+                  inconsistent ||
+                  !!monthDrafts.length
+                }
                 onClick={() => {
-                  if (window.confirm(t('aps.recon.unsavedConfirm'))) setDrafts({});
+                  setOperation('reopen');
+                  setReason('');
                 }}
               >
-                {t('aps.recon.discardAll')}
+                {t('aps.recon.reopen')}
               </button>
-            </div>
+            )}
+          </div>
+          {session?.needs_review && <p role="alert">{t('aps.recon.v2.needsReview')}</p>}
+          {inconsistent && <p role="alert">{t('aps.recon.v2.inconsistent')}</p>}
+          {mustRefresh && <p role="alert">{t('aps.recon.v2.draftUnconfirmed')}</p>}
+          {monthDrafts.length > 0 && <p>{t('aps.recon.v2.draftOther')}</p>}
+          {first.flags.close_blocked_reason && (
+            <p>
+              {t('aps.recon.v2.closeBlocked', {
+                reason:
+                  reasons[first.flags.close_blocked_reason] ?? first.flags.close_blocked_reason,
+              })}
+            </p>
           )}
-          <button
-            type="button"
-            className="border-border rounded-lg border px-3 py-2 text-sm"
-            disabled={busy || stateQuery.isFetching}
-            onClick={() => void doRefresh()}
-          >
-            {t('aps.recon.refresh')}
-          </button>
-          {dialog && (
-            <ReasonDialog
-              operation={dialog}
-              reason={reason}
-              busy={busy}
-              canConfirm={!controlBusy && (dialog === 'close' ? canClose : canReopen)}
-              error={dialogError}
-              summary={current.month_summary}
-              onChange={setReason}
-              onCancel={() => setDialog(null)}
-              onConfirm={() => void submitReason()}
-            />
+          {session && (
+            <>
+              <ReconciliationTables
+                lines={lines}
+                readOnly={readOnly}
+                draftIds={draftIds}
+                onEdit={(line) => {
+                  setError(null);
+                  setEditing(line.id);
+                }}
+              />
+              {query.hasNextPage && (
+                <button
+                  className={button}
+                  type="button"
+                  disabled={busy || inconsistent || query.isFetching}
+                  onClick={() => void query.fetchNextPage()}
+                >
+                  {t('aps.recon.more')}
+                </button>
+              )}
+            </>
           )}
         </>
       )}
-    </main>
+      {selectedLine && (
+        <EntryDialog
+          line={selectedLine}
+          draft={drafts[draftKey(selectedLine.id)] ?? makeDraft(selectedLine)}
+          busy={busy}
+          error={error}
+          onChange={(d) => setDraft(selectedLine, d)}
+          onSave={() =>
+            void save(selectedLine, drafts[draftKey(selectedLine.id)] ?? makeDraft(selectedLine))
+          }
+          onClose={() => {
+            setEditing(null);
+            setError(null);
+          }}
+          onRebase={() =>
+            void rebase(selectedLine, drafts[draftKey(selectedLine.id)] ?? makeDraft(selectedLine))
+          }
+          canAccept={!mustRefresh && !query.isError && !query.isFetching && !inconsistent}
+          onAccept={() =>
+            acceptCurrent(
+              selectedLine,
+              drafts[draftKey(selectedLine.id)] ?? makeDraft(selectedLine),
+            )
+          }
+        />
+      )}
+      {operation && (
+        <ModalShell
+          titleId="reason-title"
+          title={t(
+            operation === 'close' ? 'aps.recon.v2.confirmClose' : 'aps.recon.v2.confirmReopen',
+          )}
+          closeLabel={t('aps.recon.cancel')}
+          busy={busy}
+          onClose={() => setOperation(null)}
+        >
+          <div className="mt-4 space-y-4">
+            <p>
+              {t(
+                operation === 'close' ? 'aps.recon.v2.v2CloseScope' : 'aps.recon.v2.v2ReopenScope',
+              )}
+            </p>
+            <label className="grid gap-1">
+              {t('aps.recon.reason')}
+              <textarea
+                maxLength={500}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="bg-background border-border rounded border p-2"
+              />
+            </label>
+            <p>{t('aps.recon.reasonHint')}</p>
+            <button
+              type="button"
+              className={button}
+              disabled={
+                busy || mustRefresh || reason.trim().length < 3 || reason.trim().length > 500
+              }
+              onClick={() => {
+                const op = operation;
+                setOperation(null);
+                void run(
+                  () =>
+                    op === 'close'
+                      ? closeReconciliation(month, reason.trim())
+                      : reopenReconciliation(month, reason.trim()),
+                  t(op === 'close' ? 'aps.recon.closeSuccess' : 'aps.recon.reopenSuccess'),
+                );
+              }}
+            >
+              {t('aps.recon.confirm')}
+            </button>
+          </div>
+        </ModalShell>
+      )}
+    </div>
   );
 }
