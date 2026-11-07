@@ -65,7 +65,8 @@ export function getWorkspaceByPath(pathname: string): Workspace | null {
       (workspace) =>
         workspace.path === normalized ||
         (workspace.slug === 'aps' &&
-          (normalized === `${workspace.path}/letters` ||
+          (normalized === `${workspace.path}/reconciliation` ||
+            normalized === `${workspace.path}/letters` ||
             normalized.startsWith(`${workspace.path}/letters/`))),
     ) ?? null
   );

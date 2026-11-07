@@ -24,6 +24,8 @@ import ApsLetterDetailPage from '@/pages/workspaces/ApsLetterDetailPage';
 import ApsLetterEntryPage from '@/pages/workspaces/ApsLetterEntryPage';
 import ApsLettersPage from '@/pages/workspaces/ApsLettersPage';
 import ApsWorkspaceLayout from '@/pages/workspaces/ApsWorkspaceLayout';
+import ApsReconciliationPage from '@/pages/workspaces/ApsReconciliationPage';
+import { APS_RECONCILIATION_REQUIREMENT } from '@/lib/apsReconciliation';
 import WorkspacePage from '@/pages/workspaces/WorkspacePage';
 import { APS_LETTER_CREATE_CAPABILITY } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
@@ -77,6 +79,14 @@ function AppRoutes() {
             />
           ))}
           <Route path="workspaces/aps" element={<ApsWorkspaceLayout />}>
+            <Route
+              path="reconciliation"
+              element={
+                <RequireCapability requirement={APS_RECONCILIATION_REQUIREMENT}>
+                  <ApsReconciliationPage />
+                </RequireCapability>
+              }
+            />
             <Route index element={<Navigate to="letters" replace />} />
             <Route
               path="letters"
