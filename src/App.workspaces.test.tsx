@@ -51,6 +51,13 @@ describe('App workspace routes', () => {
     document.documentElement.classList.remove('dark');
   });
 
+  it('routes the reconciliation screen within the APS workspace', async () => {
+    window.history.replaceState({}, '', '/workspaces/aps/reconciliation');
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'مطابقة الأرصدة' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/workspaces/aps/reconciliation');
+  });
+
   it.each([
     ['/workspaces/1', '/workspaces/aps/letters', 'الخطابات'],
     ['/workspaces/2', '/workspaces/workshops-10th', 'المنتج التام — ورش العاشر'],

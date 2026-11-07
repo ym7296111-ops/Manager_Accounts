@@ -55,6 +55,23 @@ describe('sidebar capability filter', () => {
     expect(visibleLeafIds([capability])).toContain('aps-letters');
   });
 
+  it.each([
+    'aps.reconciliation:manage',
+    'aps.reconciliation:close_month',
+    'aps.reconciliation:reopen_month',
+  ])('shows reconciliation for %s', (capability) => {
+    expect(visibleLeafIds([capability])).toContain('aps-reconciliation');
+    expect(getGroupChainForPath(NAV_ITEMS, '/workspaces/aps/reconciliation')).toEqual([
+      'workspace-aps',
+    ]);
+    expect(findNavLinkByPath(NAV_ITEMS, '/workspaces/aps/reconciliation')?.id).toBe(
+      'aps-reconciliation',
+    );
+  });
+  it('hides reconciliation for unrelated permissions', () => {
+    expect(visibleLeafIds(['aps.letters:read'])).not.toContain('aps-reconciliation');
+  });
+
   it('does not expose APS browsing for unrelated capabilities', () => {
     expect(visibleLeafIds(['aps.letters:cancel', 'aps.letters:approve'])).not.toContain(
       'aps-letters',

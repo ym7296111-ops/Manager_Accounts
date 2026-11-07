@@ -12,6 +12,7 @@ import {
   Settings,
   Settings2,
   ShieldCheck,
+  Scale,
   SlidersHorizontal,
   Users,
   type LucideIcon,
@@ -21,6 +22,7 @@ import type { TranslationKey } from '@/i18n/locales/ar';
 import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
+import { APS_RECONCILIATION_PATH, APS_RECONCILIATION_REQUIREMENT } from '@/lib/apsReconciliation';
 
 export const PROJECT_SETTINGS_CAPABILITY = 'project.settings:manage';
 
@@ -131,6 +133,15 @@ export const NAV_ITEMS: NavNode[] = [
               icon: BookOpenText,
               capability: APS_LETTERS_READ_REQUIREMENT,
               matchDescendants: true,
+            },
+            {
+              kind: 'link',
+              id: 'aps-reconciliation',
+              to: APS_RECONCILIATION_PATH,
+              labelKey: 'aps.recon.tab',
+              icon: Scale,
+              capability: APS_RECONCILIATION_REQUIREMENT,
+              end: true,
             },
           ]
         : [],

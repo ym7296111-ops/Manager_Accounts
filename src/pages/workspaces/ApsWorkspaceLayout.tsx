@@ -1,4 +1,4 @@
-import { BookOpenText, Eye, FilePlus2, FolderOpen } from 'lucide-react';
+import { BookOpenText, Eye, FilePlus2, FolderOpen, Scale } from 'lucide-react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router';
 import {
   requirementMet,
@@ -8,6 +8,7 @@ import {
 import { useI18n } from '@/i18n/I18nContext';
 import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
+import { APS_RECONCILIATION_PATH, APS_RECONCILIATION_REQUIREMENT } from '@/lib/apsReconciliation';
 
 export default function ApsWorkspaceLayout() {
   const { t } = useI18n();
@@ -17,6 +18,7 @@ export default function ApsWorkspaceLayout() {
     !capabilities.isAuthoritative ||
     requirementMet(requirement, (slug) => capabilities.hasCapability(slug));
   const creating = location.pathname === APS_LETTER_NEW_PATH;
+  const reconciling = location.pathname === APS_RECONCILIATION_PATH;
 
   return (
     <div className="@container min-w-0 space-y-6">
@@ -48,8 +50,8 @@ export default function ApsWorkspaceLayout() {
         {canUse(APS_LETTERS_READ_REQUIREMENT) && (
           <Link
             to={APS_LETTERS_PATH}
-            aria-current={creating ? undefined : 'page'}
-            className={`inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold ${creating ? 'text-muted-foreground hover:text-foreground border-transparent' : 'text-primary border-primary'}`}
+            aria-current={creating || reconciling ? undefined : 'page'}
+            className={`inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold ${creating || reconciling ? 'text-muted-foreground hover:text-foreground border-transparent' : 'text-primary border-primary'}`}
           >
             <BookOpenText className="size-4" aria-hidden="true" />
             {t('aps.letters.tab')}
@@ -65,6 +67,18 @@ export default function ApsWorkspaceLayout() {
           >
             <FilePlus2 className="size-4" aria-hidden="true" />
             {t('aps.entry.tab')}
+          </NavLink>
+        )}
+        {canUse(APS_RECONCILIATION_REQUIREMENT) && (
+          <NavLink
+            to={APS_RECONCILIATION_PATH}
+            end
+            className={({ isActive }) =>
+              `inline-flex min-h-12 items-center gap-2 border-b-2 px-1 text-sm font-semibold ${isActive ? 'text-primary border-primary' : 'text-muted-foreground hover:text-foreground border-transparent'}`
+            }
+          >
+            <Scale className="size-4" aria-hidden="true" />
+            {t('aps.recon.tab')}
           </NavLink>
         )}
       </nav>
