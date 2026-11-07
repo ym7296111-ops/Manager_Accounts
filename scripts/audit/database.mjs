@@ -260,6 +260,135 @@ try {
         }
       });
     }
+    if (file === '20261203000000_aps_reconciliation_v3_scope_foundation.sql') {
+      await test('APS v3 upgrade preserves populated v2 and legacy sessions and their snapshots', async () => {
+        await db.query('savepoint populated_upgrade');
+        try {
+          const user = randomUUID();
+          await db.query('insert into auth.users(id,email,raw_user_meta_data) values ($1,$2,$3)', [
+            user,
+            `upgrade-${user}@example.invalid`,
+            '{}',
+          ]);
+          await db.query("select set_config('request.jwt.claim.sub',$1,true)", [user]);
+          await db.query("select set_config('request.jwt.claim.role','authenticated',true)");
+          const year = (
+            await db.query(
+              "insert into public.fiscal_years(start_date,end_date) values ('2051-07-01','2052-06-30') returning id",
+            )
+          ).rows[0].id;
+          const months = (
+            await db.query(
+              'select id from public.fiscal_months where fiscal_year_id=$1 order by month_number limit 2',
+              [year],
+            )
+          ).rows;
+          const station = (
+            await db.query(
+              "insert into public.stations(name) values ('upgrade station') returning id",
+            )
+          ).rows[0].id;
+          await db.query(
+            "insert into public.warehouses(station_id,name) values ($1,'upgrade warehouse')",
+            [station],
+          );
+          const leaf = (
+            await db.query(
+              "insert into public.classifications(name) values ('upgrade class') returning id",
+            )
+          ).rows[0].id;
+          const config = (
+            await db.query('select public.aps_set_reconciliation_settings_v2($1::uuid[]) as id', [
+              [leaf],
+            ])
+          ).rows[0].id;
+          const session = (
+            await db.query('select public.aps_open_reconciliation_v2($1) as id', [months[0].id])
+          ).rows[0].id;
+          const line = (
+            await db.query(
+              'select id,v2_version from public.aps_reconciliation_lines where session_id=$1',
+              [session],
+            )
+          ).rows[0];
+          await db.query('select public.aps_record_reconciliation_v2($1,$2,0,1,2,3,null,$3)', [
+            session,
+            leaf,
+            line.v2_version,
+          ]);
+          const legacy = (
+            await db.query('select public.aps_open_legacy_reconciliation($1,$2) as id', [
+              months[1].id,
+              station,
+            ])
+          ).rows[0].id;
+          const before = (
+            await db.query(
+              `select
+            (select jsonb_agg(to_jsonb(s) order by s.id) from public.aps_reconciliation_sessions s where s.id=any($1::uuid[])) as sessions,
+            (select jsonb_agg(to_jsonb(l) order by l.id) from public.aps_reconciliation_lines l where l.session_id=$2) as lines,
+            (select jsonb_agg(to_jsonb(m) order by m.classification_id,m.leaf_id) from public.aps_reconciliation_settings_members m) as members,
+            (select revision_id from public.aps_reconciliation_settings_current where singleton) as config`,
+              [[session, legacy], session],
+            )
+          ).rows[0];
+          assert.equal(before.config, config);
+          await db.query(sql);
+          for (const next of [
+            '20261204000000_aps_reconciliation_v3_scopes.sql',
+            '20261205000000_aps_reconciliation_v3_sessions.sql',
+          ]) {
+            await db.query(await readFile(`${ROOT}supabase/migrations/${next}`, 'utf8'));
+          }
+          const after = (
+            await db.query(
+              `select
+            (select jsonb_agg(to_jsonb(s)-'scope_id'-'source_config_revision_id'-'config_generation'-'scope_name_snapshot' order by s.id) from public.aps_reconciliation_sessions s where s.id=any($1::uuid[])) as sessions,
+            (select jsonb_agg(to_jsonb(l) order by l.id) from public.aps_reconciliation_lines l where l.session_id=$2) as lines,
+            (select jsonb_agg(to_jsonb(m) order by m.classification_id,m.leaf_id) from public.aps_reconciliation_settings_members m) as members,
+            (select revision_id from public.aps_reconciliation_settings_current where singleton) as config`,
+              [[session, legacy], session],
+            )
+          ).rows[0];
+          assert.deepEqual(after, before);
+          const migrated = (
+            await db.query(
+              'select flow_type,scope_id,source_config_revision_id from public.aps_reconciliation_sessions where id=any($1::uuid[])',
+              [[session, legacy]],
+            )
+          ).rows;
+          assert.equal(
+            migrated.find((x) => x.flow_type === 'screen_v2').scope_id,
+            (await db.query('select id from public.aps_reconciliation_scopes where is_default'))
+              .rows[0].id,
+          );
+          assert.equal(
+            migrated.find((x) => x.flow_type === 'screen_v2').source_config_revision_id,
+            null,
+          );
+          assert.equal(migrated.find((x) => x.flow_type === 'legacy').scope_id, null);
+        } finally {
+          await db.query('rollback to savepoint populated_upgrade');
+          await db.query('release savepoint populated_upgrade');
+        }
+      });
+    }
+    if (file === '20261203000000_aps_reconciliation_v3_scope_foundation.sql') {
+      await test('APS v3 private table migration fails closed on inherited grants', async () => {
+        await db.query('savepoint v3_inherited_grants');
+        try {
+          await db.query('create role aps_v3_inherited nologin');
+          await db.query('grant aps_v3_inherited to authenticated');
+          await db.query(
+            'alter default privileges in schema public grant select on tables to aps_v3_inherited',
+          );
+          await expectCode('42501', () => db.query(sql));
+        } finally {
+          await db.query('rollback to savepoint v3_inherited_grants');
+          await db.query('release savepoint v3_inherited_grants');
+        }
+      });
+    }
     await db.query(sql);
     await db.query('commit');
   }
@@ -1977,7 +2106,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 77);
+    assert.equal(migrations.length, 80);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2003,6 +2132,9 @@ try {
     assert.ok(migrations.includes('20261130000000_aps_reconciliation_v2_schema.sql'));
     assert.ok(migrations.includes('20261201000000_aps_reconciliation_v2_write_rpcs.sql'));
     assert.ok(migrations.includes('20261202000000_aps_reconciliation_v2_read_rpcs.sql'));
+    assert.ok(migrations.includes('20261203000000_aps_reconciliation_v3_scope_foundation.sql'));
+    assert.ok(migrations.includes('20261204000000_aps_reconciliation_v3_scopes.sql'));
+    assert.ok(migrations.includes('20261205000000_aps_reconciliation_v3_sessions.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -6186,6 +6318,818 @@ try {
     }
   };
 
+  await test('APS v3 scope foundation preserves default v2 and rejects scope mismatches', async () => {
+    await withGlobalV2Fixture(async ({ fixture: f, call, settings, open }) => {
+      const scope = (
+        await db.query(
+          'select id, name, is_active from public.aps_reconciliation_scopes where is_default',
+        )
+      ).rows[0];
+      assert.equal(scope.name, 'النطاق الافتراضي');
+      assert.equal(scope.is_active, true);
+      await expectDenied(() => call(A, 'select * from public.aps_reconciliation_scopes'));
+      const config = await settings([f.parent]);
+      const session = await open();
+      const current = (
+        await db.query(
+          `select s.scope_id, s.source_config_revision_id, s.config_generation,
+          r.scope_id as revision_scope from public.aps_reconciliation_sessions s
+          join public.aps_reconciliation_settings_revisions r on r.id=s.settings_revision_id where s.id=$1`,
+          [session],
+        )
+      ).rows[0];
+      assert.equal(current.scope_id, scope.id);
+      assert.equal(current.revision_scope, scope.id);
+      assert.equal(current.source_config_revision_id, config);
+      assert.equal(current.config_generation, '1');
+      assert.equal(
+        (
+          await db.query(
+            'select scope_id from public.aps_reconciliation_settings_revisions where id=$1',
+            [config],
+          )
+        ).rows[0].scope_id,
+        scope.id,
+      );
+      await db.query('begin');
+      try {
+        const other = (
+          await db.query(
+            "insert into public.aps_reconciliation_scopes(name) values ('test scope') returning id",
+          )
+        ).rows[0].id;
+        await db.query('savepoint mismatch');
+        await expectCode('23514', () =>
+          db.query('update public.aps_reconciliation_sessions set scope_id=$1 where id=$2', [
+            other,
+            session,
+          ]),
+        );
+        await db.query('rollback to savepoint mismatch');
+        const revision = (
+          await db.query(
+            'insert into public.aps_reconciliation_settings_revisions(created_by,scope_id) values ($1,$2) returning id',
+            [A, other],
+          )
+        ).rows[0].id;
+        await expectCode('23503', () =>
+          db.query(
+            'update public.aps_reconciliation_sessions set settings_revision_id=$1 where id=$2',
+            [revision, session],
+          ),
+        );
+      } finally {
+        await db.query('rollback');
+      }
+    });
+  });
+
+  const withScopedV3Transaction = async (run) => {
+    const f = await seedApsReconciliation();
+    try {
+      await db.query('begin');
+      await db.query('set local role authenticated');
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+      await db.query("select set_config('request.jwt.claim.role','authenticated',true)");
+      const call = (sql, args = []) => db.query(sql, args).then((r) => r.rows[0]);
+      const reject = async (code, sql, args = []) => {
+        await db.query('savepoint rejected_v3');
+        await expectCode(code, () => db.query(sql, args));
+        await db.query('rollback to savepoint rejected_v3');
+        await db.query('release savepoint rejected_v3');
+      };
+      const scope = (
+        await call('select public.aps_get_reconciliation_scopes_v3() as result')
+      ).result.find((x) => x.is_default).id;
+      const settings = (scopeId, ids, expected = null) =>
+        call('select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3) as id', [
+          scopeId,
+          ids,
+          expected,
+        ]).then((x) => x.id);
+      const state = (scopeId, month = f.month2.id) =>
+        call('select public.aps_get_reconciliation_state_v3($1,$2,0,50) as data', [
+          month,
+          scopeId,
+        ]).then((x) => x.data);
+      await run({ f, call, reject, scope, settings, state });
+    } finally {
+      await db.query('rollback');
+      await cleanApsReconciliation(f, [], []);
+    }
+  };
+
+  await test('APS v3 scope CRUD, ownership, hierarchy and v2 isolation', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const other = (
+        await call('select public.aps_create_reconciliation_scope_v3($1) as id', ['Second'])
+      ).id;
+      await call('select public.aps_rename_reconciliation_scope_v3($1,$2)', [other, 'Renamed']);
+      const options = (await call('select public.aps_get_reconciliation_scopes_v3() as result'))
+        .result;
+      assert.equal(options.find((x) => x.id === other).name, 'Renamed');
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [E]);
+      await reject('42501', 'select public.aps_create_reconciliation_scope_v3($1)', ['Denied']);
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+      await settings(scope, [f.parent]);
+      await reject('22023', 'select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3)', [
+        other,
+        [f.archivedLeaf],
+        null,
+      ]);
+      await reject('22023', 'select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3)', [
+        other,
+        [f.parent],
+        null,
+      ]);
+      await settings(other, [f.leafA]);
+      await reject('22023', 'update public.classifications set parent_id=$1 where id=$2', [
+        f.parent,
+        f.leafA,
+      ]);
+      await call('select public.aps_open_reconciliation_v3($1,$2)', [f.month2.id, scope]);
+      const otherSession = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, other])
+      ).id;
+      assert.equal((await state(scope)).selected_lines.length, 1);
+      const otherState = await state(other);
+      assert.equal(otherState.selected_session.id, otherSession);
+      const line = otherState.selected_lines[0];
+      await reject('40001', 'select public.aps_record_reconciliation_v2($1,$2,0,0,0,0,null,$3)', [
+        otherSession,
+        line.classification_id,
+        line.version,
+      ]);
+      await reject('22023', 'select public.aps_refresh_reconciliation_v2($1)', [otherSession]);
+      const oldState = (
+        await call('select public.aps_get_reconciliation_state_v2($1,0,50) as data', [f.month2.id])
+      ).data;
+      assert.equal(oldState.selected_session.scope_id, scope);
+      await call('select public.aps_archive_reconciliation_scope_v3($1)', [other]);
+      assert.equal(
+        (await call('select public.aps_get_reconciliation_scopes_v3() as result')).result.find(
+          (x) => x.id === other,
+        ).is_active,
+        false,
+      );
+      await reject('22023', 'select public.aps_archive_reconciliation_scope_v3($1)', [scope]);
+      // Current ownership is released by archival but a historical snapshot for
+      // this month still blocks reusing that leaf in another session.
+      const cfg = (
+        await call('select public.aps_get_reconciliation_settings_v3($1) as data', [scope])
+      ).data.revision_id;
+      const changed = await settings(scope, [f.parent, f.leafA], cfg);
+      const current = await state(scope);
+      await reject('22023', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        current.selected_session.id,
+        scope,
+        current.selected_session.snapshot_version,
+        current.selected_session.config_generation,
+        changed,
+      ]);
+      assert.equal(
+        (await state(scope)).selected_session.settings_revision_id,
+        current.selected_session.settings_revision_id,
+      );
+    });
+  });
+
+  await test('APS v3 empty sync, rollback, zero entries and stale draft ABA protection', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const first = await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const old = await state(scope);
+      const oldLine = old.selected_lines[0];
+      const next = await settings(scope, [f.parent, f.leafB], first);
+      assert.equal((await state(scope)).flags.settings_changed, true);
+      assert.equal((await state(scope)).flags.can_sync_from_settings, true);
+      await reject('40001', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        old.selected_session.snapshot_version,
+        old.selected_session.config_generation,
+        first,
+      ]);
+      assert.equal((await state(scope)).selected_lines[0].id, oldLine.id);
+      await call('select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        old.selected_session.snapshot_version,
+        old.selected_session.config_generation,
+        next,
+      ]);
+      const updated = await state(scope);
+      assert.equal(updated.selected_session.id, session);
+      assert.equal(updated.selected_session.config_generation, '2');
+      assert.equal(updated.flags.settings_changed, false);
+      const replacement = updated.selected_lines.find(
+        (x) => x.classification_id === oldLine.classification_id,
+      );
+      assert.notEqual(replacement.id, oldLine.id);
+      assert.equal(replacement.version, oldLine.version);
+      const history = (
+        await call('select public.aps_get_reconciliation_sync_history_v3($1,$2) as data', [
+          session,
+          scope,
+        ])
+      ).data;
+      assert.equal(history.length, 1);
+      assert.equal(history[0].lines[0].id, oldLine.id);
+      assert.equal(history[0].classifications[0].id, oldLine.classification_id);
+      await reject('40001', 'select public.aps_record_reconciliation_v2($1,$2,0,0,0,0,null,$3)', [
+        session,
+        oldLine.classification_id,
+        oldLine.version,
+      ]);
+      await reject(
+        '40001',
+        'select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)',
+        [session, scope, oldLine.id, oldLine.classification_id, '1', oldLine.version],
+      );
+      await reject('40001', 'select public.aps_close_reconciliation_month_v2($1,$2)', [
+        f.month2.id,
+        'old client',
+      ]);
+      await call('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        session,
+        scope,
+        replacement.id,
+        replacement.classification_id,
+        '2',
+        replacement.version,
+      ]);
+      const recorded = await state(scope);
+      assert.equal(recorded.flags.can_sync_from_settings, false);
+      assert.equal(
+        recorded.selected_lines.find((x) => x.id === replacement.id).monthly.accountant_inbound,
+        '0.00',
+      );
+      await reject('22023', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        recorded.selected_session.snapshot_version,
+        '2',
+        next,
+      ]);
+      assert.equal(
+        (await state(scope)).selected_lines.find((x) => x.id === replacement.id).monthly
+          .accountant_inbound,
+        '0.00',
+      );
+      assert.equal(
+        (
+          await call('select public.aps_get_reconciliation_sync_history_v3($1,$2) as data', [
+            session,
+            scope,
+          ])
+        ).data.length,
+        1,
+      );
+      // Even a privileged correction that clears all visible v2 fields cannot
+      // erase the previous recording event from the eligibility decision.
+      await db.query('reset role');
+      await db.query(
+        `update public.aps_reconciliation_lines set accountant_inbound=null, accountant_outbound=null,
+        accountant_ytd_inbound=null, accountant_ytd_outbound=null, accountant_year_opening=null,
+        v2_recorded_at=null,v2_recorded_by=null where id=$1`,
+        [replacement.id],
+      );
+      await db.query('set local role authenticated');
+      const cleared = await state(scope);
+      assert.equal(cleared.flags.can_sync_from_settings, false);
+      await reject('22023', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        cleared.selected_session.snapshot_version,
+        '2',
+        next,
+      ]);
+    });
+  });
+
+  await test('APS v3 closing and source invalidation remain isolated by scope and month', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const other = (
+        await call('select public.aps_create_reconciliation_scope_v3($1) as id', ['Close scope'])
+      ).id;
+      await settings(scope, [f.parent]);
+      await settings(other, [f.leafA]);
+      await call(
+        'insert into public.opening_balances(fiscal_year_id,warehouse_id,classification_id,amount) values ($1,$2,$3,0)',
+        [f.firstYear.id, f.warehouseId, f.archivedLeaf],
+      );
+      const defaultSession = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const otherSession = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, other])
+      ).id;
+      let a = await state(scope);
+      const al = a.selected_lines[0];
+      await call('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        defaultSession,
+        scope,
+        al.id,
+        al.classification_id,
+        a.selected_session.config_generation,
+        al.version,
+      ]);
+      assert.equal((await state(scope)).flags.can_close_now, true);
+      assert.equal((await state(other)).flags.close_blocked_reason, 'missing_system_opening');
+      await call('select public.aps_close_reconciliation_month_v2($1,$2)', [
+        f.month2.id,
+        'scope close',
+      ]);
+      assert.equal((await state(scope)).selected_session.status, 'closed');
+      assert.equal((await state(other)).selected_session.status, 'open');
+      a = await state(scope);
+      const cfg = (
+        await call('select public.aps_get_reconciliation_settings_v3($1) as data', [scope])
+      ).data.revision_id;
+      await reject('22023', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        defaultSession,
+        scope,
+        a.selected_session.snapshot_version,
+        a.selected_session.config_generation,
+        cfg,
+      ]);
+      await call(
+        'insert into public.opening_balances(fiscal_year_id,warehouse_id,classification_id,amount) values ($1,$2,$3,0)',
+        [f.firstYear.id, f.warehouseId, f.leafA],
+      );
+      assert.equal((await state(scope)).selected_session.needs_review, false);
+      assert.equal((await state(other)).selected_session.needs_review, true);
+      await call('select public.aps_refresh_reconciliation_v3($1,$2)', [otherSession, other]);
+      let b = await state(other);
+      const bl = b.selected_lines[0];
+      await call('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        otherSession,
+        other,
+        bl.id,
+        bl.classification_id,
+        b.selected_session.config_generation,
+        bl.version,
+      ]);
+      await call('select public.aps_close_reconciliation_month_v3($1,$2,$3)', [
+        f.month2.id,
+        other,
+        'scope close',
+      ]);
+      await db.query('reset role');
+      const owner = randomUUID();
+      await db.query('insert into auth.users(id,email) values ($1,$2)', [
+        owner,
+        `scope-owner-${owner}@example.invalid`,
+      ]);
+      await db.query("update public.profiles set approval_status='approved' where id=$1", [owner]);
+      await db.query(
+        "delete from public.user_roles where user_id=$1 and role_id=(select id from public.roles where slug='viewer')",
+        [owner],
+      );
+      await db.query(
+        "insert into public.user_roles(user_id,role_id) select $1,id from public.roles where slug='owner'",
+        [owner],
+      );
+      await db.query('set local role authenticated');
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [owner]);
+      await call('select public.aps_reopen_reconciliation_month_v2($1,$2)', [
+        f.month2.id,
+        'scope reopen',
+      ]);
+      assert.equal((await state(scope)).selected_session.status, 'open');
+      assert.equal((await state(other)).selected_session.status, 'closed');
+      await call('select public.aps_reopen_reconciliation_month_v3($1,$2,$3)', [
+        f.month2.id,
+        other,
+        'scope reopen',
+      ]);
+      assert.equal((await state(other)).selected_session.status, 'open');
+    });
+  });
+
+  await test('APS v3 sync rolls back history and lines if source snapshot overflows', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const first = await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const before = await state(scope);
+      await call(
+        'insert into public.opening_balances(fiscal_year_id,warehouse_id,classification_id,amount) values ($1,$2,$3,9999999999999999.99),($1,$4,$3,9999999999999999.99)',
+        [f.firstYear.id, f.warehouseId, f.leafB, f.secondWarehouseId],
+      );
+      const next = await settings(scope, [f.leafB], first);
+      await reject('22003', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        before.selected_session.snapshot_version,
+        before.selected_session.config_generation,
+        next,
+      ]);
+      const after = await state(scope);
+      assert.deepEqual(after.selected_session, before.selected_session);
+      assert.deepEqual(after.selected_lines, before.selected_lines);
+      assert.deepEqual(
+        (
+          await call('select public.aps_get_reconciliation_sync_history_v3($1,$2) as data', [
+            session,
+            scope,
+          ])
+        ).data,
+        [],
+      );
+    });
+  });
+
+  await test('APS v3 read reports pre-existing historical overlaps', async () => {
+    await withScopedV3Transaction(async ({ f, call, scope, settings, state }) => {
+      const other = (
+        await call('select public.aps_create_reconciliation_scope_v3($1) as id', ['History scope'])
+      ).id;
+      await settings(scope, [f.parent]);
+      await settings(other, [f.leafA]);
+      await call('select public.aps_open_reconciliation_v3($1,$2)', [f.month2.id, scope]);
+      const otherSession = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, other])
+      ).id;
+      assert.equal((await state(scope)).historical_overlap, false);
+      // Privileged fixture simulates an old overlapping frozen snapshot; normal
+      // RPCs cannot create it. The read contract must disclose it to the UI.
+      await db.query('reset role');
+      const revision = (
+        await db.query(
+          'insert into public.aps_reconciliation_settings_revisions(created_by,scope_id) values ($1,$2) returning id',
+          [A, other],
+        )
+      ).rows[0].id;
+      await db.query(
+        "insert into public.aps_reconciliation_settings(revision_id,classification_id,classification_name) values ($1,$2,'historic')",
+        [revision, f.parent],
+      );
+      await db.query(
+        'insert into public.aps_reconciliation_settings_members(revision_id,classification_id,leaf_id) values ($1,$2,$3)',
+        [revision, f.parent, f.archivedLeaf],
+      );
+      await db.query(
+        'update public.aps_reconciliation_sessions set settings_revision_id=$1 where id=$2',
+        [revision, otherSession],
+      );
+      await db.query('set local role authenticated');
+      assert.equal((await state(scope)).historical_overlap, true);
+      assert.equal((await state(other)).historical_overlap, true);
+    });
+  });
+
+  await test('APS v3 concurrent sync and stale save serialize without losing accountant entries', async () => {
+    const f = await seedApsReconciliation();
+    const sessions = [];
+    const revisions = [];
+    const call = (sql, args = []) =>
+      asRole('authenticated', A, (c) => c.query(sql, args)).then((r) => r.rows[0]);
+    const c1 = await connect();
+    const c2 = await connect();
+    try {
+      const scope = (
+        await call('select public.aps_get_reconciliation_scopes_v3() as data')
+      ).data.find((x) => x.is_default).id;
+      const first = (
+        await call('select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3) as id', [
+          scope,
+          [f.parent],
+          null,
+        ])
+      ).id;
+      revisions.push(first);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      sessions.push(session);
+      const old = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month2.id,
+          scope,
+        ])
+      ).data;
+      revisions.push(old.selected_session.settings_revision_id);
+      const next = (
+        await call('select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3) as id', [
+          scope,
+          [f.parent, f.leafB],
+          first,
+        ])
+      ).id;
+      revisions.push(next);
+      for (const c of [c1, c2]) {
+        await c.query('begin');
+        await c.query('set local role authenticated');
+        await c.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+        await c.query("select set_config('request.jwt.claim.role','authenticated',true)");
+      }
+      await c1.query('select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        old.selected_session.snapshot_version,
+        old.selected_session.config_generation,
+        next,
+      ]);
+      const oldLine = old.selected_lines[0];
+      const pending = c2.query(
+        'select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)',
+        [
+          session,
+          scope,
+          oldLine.id,
+          oldLine.classification_id,
+          old.selected_session.config_generation,
+          oldLine.version,
+        ],
+      );
+      const observed = await Promise.race([
+        pending.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 100)),
+      ]);
+      assert.equal(observed, 'blocked');
+      await c1.query('commit');
+      await expectCode('40001', () => pending);
+      await c2.query('rollback');
+      const after = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month2.id,
+          scope,
+        ])
+      ).data;
+      assert.equal(after.selected_session.config_generation, '2');
+      assert.ok(after.selected_lines.every((x) => x.monthly.accountant_inbound === null));
+      revisions.push(after.selected_session.settings_revision_id);
+      // Reverse order: a committed accountant save invalidates the sync's
+      // optimistic snapshot and is retained, including explicit zero.
+      const session2 = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month1.id, scope])
+      ).id;
+      sessions.push(session2);
+      const before2 = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month1.id,
+          scope,
+        ])
+      ).data;
+      revisions.push(before2.selected_session.settings_revision_id);
+      for (const c of [c1, c2]) {
+        await c.query('begin');
+        await c.query('set local role authenticated');
+        await c.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+        await c.query("select set_config('request.jwt.claim.role','authenticated',true)");
+      }
+      const line = before2.selected_lines[0];
+      await c1.query('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        session2,
+        scope,
+        line.id,
+        line.classification_id,
+        before2.selected_session.config_generation,
+        line.version,
+      ]);
+      const pendingSync = c2.query(
+        'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)',
+        [
+          session2,
+          scope,
+          before2.selected_session.snapshot_version,
+          before2.selected_session.config_generation,
+          next,
+        ],
+      );
+      const observedSync = await Promise.race([
+        pendingSync.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('blocked'), 100)),
+      ]);
+      assert.equal(observedSync, 'blocked');
+      await c1.query('commit');
+      await expectCode('40001', () => pendingSync);
+      await c2.query('rollback');
+      const after2 = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month1.id,
+          scope,
+        ])
+      ).data;
+      assert.equal(
+        after2.selected_lines.find((x) => x.id === line.id).monthly.accountant_inbound,
+        '0.00',
+      );
+      assert.deepEqual(
+        (
+          await call('select public.aps_get_reconciliation_sync_history_v3($1,$2) as data', [
+            session2,
+            scope,
+          ])
+        ).data,
+        [],
+      );
+    } finally {
+      await c1.query('rollback').catch(() => {});
+      await c2.query('rollback').catch(() => {});
+      await c1.end();
+      await c2.end();
+      await db.query(
+        'delete from public.aps_reconciliation_sync_history where session_id=any($1::uuid[])',
+        [sessions],
+      );
+      await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
+        sessions,
+      ]);
+      await db.query(
+        'delete from public.aps_reconciliation_settings_current where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings_members where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings_revisions where id=any($1::uuid[])',
+        [revisions],
+      );
+      await cleanApsReconciliation(f, [], []);
+    }
+  });
+
+  await test('APS v3 settings and manage capabilities are separated and tables remain private', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const cfg = await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const before = await state(scope);
+      await db.query('reset role');
+      const manage = randomUUID();
+      const setting = randomUUID();
+      await db.query(
+        'insert into public.roles(id,slug,name_ar,name_en) values ($1,$2,$2,$2),($3,$4,$4,$4)',
+        [manage, `scope-manage-${manage}`, setting, `scope-settings-${setting}`],
+      );
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.reconciliation:manage'",
+        [manage],
+      );
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.reconciliation:settings'",
+        [setting],
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [E, manage]);
+      await db.query('set local role authenticated');
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [E]);
+      assert.ok(
+        (await call('select public.aps_get_reconciliation_scopes_v3() as data')).data.some(
+          (x) => x.id === scope,
+        ),
+      );
+      assert.equal((await state(scope)).current_config_revision_id, cfg);
+      await reject('42501', 'select public.aps_create_reconciliation_scope_v3($1)', ['Denied']);
+      await reject('42501', 'select public.aps_get_reconciliation_settings_v3($1)', [scope]);
+      for (const table of [
+        'aps_reconciliation_scopes',
+        'aps_reconciliation_scope_current',
+        'aps_reconciliation_scope_leaves',
+        'aps_reconciliation_sync_history',
+      ]) {
+        await reject('42501', `select * from public.${table}`);
+      }
+      await call('select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        before.selected_session.snapshot_version,
+        before.selected_session.config_generation,
+        cfg,
+      ]);
+      await db.query('reset role');
+      await db.query('delete from public.user_roles where user_id=$1 and role_id=$2', [E, manage]);
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [E, setting]);
+      await db.query('set local role authenticated');
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [E]);
+      await call('select public.aps_create_reconciliation_scope_v3($1)', ['Allowed']);
+      await reject('42501', 'select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        '2',
+        '2',
+        cfg,
+      ]);
+    });
+  });
+
+  await test('APS v3 concurrent scope configuration cannot claim the same leaf', async () => {
+    const f = await seedApsReconciliation();
+    const c1 = await connect();
+    const c2 = await connect();
+    let other;
+    let revision;
+    try {
+      const options = (
+        await asRole('authenticated', A, (c) =>
+          c.query('select public.aps_get_reconciliation_scopes_v3() as data'),
+        )
+      ).rows[0].data;
+      const scope = options.find((x) => x.is_default).id;
+      other = (
+        await asRole('authenticated', A, (c) =>
+          c.query('select public.aps_create_reconciliation_scope_v3($1) as id', ['Race scope']),
+        )
+      ).rows[0].id;
+      for (const c of [c1, c2]) {
+        await c.query('begin');
+        await c.query('set local role authenticated');
+        await c.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+        await c.query("select set_config('request.jwt.claim.role','authenticated',true)");
+      }
+      revision = (
+        await c1.query('select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3) as id', [
+          scope,
+          [f.leafA],
+          null,
+        ])
+      ).rows[0].id;
+      const pending = c2.query(
+        'select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3)',
+        [other, [f.leafA], null],
+      );
+      assert.equal(
+        await Promise.race([
+          pending.then(
+            () => 'resolved',
+            () => 'rejected',
+          ),
+          new Promise((resolve) => setTimeout(() => resolve('blocked'), 100)),
+        ]),
+        'blocked',
+      );
+      await c1.query('commit');
+      await expectCode('22023', () => pending);
+      await c2.query('rollback');
+    } finally {
+      await c1.query('rollback').catch(() => {});
+      await c2.query('rollback').catch(() => {});
+      await c1.end();
+      await c2.end();
+      if (revision) {
+        await db.query(
+          'delete from public.aps_reconciliation_settings_current where revision_id=$1',
+          [revision],
+        );
+        await db.query(
+          'delete from public.aps_reconciliation_settings_members where revision_id=$1',
+          [revision],
+        );
+        await db.query('delete from public.aps_reconciliation_settings where revision_id=$1', [
+          revision,
+        ]);
+        await db.query('delete from public.aps_reconciliation_settings_revisions where id=$1', [
+          revision,
+        ]);
+      }
+      if (other)
+        await db.query('delete from public.aps_reconciliation_scopes where id=$1', [other]);
+      await cleanApsReconciliation(f, [], []);
+    }
+  });
+
+  await test('APS v3 internal helpers and writer are not callable by API roles', async () => {
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      for (const signature of [
+        'public.aps_reconciliation_v3_configs()',
+        'public.aps_reconciliation_v3_rebuild_ownership()',
+        'public.aps_reconciliation_v3_capture_settings(uuid,uuid)',
+        'public.aps_reconciliation_v3_check_history(uuid,uuid,uuid)',
+        'public.aps_reconciliation_v3_close_reason(uuid,uuid)',
+        'public.aps_record_reconciliation_v3_internal(uuid,uuid,numeric,numeric,numeric,numeric,numeric,bigint)',
+      ]) {
+        assert.equal(
+          (
+            await db.query('select has_function_privilege($1,$2,$3) as allowed', [
+              role,
+              signature,
+              'execute',
+            ])
+          ).rows[0].allowed,
+          false,
+          `${role} ${signature}`,
+        );
+      }
+    }
+  });
+
   await test('APS v2 global: missing opening, all warehouses, monthly and manual YTD, immutable snapshots', async () => {
     await withGlobalV2Fixture(
       async ({ fixture: f, sessions, letters, extra, call, state, settings, open, record }) => {
@@ -8684,6 +9628,10 @@ try {
           'review_reason',
           'review_required_at',
           'snapshot_version',
+          'scope_id',
+          'source_config_revision_id',
+          'config_generation',
+          'scope_name_snapshot',
         ],
       );
       assert.deepEqual(
