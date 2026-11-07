@@ -22,9 +22,17 @@ import type { TranslationKey } from '@/i18n/locales/ar';
 import { APS_LETTER_CREATE_CAPABILITY, APS_LETTER_NEW_PATH } from '@/lib/apsLetterEntry';
 import { APS_LETTERS_PATH, APS_LETTERS_READ_REQUIREMENT } from '@/lib/apsLetters';
 import { WORKSPACES } from '@/lib/workspaces';
-import { APS_RECONCILIATION_PATH, APS_RECONCILIATION_REQUIREMENT } from '@/lib/apsReconciliation';
+import {
+  APS_RECONCILIATION_PATH,
+  APS_RECONCILIATION_REQUIREMENT,
+  APS_RECONCILIATION_SETTINGS_CAPABILITY,
+} from '@/lib/apsReconciliation';
 
 export const PROJECT_SETTINGS_CAPABILITY = 'project.settings:manage';
+export const PROJECT_SETTINGS_REQUIREMENT = [
+  PROJECT_SETTINGS_CAPABILITY,
+  APS_RECONCILIATION_SETTINGS_CAPABILITY,
+] as const;
 
 /*
  * Capability map for protected settings routes:
@@ -38,7 +46,7 @@ export const PROJECT_SETTINGS_CAPABILITY = 'project.settings:manage';
  *                                           accept is_admin OR settings.manage;
  *                                           `appearance.manage` is seeded but unused)
  *   notifications        → notifications.manage OR settings.manage (templates vs SMTP)
- *   project              → project.settings:manage (dedicated project identity RPCs)
+ *   project              → project.settings:manage OR aps.reconciliation:settings (per-tab gates)
  *
  * `'*'` is implicit in every requirement, so it is not repeated here.
  */
@@ -238,7 +246,7 @@ export const NAV_ITEMS: NavNode[] = [
         to: '/settings/project',
         labelKey: 'nav.projectSettings',
         icon: Settings2,
-        capability: PROJECT_SETTINGS_CAPABILITY,
+        capability: PROJECT_SETTINGS_REQUIREMENT,
       },
     ],
   },

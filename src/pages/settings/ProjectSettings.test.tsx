@@ -12,6 +12,10 @@ import type * as StationsDirectoryModule from '@/hooks/useStationsDirectory';
 import { I18nProvider } from '@/i18n/I18nContext';
 import ProjectSettings from '@/pages/settings/ProjectSettings';
 
+vi.mock('@/pages/settings/ReconciliationSettings', () => ({
+  default: () => <div>reconciliation panel</div>,
+}));
+
 const capabilityState = vi.hoisted(() => ({
   capabilities: ['*'] as string[],
 }));
@@ -226,7 +230,7 @@ describe('ProjectSettings', () => {
     window.localStorage.clear();
   });
 
-  it('renders the project settings shell with six tabs in the specified order', () => {
+  it('renders the project settings shell with seven tabs in the specified order', () => {
     renderScreen();
 
     expect(screen.getByRole('heading', { name: 'ضبط المشروع' })).toBeTruthy();
@@ -241,7 +245,7 @@ describe('ProjectSettings', () => {
     expect(tablist).toBeTruthy();
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs).toHaveLength(6);
+    expect(tabs).toHaveLength(7);
     expect(tabs[0]?.textContent).toBe('المحطات والمخازن');
     expect(tabs[1]?.textContent).toBe('التصنيفات');
     expect(tabs[2]?.textContent).toBe('جهات الوارد وأغراض الصرف');
@@ -286,7 +290,7 @@ describe('ProjectSettings', () => {
     expect(screen.getByText('IN-001')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'إضافة جهة داخل «جهات الوارد»' })).toBeTruthy();
     /* The roots replace the old sub-tab strip entirely. */
-    expect(screen.queryAllByRole('tab')).toHaveLength(6);
+    expect(screen.queryAllByRole('tab')).toHaveLength(7);
     // Only the active panel is mounted, so the classifications tree is gone.
     expect(screen.queryByText('المواد والمستلزمات')).toBeNull();
 
@@ -332,6 +336,22 @@ describe('ProjectSettings', () => {
     expect(screen.getByRole('heading', { name: /الوصول مرفوض/ })).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it('isolates reconciliation-only and project-only capabilities', () => {
+    capabilityState.capabilities = ['aps.reconciliation:settings'];
+    const view = renderScreen();
+    expect(screen.getAllByRole('tab')).toHaveLength(1);
+    expect(screen.getByRole('tab', { name: 'ضبط المطابقة' }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(screen.getByText('reconciliation panel')).toBeTruthy();
+    expect(screen.queryByText('المحطة الرئيسية')).toBeNull();
+    view.unmount();
+    capabilityState.capabilities = ['project.settings:manage'];
+    renderScreen();
+    expect(screen.getAllByRole('tab')).toHaveLength(6);
+    expect(screen.queryByRole('tab', { name: 'ضبط المطابقة' })).toBeNull();
   });
 
   it('does not render any form fields or queries', () => {

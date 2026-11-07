@@ -6,6 +6,7 @@ export const APS_RECONCILIATION_REQUIREMENT = [
   'aps.reconciliation:close_month',
   'aps.reconciliation:reopen_month',
 ] as const;
+export const APS_RECONCILIATION_SETTINGS_CAPABILITY = 'aps.reconciliation:settings';
 export const RECONCILIATION_PAGE_SIZE = 50;
 
 export interface MonthOption {
@@ -14,57 +15,99 @@ export interface MonthOption {
   is_active: boolean;
   is_fiscal_closed: boolean;
 }
-export interface StationOption {
-  id: string;
-  label: string;
-}
 export interface ReconciliationOptions {
   months: MonthOption[];
-  stations: StationOption[];
   can_manage: boolean;
   can_close: boolean;
   can_reopen_as_owner: boolean;
 }
 export interface ReconciliationSession {
   id: string;
-  status: 'open' | 'closed' | 'approved' | 'cancelled';
-  flow_type: 'screen' | 'legacy';
-  has_legacy_items: boolean;
+  status: 'open' | 'closed';
+  flow_type: 'screen_v2';
+  settings_revision_id: string;
+  needs_review: boolean;
+  review_reason: string | null;
   sequence_number: number;
+  snapshot_version: string;
+}
+export interface Movement {
+  book_inbound: string | null;
+  book_outbound: string | null;
+  accountant_inbound: string | null;
+  accountant_outbound: string | null;
+  book_balance: string | null;
+  accountant_balance: string | null;
+  inbound_difference: string | null;
+  outbound_difference: string | null;
+  balance_difference: string | null;
 }
 export interface ReconciliationLine {
   id: string;
   classification_id: string;
   classification_name: string;
-  book_amount: string;
-  accountant_amount: string;
-  difference: string;
-}
-export interface MonthSummary {
-  open_sessions_count: number;
-  eligible_open_screen_sessions: number;
-  eligible_open_stations_count: number;
-  eligible_closed_screen_sessions: number;
-  total_stations_with_sessions: number;
-  stations_with_nonzero_difference: {
-    station_id: string;
-    station_name: string;
-    total_difference: string;
-  }[];
-  total_month_difference: string;
+  version: string;
+  monthly: Movement;
+  ytd: Movement & {
+    book_opening: string | null;
+    accountant_opening: string | null;
+    accountant_opening_source: 'manual' | 'trusted_system' | 'missing';
+  };
 }
 export interface ReconciliationState {
   fiscal_month: { id: string; is_active: boolean; is_fiscal_closed: boolean };
   selected_session: ReconciliationSession | null;
   selected_lines: ReconciliationLine[];
-  month_summary: MonthSummary;
+  month_summary: {
+    open_sessions_count: number;
+    closed_sessions_count: number;
+    missing_system_opening_count: number;
+  };
   pagination: { offset: number; limit: number; has_more: boolean };
-  flags: {
-    can_close_now: boolean;
-    close_blocked_reason: 'no_eligible_open_sessions' | 'nonzero_differences' | null;
+  flags: { can_close_now: boolean; close_blocked_reason: string | null };
+}
+export interface ReconciliationClassification {
+  id: string;
+  name: string;
+  parent_id: string | null;
+  is_leaf: boolean;
+  is_active: boolean;
+}
+export interface ReconciliationSettings {
+  revision_id: string | null;
+  classifications: ReconciliationClassification[];
+  selected: string[];
+}
+export interface RecordAmounts {
+  monthlyInbound: string;
+  monthlyOutbound: string;
+  ytdInbound: string;
+  ytdOutbound: string;
+  opening: string | null;
+}
+export interface Draft {
+  version: string;
+  monthlyInbound: string;
+  monthlyOutbound: string;
+  ytdInbound: string;
+  ytdOutbound: string;
+  manual: boolean;
+  opening: string;
+  submitted?: RecordAmounts;
+  conflicted?: boolean;
+}
+export function makeDraft(line: ReconciliationLine): Draft {
+  return {
+    version: line.version,
+    monthlyInbound: line.monthly.accountant_inbound ?? '',
+    monthlyOutbound: line.monthly.accountant_outbound ?? '',
+    ytdInbound: line.ytd.accountant_inbound ?? '',
+    ytdOutbound: line.ytd.accountant_outbound ?? '',
+    manual: line.ytd.accountant_opening_source === 'manual',
+    opening:
+      line.ytd.accountant_opening_source === 'manual' ? (line.ytd.accountant_opening ?? '') : '',
   };
 }
-
 export class ReconciliationError extends Error {
   readonly code: string;
   constructor(code: string) {
@@ -75,27 +118,46 @@ export class ReconciliationError extends Error {
 function invalid(): never {
   throw new ReconciliationError('invalidResponse');
 }
-function obj(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+function obj(v: unknown): Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
     : invalid();
 }
-function str(value: unknown): string {
-  return typeof value === 'string' && value.trim() ? value : invalid();
+function str(v: unknown): string {
+  return typeof v === 'string' && v.trim() ? v : invalid();
 }
-function bool(value: unknown): boolean {
-  return typeof value === 'boolean' ? value : invalid();
+function nullableString(v: unknown): string | null {
+  return v === null ? null : str(v);
 }
-function count(value: unknown): number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : invalid();
+function bool(v: unknown): boolean {
+  return typeof v === 'boolean' ? v : invalid();
 }
-function list(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : invalid();
+function count(v: unknown): number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : invalid();
 }
-function money(value: unknown): string {
-  return typeof value === 'string' && /^-?\d+\.\d{2}$/.test(value) ? value : invalid();
+function list(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : invalid();
 }
-
+function version(v: unknown): string {
+  return typeof v === 'string' && /^\d+$/.test(v) ? v : invalid();
+}
+function money(v: unknown): string | null {
+  return v === null ? null : typeof v === 'string' && /^-?\d+\.\d{2}$/.test(v) ? v : invalid();
+}
+function movement(v: unknown): Movement {
+  const x = obj(v);
+  return {
+    book_inbound: money(x.book_inbound),
+    book_outbound: money(x.book_outbound),
+    accountant_inbound: money(x.accountant_inbound),
+    accountant_outbound: money(x.accountant_outbound),
+    book_balance: money(x.book_balance),
+    accountant_balance: money(x.accountant_balance),
+    inbound_difference: money(x.inbound_difference),
+    outbound_difference: money(x.outbound_difference),
+    balance_difference: money(x.balance_difference),
+  };
+}
 export function parseReconciliationOptions(value: unknown): ReconciliationOptions {
   const o = obj(value);
   const months = list(o.months).map((v) => {
@@ -107,33 +169,45 @@ export function parseReconciliationOptions(value: unknown): ReconciliationOption
       is_fiscal_closed: bool(m.is_fiscal_closed),
     };
   });
-  const stations = list(o.stations).map((v) => {
-    const s = obj(v);
-    return { id: str(s.id), label: str(s.label) };
-  });
-  if (
-    new Set(months.map((m) => m.id)).size !== months.length ||
-    new Set(stations.map((s) => s.id)).size !== stations.length
-  )
-    invalid();
+  if (new Set(months.map((m) => m.id)).size !== months.length) invalid();
   return {
     months,
-    stations,
     can_manage: bool(o.can_manage),
     can_close: bool(o.can_close),
     can_reopen_as_owner: bool(o.can_reopen_as_owner),
   };
+}
+export function parseReconciliationSettings(value: unknown): ReconciliationSettings {
+  const o = obj(value);
+  const classifications = list(o.classifications).map((v) => {
+    const c = obj(v);
+    return {
+      id: str(c.id),
+      name: str(c.name),
+      parent_id: nullableString(c.parent_id),
+      is_leaf: bool(c.is_leaf),
+      is_active: bool(c.is_active),
+    };
+  });
+  const selected = list(o.selected).map(str);
+  if (
+    new Set(classifications.map((c) => c.id)).size !== classifications.length ||
+    new Set(selected).size !== selected.length ||
+    selected.some((id) => !classifications.some((c) => c.id === id))
+  )
+    invalid();
+  return { revision_id: nullableString(o.revision_id), classifications, selected };
 }
 export function parseReconciliationState(
   value: unknown,
   monthId: string,
   offset: number,
 ): ReconciliationState {
-  const r = obj(value);
-  const month = obj(r.fiscal_month);
-  const p = obj(r.pagination);
-  const f = obj(r.flags);
-  const s = obj(r.month_summary);
+  const r = obj(value),
+    month = obj(r.fiscal_month),
+    p = obj(r.pagination),
+    f = obj(r.flags),
+    summary = obj(r.month_summary);
   if (
     str(month.id) !== monthId ||
     count(p.offset) !== offset ||
@@ -142,50 +216,43 @@ export function parseReconciliationState(
     invalid();
   let session: ReconciliationSession | null = null;
   if (r.selected_session !== null) {
-    const x = obj(r.selected_session);
-    if (
-      x.status !== 'open' &&
-      x.status !== 'closed' &&
-      x.status !== 'approved' &&
-      x.status !== 'cancelled'
-    )
-      invalid();
-    if (x.flow_type !== 'screen' && x.flow_type !== 'legacy') invalid();
+    const s = obj(r.selected_session);
+    if ((s.status !== 'open' && s.status !== 'closed') || s.flow_type !== 'screen_v2') invalid();
     session = {
-      id: str(x.id),
-      status: x.status,
-      flow_type: x.flow_type,
-      has_legacy_items: bool(x.has_legacy_items),
-      sequence_number: count(x.sequence_number),
+      id: str(s.id),
+      status: s.status,
+      flow_type: s.flow_type,
+      settings_revision_id: str(s.settings_revision_id),
+      needs_review: bool(s.needs_review),
+      review_reason: nullableString(s.review_reason),
+      sequence_number: count(s.sequence_number),
+      snapshot_version: version(s.snapshot_version),
     };
   }
   const lines = list(r.selected_lines).map((v): ReconciliationLine => {
-    const x = obj(v);
+    const x = obj(v),
+      y = obj(x.ytd),
+      source = y.accountant_opening_source;
+    if (source !== 'manual' && source !== 'trusted_system' && source !== 'missing') invalid();
     return {
       id: str(x.id),
       classification_id: str(x.classification_id),
       classification_name: str(x.classification_name),
-      book_amount: money(x.book_amount),
-      accountant_amount: money(x.accountant_amount),
-      difference: money(x.difference),
+      version: version(x.version),
+      monthly: movement(x.monthly),
+      ytd: {
+        ...movement(y),
+        book_opening: money(y.book_opening),
+        accountant_opening: money(y.accountant_opening),
+        accountant_opening_source: source,
+      },
     };
   });
   if (
     lines.length > RECONCILIATION_PAGE_SIZE ||
-    new Set(lines.map((x) => x.id)).size !== lines.length ||
-    (lines.length && (!session || session.flow_type !== 'screen' || session.has_legacy_items))
+    new Set(lines.map((l) => l.id)).size !== lines.length ||
+    (lines.length > 0 && !session)
   )
-    invalid();
-  const stations = list(s.stations_with_nonzero_difference).map((v) => {
-    const x = obj(v);
-    return {
-      station_id: str(x.station_id),
-      station_name: str(x.station_name),
-      total_difference: money(x.total_difference),
-    };
-  });
-  const reason = f.close_blocked_reason;
-  if (reason !== null && reason !== 'no_eligible_open_sessions' && reason !== 'nonzero_differences')
     invalid();
   return {
     fiscal_month: {
@@ -196,20 +263,18 @@ export function parseReconciliationState(
     selected_session: session,
     selected_lines: lines,
     month_summary: {
-      open_sessions_count: count(s.open_sessions_count),
-      eligible_open_screen_sessions: count(s.eligible_open_screen_sessions),
-      eligible_open_stations_count: count(s.eligible_open_stations_count),
-      eligible_closed_screen_sessions: count(s.eligible_closed_screen_sessions),
-      total_stations_with_sessions: count(s.total_stations_with_sessions),
-      stations_with_nonzero_difference: stations,
-      total_month_difference: money(s.total_month_difference),
+      open_sessions_count: count(summary.open_sessions_count),
+      closed_sessions_count: count(summary.closed_sessions_count),
+      missing_system_opening_count: count(summary.missing_system_opening_count),
     },
     pagination: { offset, limit: RECONCILIATION_PAGE_SIZE, has_more: bool(p.has_more) },
-    flags: { can_close_now: bool(f.can_close_now), close_blocked_reason: reason },
+    flags: {
+      can_close_now: bool(f.can_close_now),
+      close_blocked_reason: nullableString(f.close_blocked_reason),
+    },
   };
 }
-
-/** numeric(18,2): transmit the exact decimal as a JSON string, never a JS float. */
+/** Preserve numeric(18,2) exactly, without ever converting to a JS number. */
 export function normalizeReconciliationAmount(value: string): string | null {
   const match = /^(\d{1,16})(?:\.(\d{1,2}))?$/.exec(value.trim());
   if (!match?.[1]) return null;

@@ -21,3 +21,64 @@ describe('reconciliation financial values', () => {
     expect(() => parseReconciliationState({}, 'month', 0)).toThrow();
   });
 });
+
+describe('v2 read contract', () => {
+  const m = () => ({
+    book_inbound: '0.00',
+    book_outbound: '0.00',
+    accountant_inbound: null,
+    accountant_outbound: null,
+    book_balance: '0.00',
+    accountant_balance: null,
+    inbound_difference: null,
+    outbound_difference: null,
+    balance_difference: null,
+  });
+  const payload = () => ({
+    fiscal_month: { id: 'month', is_active: true, is_fiscal_closed: false },
+    selected_session: {
+      id: 'session',
+      status: 'open',
+      flow_type: 'screen_v2',
+      settings_revision_id: 'revision',
+      needs_review: false,
+      review_reason: null,
+      sequence_number: 1,
+      snapshot_version: '1234567890123456789',
+    },
+    selected_lines: [
+      {
+        id: 'line',
+        classification_id: 'class',
+        classification_name: 'class',
+        version: '1234567890123456789',
+        monthly: m(),
+        ytd: {
+          ...m(),
+          book_opening: null,
+          accountant_opening: null,
+          accountant_opening_source: 'missing',
+        },
+      },
+    ],
+    month_summary: {
+      open_sessions_count: 1,
+      closed_sessions_count: 0,
+      missing_system_opening_count: 1,
+    },
+    pagination: { offset: 0, limit: 50, has_more: false },
+    flags: { can_close_now: false, close_blocked_reason: 'missing_system_opening' },
+  });
+  it('retains decimal text, null, and bigint versions as strings', () => {
+    const result = parseReconciliationState(payload(), 'month', 0);
+    expect(result.selected_lines[0]?.ytd.book_opening).toBeNull();
+    expect(result.selected_lines[0]?.monthly.book_inbound).toBe('0.00');
+    expect(result.selected_lines[0]?.version).toBe('1234567890123456789');
+  });
+  it('rejects JSON numeric financial values instead of rounding them', () => {
+    const value = payload();
+    const line = value.selected_lines[0]!;
+    (line.monthly as { book_inbound: unknown }).book_inbound = 1;
+    expect(() => parseReconciliationState(value, 'month', 0)).toThrow('invalidResponse');
+  });
+});

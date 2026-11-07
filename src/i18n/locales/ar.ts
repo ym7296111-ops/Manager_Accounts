@@ -1870,6 +1870,77 @@ export const ar = {
 
   /* ------------------------------------------------------------- common */
   'common.loading': 'جارٍ التحميل...',
+  'aps.recon.v2.settingsTab': 'ضبط المطابقة',
+  'aps.recon.v2.settingsIntro':
+    'اختر تصنيفات المطابقة. اختيار فرع يشمل جميع أوراقه، بما فيها الأوراق غير النشطة ذات البيانات السابقة. لا يمكن اختيار فرع وأحد فروعه معاً. تنطبق التغييرات على الجلسات الجديدة فقط.',
+  'aps.recon.v2.settingsEmpty': 'اختر تصنيفاً واحداً على الأقل.',
+  'aps.recon.v2.settingsSaved': 'تم حفظ الإعدادات والتحقق منها.',
+  'aps.recon.v2.settingsFailed': 'تعذر حفظ الإعدادات أو تأكيدها؛ اختياراتك لا تزال محفوظة محلياً.',
+  'aps.recon.v2.inactive': 'غير نشط',
+  'aps.recon.v2.v2Description': 'مطابقة عالمية للشهر، دون اختيار محطة.',
+  'aps.recon.v2.monthly': 'الحركة الشهرية',
+  'aps.recon.v2.ytd': 'التراكمي منذ بداية السنة',
+  'aps.recon.v2.bookInbound': 'وارد النظام',
+  'aps.recon.v2.accountantInbound': 'وارد المحاسب',
+  'aps.recon.v2.bookOutbound': 'منصرف النظام',
+  'aps.recon.v2.accountantOutbound': 'منصرف المحاسب',
+  'aps.recon.v2.bookBalance': 'رصيد النظام',
+  'aps.recon.v2.accountantBalance': 'رصيد المحاسب',
+  'aps.recon.v2.bookOpening': 'افتتاح النظام',
+  'aps.recon.v2.accountantOpening': 'افتتاح المحاسب',
+  'aps.recon.v2.bookClosing': 'ختامي النظام',
+  'aps.recon.v2.accountantClosing': 'ختامي المحاسب',
+  'aps.recon.v2.notEntered': 'غير مدخل',
+  'aps.recon.v2.openingManual': 'افتتاح مستقل أدخله المحاسب',
+  'aps.recon.v2.openingSystem': 'مرجع النظام، ليس تأكيداً مستقلاً',
+  'aps.recon.v2.openingMissing': 'الافتتاح مفقود',
+  'aps.recon.v2.edit': 'إدخال المحاسب — {name}',
+  'aps.recon.v2.movementSection': 'الحركة الشهرية والتراكمية',
+  'aps.recon.v2.ytdInbound': 'وارد المحاسب التراكمي',
+  'aps.recon.v2.ytdOutbound': 'منصرف المحاسب التراكمي',
+  'aps.recon.v2.openingSection': 'رصيد أول المدة',
+  'aps.recon.v2.openingHelp':
+    'افتتاح السنة لهذا التصنيف ليس حركة شهرية. يُحفظ في جلسة الشهر ولا ينتقل تلقائياً إلى الجلسات الأخرى. عند عدم إدخاله يُستخدم افتتاح النظام مرجعاً إن وُجد.',
+  'aps.recon.v2.useManual': 'إدخال افتتاح مستقل',
+  'aps.recon.v2.allRequired': 'أدخل الوارد والمنصرف الشهريين والتراكميين؛ لا تُفترض أصفار.',
+  'aps.recon.v2.pendingDraft': 'توجد مسودة محلية غير مؤكدة لهذا السطر.',
+  'aps.recon.v2.refreshSnapshot': 'تحديث لقطة النظام',
+  'aps.recon.v2.needsReview':
+    'تغيّر المصدر أو أُعيد فتح الجلسة؛ يجب تحديث اللقطة ومراجعتها قبل التعديل والإغلاق.',
+  'aps.recon.v2.inconsistent': 'تغيّرت لقطة البيانات بين الصفحات. حدّث البيانات قبل أي عملية.',
+  'aps.recon.v2.missingOpening': 'لا يمكن الإغلاق لغياب افتتاح النظام لبعض التصنيفات.',
+  'aps.recon.v2.incomplete': 'لا يمكن الإغلاق قبل اكتمال القيم المطلوبة.',
+  'aps.recon.v2.otherSessions': 'توجد جلسات أخرى تمنع الإغلاق.',
+  'aps.recon.v2.differences':
+    'لا يمكن الإغلاق لوجود اختلاف في حركة أو رصيد، حتى إذا كان صافي الفرق صفراً.',
+  'aps.recon.v2.noSession': 'لا توجد جلسة مطابقة v2 لهذا الشهر.',
+  'aps.recon.v2.v2Open': 'فتح جلسة المطابقة',
+  'aps.recon.v2.closeBlocked': 'سبب منع الإغلاق: {reason}',
+  'aps.recon.v2.refreshRead': 'إعادة قراءة البيانات',
+  'aps.recon.v2.draftUnconfirmed':
+    'تعذّر تأكيد الحفظ من الخادم؛ المسودة محفوظة محلياً. أعد القراءة قبل المحاولة.',
+  'aps.recon.v2.openingsSource': 'مصدر افتتاح المحاسب',
+  'aps.recon.v2.settingsError': 'تعذّر تحميل إعدادات المطابقة.',
+  'aps.recon.v2.v2CloseScope':
+    'سيتم إغلاق جلسة المطابقة العالمية للشهر بعد تحقق الخادم من كل تصنيف وكل حركة.',
+  'aps.recon.v2.v2ReopenScope': 'ستُعاد الجلسة للمراجعة قبل تعديلها.',
+  'aps.recon.v2.v2Empty': 'لا توجد أشهر متاحة.',
+  'aps.recon.v2.v2Select': 'اختر شهراً لعرض المطابقة.',
+  'aps.recon.v2.draftSaved': 'تم حفظ السطر وتأكيد القيم من الخادم.',
+  'aps.recon.v2.v2Status': 'حالة المطابقة',
+  'aps.recon.v2.versionConflict':
+    'تغيّر السطر أو الجلسة؛ احتُفظ بالمسودة. حدّث البيانات وراجعها قبل إعادة المحاولة.',
+  'aps.recon.v2.draftOther': 'هناك مسودات غير مؤكدة. أعد فتح التصنيف لمراجعتها.',
+  'aps.recon.v2.confirmClose': 'تأكيد إغلاق الشهر',
+  'aps.recon.v2.confirmReopen': 'تأكيد إعادة فتح الشهر',
+  'aps.recon.v2.currentValues': 'القيم الحالية من آخر قراءة للخادم',
+  'aps.recon.v2.rebaseDraft': 'الاحتفاظ بالمسودة ومتابعة التعديل',
+  'aps.recon.v2.rebaseConfirm':
+    'بعد مراجعة قيم الخادم الحالية، هل تريد الاحتفاظ بمسودتك وإعادة تعديلها؟ لن تُحفظ حتى تضغط حفظ.',
+  'aps.recon.v2.sessionStorageWarning':
+    'التخزين المحلي غير متاح؛ تُحفظ المسودات لهذا التبويب فقط ولن تبقى بعد إغلاقه.',
+  'aps.recon.v2.memoryStorageWarning':
+    'التخزين المحلي وتخزين التبويب غير متاحين؛ المسودات في الذاكرة فقط وستُفقد عند مغادرة الصفحة أو إعادة تحميلها أو إغلاقها.',
   'common.close': 'إغلاق',
 } as const;
 

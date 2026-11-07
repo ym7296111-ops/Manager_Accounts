@@ -1,418 +1,296 @@
 import { ModalShell } from '@/components/ui/ModalShell';
 import { useI18n } from '@/i18n/I18nContext';
+import type { TranslationKey } from '@/i18n/locales/ar';
 import {
   formatReconciliationAmount,
-  type MonthOption,
-  type MonthSummary,
   type ReconciliationLine,
-  type StationOption,
+  type Draft,
 } from '@/lib/apsReconciliation';
 
-const button =
-  'rounded-lg border border-border px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50 hover:bg-muted';
-export interface Draft {
-  value: string;
-  baseline: string;
-  error?: string;
-}
-
-export function ReconciliationStatus({ message, retry }: { message: string; retry?: () => void }) {
-  const { t } = useI18n();
-  return (
-    <div role="status" className="border-border bg-card rounded-xl border p-4 text-sm">
-      {message}
-      {retry && (
-        <button type="button" className={`${button} ms-3`} onClick={retry}>
-          {t('aps.recon.retry')}
-        </button>
-      )}
-    </div>
-  );
-}
-export function ReconciliationHeader({
-  months,
-  stations,
-  monthId,
-  stationId,
-  onMonthChange,
-  onStationChange,
-  disabled,
-}: {
-  months: MonthOption[];
-  stations: StationOption[];
-  monthId: string;
-  stationId: string;
-  onMonthChange: (id: string) => void;
-  onStationChange: (id: string) => void;
-  disabled: boolean;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <label className="grid gap-1 text-sm font-semibold">
-        {t('aps.recon.month')}
-        <select
-          value={monthId}
-          disabled={disabled}
-          onChange={(e) => onMonthChange(e.target.value)}
-          className="bg-card border-border rounded-lg border p-2"
-        >
-          <option value="">{t('aps.recon.chooseMonth')}</option>
-          {months.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-              {m.is_active ? ` — ${t('aps.recon.active')}` : ''}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="grid gap-1 text-sm font-semibold">
-        {t('aps.recon.station')}
-        <select
-          value={stationId}
-          disabled={disabled}
-          onChange={(e) => onStationChange(e.target.value)}
-          className="bg-card border-border rounded-lg border p-2"
-        >
-          <option value="">{t('aps.recon.chooseStation')}</option>
-          {stations.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
-  );
-}
-export function ReconciliationSummary({
-  summary,
-  fiscalClosed,
-  onStation,
-}: {
-  summary: MonthSummary;
-  fiscalClosed: boolean;
-  onStation: (id: string) => void;
-}) {
+export const button =
+  'rounded-lg border border-border px-3 py-2 text-sm font-semibold hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50';
+export function Amount({ value }: { value: string | null }) {
   const { t, locale } = useI18n();
-  return (
-    <section
-      aria-labelledby="recon-summary"
-      className="border-border bg-card space-y-3 rounded-xl border p-4"
-    >
-      <h2 id="recon-summary" className="font-bold">
-        {t('aps.recon.summary')}
-      </h2>
-      <p className="text-sm">
-        {t(fiscalClosed ? 'aps.recon.fiscalClosed' : 'aps.recon.fiscalOpen')}
-      </p>
-      <div className="grid gap-2 text-sm sm:grid-cols-3">
-        <span>{t('aps.recon.openSessions', { count: summary.open_sessions_count })}</span>
-        <span>
-          {t('aps.recon.eligibleSessions', { count: summary.eligible_open_screen_sessions })}
-        </span>
-        <span>
-          {t('aps.recon.eligibleStations', { count: summary.eligible_open_stations_count })}
-        </span>
-      </div>
-      {summary.stations_with_nonzero_difference.length ? (
-        <div className="space-y-2">
-          <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
-            {t('aps.recon.unbalanced')}
-          </p>
-          <ul className="space-y-2">
-            {summary.stations_with_nonzero_difference.map((s) => (
-              <li key={s.station_id} className="flex flex-wrap items-center gap-3 text-sm">
-                <span className="break-words">{s.station_name}</span>
-                <span dir="ltr">{formatReconciliationAmount(s.total_difference, locale)}</span>
-                <button type="button" className={button} onClick={() => onStation(s.station_id)}>
-                  {t('aps.recon.details')}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <p className="text-muted-foreground text-xs">{t('aps.recon.netWarning')}</p>
-        </div>
-      ) : (
-        <p className="text-sm">{t('aps.recon.noDifferences')}</p>
-      )}
-      <p className="text-sm">
-        {t('aps.recon.closedSessions', { count: summary.eligible_closed_screen_sessions })} ·{' '}
-        {t('aps.recon.totalStations', { count: summary.total_stations_with_sessions })}
-      </p>
-      <p className="text-sm font-semibold">
-        {t('aps.recon.total')}{' '}
-        <span dir="ltr" className="inline-block">
-          {formatReconciliationAmount(summary.total_month_difference, locale)}
-        </span>
-      </p>
-    </section>
+  return value === null ? (
+    <span className="font-semibold text-amber-700 dark:text-amber-300">
+      {t('aps.recon.v2.notEntered')}
+    </span>
+  ) : (
+    <span dir="ltr" className="inline-block">
+      {formatReconciliationAmount(value, locale)}
+    </span>
   );
 }
-export function ReconciliationActions({
-  canOpen,
-  canClose,
-  showReopen,
-  canReopen,
-  busy,
-  onOpen,
-  onClose,
-  onReopen,
-}: {
-  canOpen: boolean;
-  canClose: boolean;
-  showReopen: boolean;
-  canReopen: boolean;
-  busy: boolean;
-  onOpen: () => void;
-  onClose: () => void;
-  onReopen: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="flex flex-wrap gap-2">
-      <button type="button" className={button} disabled={!canOpen || busy} onClick={onOpen}>
-        {t('aps.recon.open')}
-      </button>
-      <button type="button" className={button} disabled={!canClose || busy} onClick={onClose}>
-        {t('aps.recon.closeMonth')}
-      </button>
-      {showReopen && (
-        <button type="button" className={button} disabled={!canReopen || busy} onClick={onReopen}>
-          {t('aps.recon.reopen')}
-        </button>
-      )}
-    </div>
-  );
-}
-export function ReconciliationRow({
-  line,
-  draft,
-  readOnly,
-  busy,
-  onChange,
-  onSave,
-  onDiscard,
-}: {
-  line: ReconciliationLine;
-  draft?: Draft;
-  readOnly: boolean;
-  busy: boolean;
-  onChange: (value: string) => void;
-  onSave: () => void;
-  onDiscard: () => void;
-}) {
-  const { t, locale } = useI18n();
-  const conflict = !!draft && draft.baseline !== line.accountant_amount;
-  return (
-    <tr className="border-border border-t align-top">
-      <th scope="row" className="max-w-72 p-3 text-start font-medium break-words whitespace-normal">
-        {line.classification_name}
-      </th>
-      <td className="p-3">
-        <span dir="ltr" className="inline-block">
-          {formatReconciliationAmount(line.book_amount, locale)}
-        </span>
-      </td>
-      <td className="p-3">
-        {readOnly ? (
-          <span dir="ltr" className="inline-block">
-            {formatReconciliationAmount(line.accountant_amount, locale)}
-          </span>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              aria-label={t('aps.recon.amountFor', { name: line.classification_name })}
-              inputMode="decimal"
-              maxLength={50}
-              dir="ltr"
-              value={draft?.value ?? line.accountant_amount}
-              disabled={busy}
-              onChange={(e) => onChange(e.target.value)}
-              className="bg-background border-border w-36 rounded-md border p-2"
-            />
-            <button
-              type="button"
-              aria-label={t('aps.recon.saveFor', { name: line.classification_name })}
-              className={button}
-              onClick={onSave}
-              disabled={!draft || conflict || busy}
-            >
-              {t('aps.recon.save')}
-            </button>
-          </div>
-        )}
-        {readOnly && draft && (
-          <p className="mt-1 text-sm">
-            {t('aps.recon.unsavedValue')} <span dir="ltr">{draft.value}</span>
-          </p>
-        )}
-        {draft?.error && (
-          <p role="alert" className="mt-1 text-sm text-red-700 dark:text-red-300">
-            {draft.error}
-          </p>
-        )}
-        {conflict && (
-          <div role="alert" className="mt-1 text-sm">
-            <p>{t('aps.recon.conflict')}</p>
-            <button type="button" className={button} onClick={onDiscard} disabled={busy}>
-              {t('aps.recon.useSaved')}
-            </button>
-          </div>
-        )}
-      </td>
-      <td className="p-3">
-        <span dir="ltr" className="inline-block">
-          {formatReconciliationAmount(line.difference, locale)}
-        </span>
-        {draft && (
-          <p className="text-muted-foreground mt-1 text-xs">{t('aps.recon.previousDifference')}</p>
-        )}
-      </td>
-      <td className="p-3 text-sm">
-        {readOnly ? t('aps.recon.readOnly') : draft ? t('aps.recon.unsaved') : t('aps.recon.saved')}
-      </td>
-    </tr>
-  );
-}
-export function ReconciliationTable({
+const columns: { key: keyof ReconciliationLine['monthly']; label: TranslationKey }[] = [
+  { key: 'book_inbound', label: 'aps.recon.v2.bookInbound' },
+  { key: 'accountant_inbound', label: 'aps.recon.v2.accountantInbound' },
+  { key: 'book_outbound', label: 'aps.recon.v2.bookOutbound' },
+  { key: 'accountant_outbound', label: 'aps.recon.v2.accountantOutbound' },
+  { key: 'book_balance', label: 'aps.recon.v2.bookBalance' },
+  { key: 'accountant_balance', label: 'aps.recon.v2.accountantBalance' },
+  { key: 'balance_difference', label: 'aps.recon.difference' },
+];
+export function ReconciliationTables({
   lines,
-  drafts,
   readOnly,
-  busy,
-  hasMore,
-  loadingMore,
-  onChange,
-  onSave,
-  onDiscard,
-  onMore,
+  draftIds,
+  onEdit,
 }: {
   lines: ReconciliationLine[];
-  drafts: Record<string, Draft>;
   readOnly: boolean;
-  busy: boolean;
-  hasMore: boolean;
-  loadingMore: boolean;
-  onChange: (line: ReconciliationLine, value: string) => void;
-  onSave: (line: ReconciliationLine) => void;
-  onDiscard: (id: string) => void;
-  onMore: () => void;
+  draftIds: Set<string>;
+  onEdit: (line: ReconciliationLine) => void;
 }) {
   const { t } = useI18n();
   return (
-    <section
-      aria-label={t('aps.recon.table')}
-      className="border-border bg-card overflow-hidden rounded-xl border"
-    >
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[700px] text-sm">
+    <div className="space-y-5">
+      <section
+        aria-label={t('aps.recon.v2.monthly')}
+        className="bg-card border-border overflow-x-auto rounded-xl border"
+      >
+        <h2 className="p-3 font-semibold">{t('aps.recon.v2.monthly')}</h2>
+        <table className="w-full min-w-[1000px] text-sm">
           <thead>
-            <tr className="text-start">
+            <tr>
               <th className="p-3 text-start">{t('aps.recon.classification')}</th>
-              <th className="p-3 text-start">{t('aps.recon.book')}</th>
-              <th className="p-3 text-start">{t('aps.recon.accountant')}</th>
-              <th className="p-3 text-start">{t('aps.recon.difference')}</th>
+              {columns.map((c) => (
+                <th key={c.key} className="p-3 text-start">
+                  {t(c.label)}
+                </th>
+              ))}
               <th className="p-3 text-start">{t('aps.recon.rowStatus')}</th>
             </tr>
           </thead>
           <tbody>
             {lines.map((line) => (
-              <ReconciliationRow
-                key={line.id}
-                line={line}
-                draft={drafts[line.id]}
-                readOnly={readOnly}
-                busy={busy}
-                onChange={(value) => onChange(line, value)}
-                onSave={() => onSave(line)}
-                onDiscard={() => onDiscard(line.id)}
-              />
+              <tr key={line.id} className="border-border border-t">
+                <th scope="row" className="p-3 text-start break-words">
+                  {line.classification_name}
+                </th>
+                {columns.map((c) => (
+                  <td key={c.key} className="p-3">
+                    <Amount value={line.monthly[c.key]} />
+                  </td>
+                ))}
+                <td className="p-3">
+                  {draftIds.has(line.id) && <p>{t('aps.recon.v2.pendingDraft')}</p>}
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={readOnly}
+                    onClick={() => onEdit(line)}
+                  >
+                    {t('aps.recon.v2.edit', { name: line.classification_name })}
+                  </button>
+                </td>
+              </tr>
             ))}
           </tbody>
         </table>
-      </div>
-      {!lines.length && <p className="p-4 text-sm">{t('aps.recon.noLines')}</p>}
-      {hasMore && (
-        <div className="p-3">
-          <button type="button" className={button} disabled={busy || loadingMore} onClick={onMore}>
-            {t(loadingMore ? 'aps.recon.loading' : 'aps.recon.more')}
-          </button>
+        {!lines.length && <p className="p-3">{t('aps.recon.noLines')}</p>}
+      </section>
+      <details className="bg-card border-border rounded-xl border">
+        <summary className="cursor-pointer p-3 font-semibold">{t('aps.recon.v2.ytd')}</summary>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[1200px] text-sm">
+            <thead>
+              <tr>
+                {(
+                  [
+                    'aps.recon.classification',
+                    'aps.recon.v2.bookOpening',
+                    'aps.recon.v2.accountantOpening',
+                    'aps.recon.v2.bookInbound',
+                    'aps.recon.v2.accountantInbound',
+                    'aps.recon.v2.bookOutbound',
+                    'aps.recon.v2.accountantOutbound',
+                    'aps.recon.v2.bookClosing',
+                    'aps.recon.v2.accountantClosing',
+                    'aps.recon.difference',
+                  ] as TranslationKey[]
+                ).map((key) => (
+                  <th className="p-3 text-start" key={key}>
+                    {t(key)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={line.id} className="border-border border-t">
+                  <th scope="row" className="p-3 text-start break-words">
+                    {line.classification_name}
+                  </th>
+                  <td className="p-3">
+                    <Amount value={line.ytd.book_opening} />
+                  </td>
+                  <td className="p-3">
+                    <Amount value={line.ytd.accountant_opening} />
+                    <p className="text-muted-foreground text-xs">
+                      {t(
+                        line.ytd.accountant_opening_source === 'manual'
+                          ? 'aps.recon.v2.openingManual'
+                          : line.ytd.accountant_opening_source === 'trusted_system'
+                            ? 'aps.recon.v2.openingSystem'
+                            : 'aps.recon.v2.openingMissing',
+                      )}
+                    </p>
+                  </td>
+                  {columns.map((c) => (
+                    <td key={c.key} className="p-3">
+                      <Amount value={line.ytd[c.key]} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
-    </section>
+      </details>
+    </div>
   );
 }
-export function ReasonDialog({
-  operation,
-  reason,
+export function EntryDialog({
+  line,
+  draft,
   busy,
-  canConfirm,
   error,
-  summary,
   onChange,
-  onConfirm,
-  onCancel,
+  onSave,
+  onClose,
+  onRebase,
+  canAccept,
+  onAccept,
 }: {
-  operation: 'close' | 'reopen';
-  reason: string;
+  line: ReconciliationLine;
+  draft: Draft;
   busy: boolean;
-  canConfirm: boolean;
   error: string | null;
-  summary: MonthSummary;
-  onChange: (value: string) => void;
-  onConfirm: () => void;
-  onCancel: () => void;
+  onChange: (draft: Draft) => void;
+  onSave: () => void;
+  onClose: () => void;
+  onRebase: () => void;
+  canAccept: boolean;
+  onAccept: () => void;
 }) {
   const { t } = useI18n();
-  const valid = Array.from(reason.trim()).length >= 3 && Array.from(reason.trim()).length <= 500;
+  const conflict = draft.version !== line.version || !!draft.submitted;
+  const fields: {
+    key: 'monthlyInbound' | 'monthlyOutbound' | 'ytdInbound' | 'ytdOutbound';
+    label: TranslationKey;
+  }[] = [
+    { key: 'monthlyInbound', label: 'aps.recon.v2.accountantInbound' },
+    { key: 'monthlyOutbound', label: 'aps.recon.v2.accountantOutbound' },
+    { key: 'ytdInbound', label: 'aps.recon.v2.ytdInbound' },
+    { key: 'ytdOutbound', label: 'aps.recon.v2.ytdOutbound' },
+  ];
   return (
     <ModalShell
-      titleId="reconciliation-reason-title"
-      title={t(operation === 'close' ? 'aps.recon.closeTitle' : 'aps.recon.reopenTitle')}
+      titleId="entry-title"
+      title={t('aps.recon.v2.edit', { name: line.classification_name })}
       closeLabel={t('aps.recon.cancel')}
-      onClose={onCancel}
+      onClose={onClose}
       busy={busy}
     >
-      <div className="mt-4 space-y-4 text-sm">
-        <p>{t(operation === 'close' ? 'aps.recon.closeScope' : 'aps.recon.reopenScope')}</p>
-        {operation === 'close' && (
-          <p>
-            {t('aps.recon.closeCounts', {
-              sessions: summary.eligible_open_screen_sessions,
-              stations: summary.eligible_open_stations_count,
-            })}
-          </p>
+      <div className="mt-4 space-y-4">
+        <fieldset className="space-y-3">
+          <legend className="font-semibold">{t('aps.recon.v2.movementSection')}</legend>
+          {fields.map((f) => (
+            <label key={f.key} className="grid gap-1 text-sm">
+              {t(f.label)}
+              <input
+                dir="ltr"
+                inputMode="decimal"
+                maxLength={50}
+                className="border-border bg-background rounded border p-2"
+                disabled={busy || conflict}
+                value={draft[f.key]}
+                onChange={(e) => onChange({ ...draft, [f.key]: e.target.value })}
+              />
+            </label>
+          ))}
+        </fieldset>
+        <fieldset className="space-y-3">
+          <legend className="font-semibold">{t('aps.recon.v2.openingSection')}</legend>
+          <p className="text-muted-foreground text-sm">{t('aps.recon.v2.openingHelp')}</p>
+          <label className="flex gap-2">
+            <input
+              type="checkbox"
+              checked={draft.manual}
+              disabled={busy || conflict}
+              onChange={(e) => onChange({ ...draft, manual: e.target.checked })}
+            />
+            {t('aps.recon.v2.useManual')}
+          </label>
+          {draft.manual && (
+            <label className="grid gap-1 text-sm">
+              {t('aps.recon.v2.accountantOpening')}
+              <input
+                dir="ltr"
+                inputMode="decimal"
+                maxLength={50}
+                className="border-border bg-background rounded border p-2"
+                disabled={busy || conflict}
+                value={draft.opening}
+                onChange={(e) => onChange({ ...draft, opening: e.target.value })}
+              />
+            </label>
+          )}
+        </fieldset>
+        <p className="text-sm">{t('aps.recon.v2.allRequired')}</p>
+        {conflict && (
+          <div role="alert">
+            <p>{t('aps.recon.v2.versionConflict')}</p>
+            <p className="mt-2 font-semibold">{t('aps.recon.v2.currentValues')}</p>
+            <ul className="space-y-1 text-sm">
+              <li>
+                {t('aps.recon.v2.accountantInbound')}:{' '}
+                <Amount value={line.monthly.accountant_inbound} />
+              </li>
+              <li>
+                {t('aps.recon.v2.accountantOutbound')}:{' '}
+                <Amount value={line.monthly.accountant_outbound} />
+              </li>
+              <li>
+                {t('aps.recon.v2.ytdInbound')}: <Amount value={line.ytd.accountant_inbound} />
+              </li>
+              <li>
+                {t('aps.recon.v2.ytdOutbound')}: <Amount value={line.ytd.accountant_outbound} />
+              </li>
+              <li>
+                {t('aps.recon.v2.accountantOpening')}:{' '}
+                <Amount value={line.ytd.accountant_opening} /> (
+                {t(
+                  line.ytd.accountant_opening_source === 'manual'
+                    ? 'aps.recon.v2.openingManual'
+                    : line.ytd.accountant_opening_source === 'trusted_system'
+                      ? 'aps.recon.v2.openingSystem'
+                      : 'aps.recon.v2.openingMissing',
+                )}
+                )
+              </li>
+            </ul>
+            <button type="button" className={button} disabled={busy} onClick={onRebase}>
+              {t('aps.recon.v2.refreshRead')}
+            </button>
+            <button
+              type="button"
+              className={button}
+              disabled={busy || !canAccept}
+              onClick={onAccept}
+            >
+              {t('aps.recon.v2.rebaseDraft')}
+            </button>
+          </div>
         )}
-        <label className="grid gap-1 font-semibold">
-          {t('aps.recon.reason')}
-          <textarea
-            autoFocus
-            value={reason}
-            maxLength={500}
-            disabled={busy}
-            onChange={(e) => onChange(e.target.value)}
-            className="border-border bg-background min-h-24 rounded-lg border p-2"
-          />
-        </label>
-        <p className="text-muted-foreground">{t('aps.recon.reasonHint')}</p>
         {error && (
           <p role="alert" className="text-red-700 dark:text-red-300">
             {error}
           </p>
         )}
-        <div className="flex gap-2">
-          <button type="button" className={button} onClick={onCancel} disabled={busy}>
-            {t('aps.recon.cancel')}
-          </button>
-          <button
-            type="button"
-            className={button}
-            onClick={onConfirm}
-            disabled={busy || !valid || !canConfirm}
-          >
-            {t('aps.recon.confirm')}
-          </button>
-        </div>
+        <button type="button" className={button} onClick={onSave} disabled={busy || conflict}>
+          {t('aps.recon.save')}
+        </button>
       </div>
     </ModalShell>
   );

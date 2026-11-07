@@ -9,11 +9,12 @@ import { defineConfig } from 'vite';
  * Purpose: render the real Project Settings screen — including its fiscal
  * year, period, opening-balance and directory panels — in a browser that has no
  * Supabase project behind it.
- * Two substitutions, nothing else:
+ * Preview-only substitutions:
  *
  *   1. `@/components/auth/RequireAuth` → a pass-through `RequireCapability`
  *      (there is no session to derive capabilities from in a preview).
- *   2. `@/lib/supabase` → `src/dev/preview/memorySupabase.ts`, an in-memory
+ *   2. `@/hooks/useAuthCapabilities` → project-settings capability stub.
+ *   3. `@/lib/supabase` → `src/dev/preview/memorySupabase.ts`, an in-memory
  *      stand-in that mints codes and derives `level`/`is_leaf` the way the
  *      database triggers do, so the write path is clickable end to end.
  *
@@ -30,6 +31,12 @@ export default defineConfig({
         find: /^@\/components\/auth\/RequireAuth$/,
         replacement: fileURLToPath(
           new URL('./src/dev/preview/RequireCapabilityPassthrough.tsx', import.meta.url),
+        ),
+      },
+      {
+        find: /^@\/hooks\/useAuthCapabilities$/,
+        replacement: fileURLToPath(
+          new URL('./src/dev/preview/previewCapabilities.ts', import.meta.url),
         ),
       },
       /* Exact match first: the client. Without this the hooks would receive

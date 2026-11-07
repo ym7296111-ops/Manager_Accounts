@@ -3,6 +3,7 @@ import { requirementMet } from '@/hooks/useAuthCapabilities';
 import {
   NAV_ITEMS,
   PROJECT_SETTINGS_CAPABILITY,
+  PROJECT_SETTINGS_REQUIREMENT,
   filterNavByCapability,
   findNavLinkByPath,
   getGroupChainForPath,
@@ -95,7 +96,7 @@ describe('sidebar capability filter', () => {
       kind: 'link',
       id: 'settings-project',
       to: '/settings/project',
-      capability: PROJECT_SETTINGS_CAPABILITY,
+      capability: PROJECT_SETTINGS_REQUIREMENT,
     });
   });
 
@@ -105,6 +106,12 @@ describe('sidebar capability filter', () => {
     expect(ids).toContain('settings-project');
     expect(ids).not.toContain('settings-system');
     expect(ids).not.toContain('settings-app');
+  });
+
+  it('shows project settings for reconciliation settings permission alone', () => {
+    const ids = visibleLeafIds(['aps.reconciliation:settings']);
+    expect(ids).toContain('settings-project');
+    expect(ids).not.toContain('settings-system');
   });
 
   it('hides a branch entirely when none of its children survive', () => {
