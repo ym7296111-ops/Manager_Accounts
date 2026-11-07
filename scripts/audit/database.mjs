@@ -1977,7 +1977,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 73);
+    assert.equal(migrations.length, 74);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -7500,6 +7500,462 @@ try {
       await cleanApsReconciliation(fixture, [], sessionIds);
     }
   });
+
+  // APS reconciliation read RPCs: options, state, month summary, owner detection, pagination
+  {
+    const fixture = await seedApsReconciliation();
+    const sessionIds = [];
+    const extraClasses = [];
+    const roleId = randomUUID();
+    const prefix =
+      'APS reconciliation read RPCs: options, state, month summary, owner detection, pagination';
+    const options = (actor) =>
+      asRole('authenticated', actor, (c) =>
+        c.query('select public.aps_get_reconciliation_options() as data'),
+      ).then((r) => r.rows[0].data);
+    const state = (
+      actor,
+      month = fixture.month1.id,
+      station = fixture.stationId,
+      offset = 0,
+      limit = 50,
+    ) =>
+      asRole('authenticated', actor, (c) =>
+        c.query('select public.aps_get_reconciliation_state($1,$2,$3,$4) as data', [
+          month,
+          station,
+          offset,
+          limit,
+        ]),
+      ).then((r) => r.rows[0].data);
+    try {
+      await db.query(
+        "insert into public.roles(id,slug,name_ar,name_en) values ($1,'audit_recon_read','قراءة مطابقة','Audit reconciliation read')",
+        [roleId],
+      );
+      await db.query(
+        "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.reconciliation:manage'",
+        [roleId],
+      );
+      await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [V, roleId]);
+
+      await test(`${prefix}: manage without project settings`, async () => {
+        const r = await asRole('authenticated', V, (c) =>
+          c.query('select public.can_manage_project_settings() as allowed'),
+        );
+        assert.equal(r.rows[0].allowed, false);
+        const result = await options(V);
+        assert.ok(result.months.some((m) => m.id === fixture.month1.id));
+        assert.ok(result.stations.some((s) => s.id === fixture.stationId));
+        assert.equal(result.can_manage, true);
+        assert.equal(result.can_close, false);
+        assert.equal(result.can_reopen_as_owner, false);
+        assert.equal((await state(V)).selected_session, null);
+      });
+      await test(`${prefix}: permission denial`, async () => {
+        await expectCode('42501', () => options(E));
+        await expectCode('42501', () => state(E));
+        for (const fn of [
+          'public.aps_get_reconciliation_options()',
+          'public.aps_get_reconciliation_state(uuid,uuid,integer,integer)',
+        ]) {
+          for (const [role, expected] of [
+            ['authenticated', true],
+            ['anon', false],
+            ['service_role', false],
+            ['public', false],
+          ]) {
+            const r = await db.query('select has_function_privilege($1,$2,$3) as ok', [
+              role,
+              fn,
+              'EXECUTE',
+            ]);
+            assert.equal(r.rows[0].ok, expected, `${role} ${fn}`);
+          }
+        }
+      });
+      await test(`${prefix}: unapproved users are rejected`, async () => {
+        await db.query("update public.profiles set approval_status='pending' where id=$1", [V]);
+        try {
+          await expectCode('42501', () => options(V));
+          await expectCode('42501', () => state(V));
+        } finally {
+          await db.query("update public.profiles set approval_status='approved' where id=$1", [V]);
+        }
+      });
+      await test(`${prefix}: owner and wildcard are distinguished`, async () => {
+        const admin = await options(A);
+        assert.equal(admin.can_manage, true);
+        assert.equal(admin.can_close, true);
+        assert.equal(admin.can_reopen_as_owner, false);
+        const ownerId = randomUUID();
+        await db.query('begin');
+        try {
+          await db.query('insert into auth.users(id,email) values ($1,$2)', [
+            ownerId,
+            `read-owner.${ownerId}@example.invalid`,
+          ]);
+          await db.query("update public.profiles set approval_status='approved' where id=$1", [
+            ownerId,
+          ]);
+          await db.query(
+            "delete from public.user_roles where user_id=$1 and role_id=(select id from public.roles where slug='viewer')",
+            [ownerId],
+          );
+          await db.query(
+            "insert into public.user_roles(user_id,role_id) select $1,id from public.roles where slug='owner'",
+            [ownerId],
+          );
+          await db.query('set local role authenticated');
+          await db.query("select set_config('request.jwt.claim.sub',$1,true)", [ownerId]);
+          const owner = (await db.query('select public.aps_get_reconciliation_options() as data'))
+            .rows[0].data;
+          assert.equal(owner.can_reopen_as_owner, true);
+          await db.query('reset role');
+          // Impossible through normal APIs: simulate an unapproved owner only in
+          // this rollback-only transaction, then verify the entry gate rejects it.
+          await db.query(
+            'alter table public.profiles disable trigger profiles_guard_original_owner',
+          );
+          await db.query("update public.profiles set approval_status='pending' where id=$1", [
+            ownerId,
+          ]);
+          await db.query(
+            'alter table public.profiles enable trigger profiles_guard_original_owner',
+          );
+          await db.query('set local role authenticated');
+          await db.query('savepoint inactive_owner');
+          await expectCode('42501', () =>
+            db.query('select public.aps_get_reconciliation_options()'),
+          );
+          await db.query('rollback to savepoint inactive_owner');
+          await expectCode('42501', () =>
+            db.query('select public.aps_get_reconciliation_state($1,$2)', [
+              fixture.month1.id,
+              fixture.stationId,
+            ]),
+          );
+          await db.query('rollback to savepoint inactive_owner');
+          await db.query('reset role');
+        } finally {
+          await db.query('rollback');
+        }
+      });
+      await test(`${prefix}: no eligible sessions`, async () => {
+        const r = await state(V);
+        assert.equal(r.flags.can_close_now, false);
+        assert.equal(r.flags.close_blocked_reason, 'no_eligible_open_sessions');
+        assert.deepEqual(r.selected_lines, []);
+      });
+
+      const createSession = async (station, month = fixture.month1.id, flow = 'screen') => {
+        const result = await db.query(
+          `insert into public.aps_reconciliation_sessions(fiscal_year_id,fiscal_month_id,station_id,opened_by,created_by,flow_type)
+           values ($1,$2,$3,$4,$4,$5) returning id`,
+          [fixture.firstYear.id, month, station, A, flow],
+        );
+        sessionIds.push(result.rows[0].id);
+        return result.rows[0].id;
+      };
+      const s1 = await createSession(fixture.stationId);
+      const s2 = await createSession(fixture.otherStationId);
+      await db.query(
+        `insert into public.aps_reconciliation_lines(session_id,classification_id,book_amount,accountant_amount)
+        values ($1,$3,0,0),($2,$3,0,150)`,
+        [s1, s2, fixture.leafA],
+      );
+      await test(`${prefix}: month summary spans stations`, async () => {
+        const r = await state(V);
+        assert.equal(r.month_summary.open_sessions_count, 2);
+        assert.equal(r.month_summary.eligible_open_screen_sessions, 2);
+        assert.equal(r.month_summary.eligible_open_stations_count, 2);
+        assert.equal(r.month_summary.total_stations_with_sessions, 2);
+        assert.equal(r.month_summary.total_month_difference, '150.00');
+        assert.deepEqual(
+          r.month_summary.stations_with_nonzero_difference.map((s) => s.station_id),
+          [fixture.otherStationId],
+        );
+        assert.equal(r.flags.can_close_now, false);
+        assert.equal(r.flags.close_blocked_reason, 'nonzero_differences');
+        const other = await state(V, fixture.month1.id, fixture.otherStationId);
+        assert.deepEqual(other.month_summary, r.month_summary);
+        assert.equal(
+          other.selected_lines[0].classification_name.includes('APS recon leaf A'),
+          true,
+        );
+        assert.equal(other.selected_lines[0].difference, '150.00');
+      });
+      await test(`${prefix}: offsetting station differences remain blocked`, async () => {
+        await db.query(
+          'update public.aps_reconciliation_lines set book_amount=150,accountant_amount=0 where session_id=$1',
+          [s1],
+        );
+        const r = await state(V);
+        assert.equal(r.month_summary.total_month_difference, '0.00');
+        assert.deepEqual(
+          new Set(r.month_summary.stations_with_nonzero_difference.map((s) => s.station_id)),
+          new Set([fixture.stationId, fixture.otherStationId]),
+        );
+        assert.equal(r.flags.can_close_now, false);
+        assert.equal(r.flags.close_blocked_reason, 'nonzero_differences');
+      });
+      await test(`${prefix}: balanced state`, async () => {
+        await db.query(
+          'update public.aps_reconciliation_lines set accountant_amount=book_amount where session_id=any($1::uuid[])',
+          [[s1, s2]],
+        );
+        const r = await state(V);
+        assert.equal(r.flags.can_close_now, true);
+        assert.equal(r.flags.close_blocked_reason, null);
+        assert.deepEqual(r.month_summary.stations_with_nonzero_difference, []);
+      });
+      await test(`${prefix}: pagination`, async () => {
+        const inserted = await db.query(
+          "insert into public.classifications(name) select 'Read pagination ' || g || ' ' || $1 from generate_series(1,59) g returning id",
+          [randomUUID()],
+        );
+        extraClasses.push(...inserted.rows.map((r) => r.id));
+        await db.query(
+          'insert into public.aps_reconciliation_lines(session_id,classification_id) select $1,unnest($2::uuid[])',
+          [s1, extraClasses],
+        );
+        const first = await state(V);
+        const second = await state(V, fixture.month1.id, fixture.stationId, 50, 50);
+        assert.equal(first.selected_lines.length, 50);
+        assert.equal(first.pagination.has_more, true);
+        assert.equal(second.selected_lines.length, 10);
+        assert.equal(second.pagination.has_more, false);
+        assert.equal(
+          new Set([...first.selected_lines, ...second.selected_lines].map((l) => l.id)).size,
+          60,
+        );
+        const defaults = await asRole('authenticated', V, (c) =>
+          c.query('select public.aps_get_reconciliation_state($1,$2) as data', [
+            fixture.month1.id,
+            fixture.stationId,
+          ]),
+        );
+        assert.equal(defaults.rows[0].data.pagination.limit, 50);
+      });
+      await test(`${prefix}: arguments and missing records`, async () => {
+        for (const [month, station, offset, limit, code] of [
+          [fixture.month1.id, fixture.stationId, 0, 101, '22023'],
+          [fixture.month1.id, fixture.stationId, -1, 50, '22023'],
+          [fixture.month1.id, fixture.stationId, 0, 0, '22023'],
+          [fixture.month1.id, fixture.stationId, null, 50, '22023'],
+          [null, fixture.stationId, 0, 50, '22023'],
+          [fixture.month1.id, null, 0, 50, '22023'],
+          [randomUUID(), fixture.stationId, 0, 50, 'P0002'],
+          [fixture.month1.id, randomUUID(), 0, 50, 'P0002'],
+        ])
+          await expectCode(code, () => state(V, month, station, offset, limit));
+      });
+      await test(`${prefix}: exact response keys and decimal strings`, async () => {
+        const o = await options(V);
+        assert.deepEqual(Object.keys(o).sort(), [
+          'can_close',
+          'can_manage',
+          'can_reopen_as_owner',
+          'months',
+          'stations',
+        ]);
+        assert.deepEqual(Object.keys(o.months[0]).sort(), [
+          'id',
+          'is_active',
+          'is_fiscal_closed',
+          'label',
+        ]);
+        assert.deepEqual(Object.keys(o.stations[0]).sort(), ['id', 'label']);
+        const r = await state(V);
+        assert.deepEqual(Object.keys(r).sort(), [
+          'fiscal_month',
+          'flags',
+          'month_summary',
+          'pagination',
+          'selected_lines',
+          'selected_session',
+        ]);
+        assert.deepEqual(Object.keys(r.fiscal_month).sort(), [
+          'id',
+          'is_active',
+          'is_fiscal_closed',
+        ]);
+        assert.deepEqual(Object.keys(r.selected_session).sort(), [
+          'flow_type',
+          'has_legacy_items',
+          'id',
+          'sequence_number',
+          'status',
+        ]);
+        assert.deepEqual(Object.keys(r.selected_lines[0]).sort(), [
+          'accountant_amount',
+          'book_amount',
+          'classification_id',
+          'classification_name',
+          'difference',
+          'id',
+        ]);
+        assert.deepEqual(Object.keys(r.month_summary).sort(), [
+          'eligible_closed_screen_sessions',
+          'eligible_open_screen_sessions',
+          'eligible_open_stations_count',
+          'open_sessions_count',
+          'stations_with_nonzero_difference',
+          'total_month_difference',
+          'total_stations_with_sessions',
+        ]);
+        assert.deepEqual(Object.keys(r.flags).sort(), ['can_close_now', 'close_blocked_reason']);
+        assert.deepEqual(Object.keys(r.pagination).sort(), ['has_more', 'limit', 'offset']);
+        for (const key of ['book_amount', 'accountant_amount', 'difference'])
+          assert.equal(typeof r.selected_lines[0][key], 'string');
+        assert.equal(typeof r.month_summary.total_month_difference, 'string');
+      });
+      await test(`${prefix}: offsetting lines within one station`, async () => {
+        await db.query(
+          'update public.aps_reconciliation_lines set book_amount=0,accountant_amount=150 where session_id=$1',
+          [s2],
+        );
+        await db.query(
+          'insert into public.aps_reconciliation_lines(session_id,classification_id,book_amount,accountant_amount) values ($1,$2,150,0)',
+          [s2, fixture.leafB],
+        );
+        const r = await state(V);
+        assert.equal(r.month_summary.total_month_difference, '0.00');
+        assert.equal(r.month_summary.stations_with_nonzero_difference.length, 1);
+        assert.equal(r.month_summary.stations_with_nonzero_difference[0].total_difference, '0.00');
+        assert.equal(r.flags.can_close_now, false);
+        await db.query(
+          'delete from public.aps_reconciliation_lines where session_id=$1 and classification_id=$2',
+          [s2, fixture.leafB],
+        );
+        await db.query(
+          'update public.aps_reconciliation_lines set accountant_amount=book_amount where session_id=$1',
+          [s2],
+        );
+      });
+      await test(`${prefix}: closed session and station counts`, async () => {
+        await db.query(
+          "update public.aps_reconciliation_sessions set status='closed',closed_at=now(),closed_by=$2,close_reason='Audit close' where id=$1",
+          [s2, A],
+        );
+        const r = await state(V, fixture.month1.id, fixture.otherStationId);
+        assert.equal(r.selected_session.status, 'closed');
+        assert.equal(r.selected_lines.length, 1);
+        assert.equal(r.month_summary.eligible_closed_screen_sessions, 1);
+        assert.equal(r.month_summary.eligible_open_screen_sessions, 1);
+        assert.equal(r.month_summary.eligible_open_stations_count, 1);
+        assert.equal(r.month_summary.total_stations_with_sessions, 2);
+        await db.query(
+          "update public.aps_reconciliation_sessions set status='open',closed_at=null,closed_by=null,close_reason=null where id=$1",
+          [s2],
+        );
+      });
+      await test(`${prefix}: close-only permission`, async () => {
+        const closeRole = randomUUID();
+        await db.query(
+          "insert into public.roles(id,slug,name_ar,name_en) values ($1,'audit_recon_close_read','إغلاق','Close read')",
+          [closeRole],
+        );
+        try {
+          await db.query(
+            "insert into public.role_permissions(role_id,permission_id) select $1,id from public.permissions where slug='aps.reconciliation:close_month'",
+            [closeRole],
+          );
+          await db.query('insert into public.user_roles(user_id,role_id) values ($1,$2)', [
+            E,
+            closeRole,
+          ]);
+          const o = await options(E);
+          assert.equal(o.can_close, true);
+          assert.equal(o.can_manage, false);
+          assert.equal(o.can_reopen_as_owner, false);
+          assert.equal((await state(E)).month_summary.eligible_open_screen_sessions, 2);
+        } finally {
+          await db.query('delete from public.user_roles where role_id=$1', [closeRole]);
+          await db.query('delete from public.roles where id=$1', [closeRole]);
+        }
+      });
+      await test(`${prefix}: pagination boundaries`, async () => {
+        const maximum = await state(V, fixture.month1.id, fixture.stationId, 0, 100);
+        assert.equal(maximum.selected_lines.length, 60);
+        assert.equal(maximum.pagination.has_more, false);
+        const beyond = await state(V, fixture.month1.id, fixture.stationId, 60, 50);
+        assert.deepEqual(beyond.selected_lines, []);
+        assert.equal(beyond.pagination.has_more, false);
+        await expectCode('22023', () => state(V, fixture.month1.id, fixture.stationId, 0, null));
+      });
+      await test(`${prefix}: decimals retain exact large values`, async () => {
+        await db.query(
+          'update public.aps_reconciliation_lines set book_amount=0,accountant_amount=9999999999999999.99 where session_id=$1',
+          [s2],
+        );
+        const r = await state(V, fixture.month1.id, fixture.otherStationId);
+        assert.equal(r.selected_lines[0].accountant_amount, '9999999999999999.99');
+        assert.equal(r.month_summary.total_month_difference, '9999999999999999.99');
+        assert.equal(
+          r.month_summary.stations_with_nonzero_difference[0].total_difference,
+          '9999999999999999.99',
+        );
+        assert.deepEqual(Object.keys(r.month_summary.stations_with_nonzero_difference[0]).sort(), [
+          'station_id',
+          'station_name',
+          'total_difference',
+        ]);
+        await db.query(
+          'update public.aps_reconciliation_lines set accountant_amount=book_amount where session_id=$1',
+          [s2],
+        );
+      });
+      await test(`${prefix}: station isolation`, async () => {
+        const first = await state(V);
+        const second = await state(V, fixture.month1.id, fixture.otherStationId);
+        assert.equal(first.selected_session.id, s1);
+        assert.equal(second.selected_session.id, s2);
+        assert.notEqual(first.selected_lines[0].id, second.selected_lines[0].id);
+        assert.deepEqual(first.month_summary, second.month_summary);
+      });
+      await test(`${prefix}: legacy and mixed sessions are excluded`, async () => {
+        const legacy = await createSession(fixture.stationId, fixture.month2.id, 'legacy');
+        const mixed = await createSession(fixture.otherStationId, fixture.month2.id);
+        await db.query(
+          'insert into public.aps_reconciliation_items(session_id,classification_id) values ($1,$2)',
+          [mixed, fixture.leafA],
+        );
+        await db.query(
+          'insert into public.aps_reconciliation_lines(session_id,classification_id) values ($1,$2),($3,$2)',
+          [legacy, fixture.leafA, mixed],
+        );
+        for (const station of [fixture.stationId, fixture.otherStationId]) {
+          const r = await state(V, fixture.month2.id, station);
+          assert.deepEqual(r.selected_lines, []);
+          assert.equal(r.month_summary.open_sessions_count, 2);
+          assert.equal(r.month_summary.eligible_open_screen_sessions, 0);
+          assert.equal(r.month_summary.eligible_open_stations_count, 0);
+          assert.equal(r.flags.can_close_now, false);
+          assert.equal(r.flags.close_blocked_reason, 'no_eligible_open_sessions');
+        }
+        assert.equal(
+          (await state(V, fixture.month2.id, fixture.stationId)).selected_session.flow_type,
+          'legacy',
+        );
+        assert.equal(
+          (await state(V, fixture.month2.id, fixture.otherStationId)).selected_session
+            .has_legacy_items,
+          true,
+        );
+      });
+    } finally {
+      // Cascaded session rows must go before removing their classifications.
+      await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
+        sessionIds,
+      ]);
+      if (extraClasses.length)
+        await db.query('delete from public.classifications where id=any($1::uuid[])', [
+          extraClasses,
+        ]);
+      await cleanApsReconciliation(fixture, [], [], [roleId]);
+    }
+  }
 
   await test('APS reconciliation: book figures from approved letters, dual comparison, frozen on approval', async () => {
     const fixture = await seedApsReconciliation();
