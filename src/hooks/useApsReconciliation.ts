@@ -165,3 +165,28 @@ export const reopenReconciliation = (month: string, scope: string, reason: strin
     p_scope_id: scope,
     p_reason: reason,
   });
+
+export function useCanDeleteReconciliationSession(
+  session: string | null,
+  snapshot: string | null,
+  enabled: boolean,
+) {
+  const { session: auth } = useAuth();
+  return useQuery({
+    queryKey: ['aps-reconciliation-can-delete-v3', auth?.user.id, session, snapshot],
+    enabled: !!auth?.user.id && !!session && enabled,
+    queryFn: async () => {
+      const result = await rpc('aps_can_delete_reconciliation_session_v3', {
+        p_session_id: session,
+      });
+      if (typeof result !== 'boolean') throw new ReconciliationError('invalidResponse');
+      return result;
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+export const deleteReconciliationScope = (scope: string) =>
+  rpc('aps_delete_reconciliation_scope_v3', { p_scope_id: scope });
+export const deleteReconciliationSession = (session: string) =>
+  rpc('aps_delete_reconciliation_session_v3', { p_session_id: session });

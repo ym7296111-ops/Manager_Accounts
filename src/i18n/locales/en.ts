@@ -1962,6 +1962,14 @@ export const en: Record<TranslationKey, string> = {
     'You have unsaved settings changes. Continue and discard them?',
   'aps.recon.v3.concurrentChange':
     'Settings or the session changed concurrently. Reload and review; your drafts were retained.',
+  'aps.recon.v3.deleteScope': 'Delete scope',
+  'aps.recon.v3.deleteScopeConfirm': 'Permanently delete this scope?',
+  'aps.recon.v3.deleteScopeSuccess': 'Scope deleted and confirmed.',
+  'aps.recon.v3.deleteScopeHistory':
+    'A scope with session history cannot be deleted; archive it instead.',
+  'aps.recon.v3.deleteSession': 'Delete session',
+  'aps.recon.v3.deleteSessionConfirm': 'Are you sure you want to cancel this session?',
+  'aps.recon.v3.deleteSessionSuccess': 'Session deleted and confirmed.',
   'aps.recon.v3.scope': 'Scope',
   'aps.recon.v3.scopeChoose': 'Choose a scope',
   'aps.recon.v3.inbound': 'Inbound',

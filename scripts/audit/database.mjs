@@ -2106,7 +2106,7 @@ try {
   await test('every migration and seed replay on PostgreSQL 17', async () => {
     // Keep this count in step with supabase/migrations/ so every forward-only
     // security migration is replayed from a clean PostgreSQL fixture.
-    assert.equal(migrations.length, 80);
+    assert.equal(migrations.length, 81);
     assert.ok(migrations.includes('20261025000000_resolve_stale_notifications.sql'));
     assert.ok(migrations.includes('20261026000000_granular_role_delegation.sql'));
     assert.ok(
@@ -2135,6 +2135,7 @@ try {
     assert.ok(migrations.includes('20261203000000_aps_reconciliation_v3_scope_foundation.sql'));
     assert.ok(migrations.includes('20261204000000_aps_reconciliation_v3_scopes.sql'));
     assert.ok(migrations.includes('20261205000000_aps_reconciliation_v3_sessions.sql'));
+    assert.ok(migrations.includes('20261206000000_aps_reconciliation_v3_safe_delete.sql'));
     assert.ok(migrations.includes('20261103000000_prevent_owner_role_reassignment.sql'));
     assert.ok(migrations.includes('20261104010000_add_project_settings_permission.sql'));
     assert.ok(migrations.includes('20261104020000_project_settings_access.sql'));
@@ -6607,6 +6608,415 @@ try {
         next,
       ]);
     });
+  });
+
+  await test('APS v3 safe scope deletion retains config audit and rejects default and session history', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings }) => {
+      await reject('22023', 'select public.aps_delete_reconciliation_scope_v3($1)', [scope]);
+      const unused = (
+        await call('select public.aps_create_reconciliation_scope_v3($1) as id', ['Unused'])
+      ).id;
+      const revision = await settings(unused, [f.leafA]);
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [E]);
+      await reject('42501', 'select public.aps_delete_reconciliation_scope_v3($1)', [unused]);
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+      await call('select public.aps_delete_reconciliation_scope_v3($1)', [unused]);
+      await db.query('reset role');
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_scopes where id=$1',
+            [unused],
+          )
+        ).rows[0].n,
+        0,
+      );
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_settings_revisions where scope_id=$1',
+            [unused],
+          )
+        ).rows[0].n,
+        0,
+      );
+      const audit = (
+        await db.query(
+          "select actor_id,metadata from public.audit_logs where entity='aps_reconciliation_scopes' and entity_id=$1 and metadata->>'operation'='delete_scope'",
+          [unused],
+        )
+      ).rows[0];
+      assert.equal(audit.actor_id, A);
+      assert.equal(audit.metadata.revisions[0].revision.id, revision);
+      assert.equal(audit.metadata.revisions[0].members[0].leaf_id, f.leafA);
+      await db.query('set local role authenticated');
+      const historical = (
+        await call('select public.aps_create_reconciliation_scope_v3($1) as id', ['Historical'])
+      ).id;
+      await settings(historical, [f.leafA]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [
+          f.month2.id,
+          historical,
+        ])
+      ).id;
+      await reject('23503', 'select public.aps_delete_reconciliation_scope_v3($1)', [historical]);
+      await db.query('reset role');
+      await db.query("update public.aps_reconciliation_sessions set status='closed' where id=$1", [
+        session,
+      ]);
+      await db.query('set local role authenticated');
+      await reject('23503', 'select public.aps_delete_reconciliation_scope_v3($1)', [historical]);
+      await reject('22023', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await db.query('reset role');
+      await db.query("update public.aps_reconciliation_sessions set status='open' where id=$1", [
+        session,
+      ]);
+      await db.query('set local role authenticated');
+      await call('select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await reject('23503', 'select public.aps_delete_reconciliation_scope_v3($1)', [historical]);
+    });
+  });
+
+  await test('APS v3 session delete refuses every zero entry and retains sync snapshots in audit', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      const first = await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const original = await state(scope);
+      const line = original.selected_lines[0].id;
+      assert.equal(
+        (await call('select public.aps_can_delete_reconciliation_session_v3($1) as ok', [session]))
+          .ok,
+        true,
+      );
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [E]);
+      await reject('42501', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await reject('42501', 'select public.aps_can_delete_reconciliation_session_v3($1)', [
+        session,
+      ]);
+      await db.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+      for (const field of [
+        'accountant_inbound',
+        'accountant_outbound',
+        'accountant_ytd_inbound',
+        'accountant_ytd_outbound',
+        'accountant_year_opening',
+      ]) {
+        await db.query('reset role');
+        await db.query(`update public.aps_reconciliation_lines set ${field}=0 where id=$1`, [line]);
+        await db.query('set local role authenticated');
+        assert.equal(
+          (
+            await call('select public.aps_can_delete_reconciliation_session_v3($1) as ok', [
+              session,
+            ])
+          ).ok,
+          false,
+          field,
+        );
+        await reject('22023', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+        await db.query('reset role');
+        await db.query(`update public.aps_reconciliation_lines set ${field}=null where id=$1`, [
+          line,
+        ]);
+        await db.query('set local role authenticated');
+      }
+      const next = await settings(scope, [f.parent, f.leafB], first);
+      await call('select public.aps_sync_empty_reconciliation_v3($1,$2,$3,$4,$5)', [
+        session,
+        scope,
+        original.selected_session.snapshot_version,
+        original.selected_session.config_generation,
+        next,
+      ]);
+      const current = await state(scope);
+      assert.equal(
+        (await call('select public.aps_can_delete_reconciliation_session_v3($1) as ok', [session]))
+          .ok,
+        true,
+      );
+      await call('select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await db.query('reset role');
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_lines where session_id=$1',
+            [session],
+          )
+        ).rows[0].n,
+        0,
+      );
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_sessions where id=$1',
+            [session],
+          )
+        ).rows[0].n,
+        0,
+      );
+      const audit = (
+        await db.query(
+          "select actor_id,metadata from public.audit_logs where entity='aps_reconciliation_sessions' and entity_id=$1 and metadata->>'operation'='delete_empty_session'",
+          [session],
+        )
+      ).rows[0];
+      assert.equal(audit.actor_id, A);
+      assert.equal(audit.metadata.scope_id, scope);
+      assert.equal(audit.metadata.lines.length, current.selected_lines.length);
+      assert.equal(audit.metadata.sync_history.length, 1);
+      assert.equal(audit.metadata.sync_history[0].lines[0].id, line);
+      await db.query('set local role authenticated');
+      await reject('P0002', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+    });
+  });
+
+  await test('APS v3 session delete respects prior recorded audit even after fields are cleared', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings, state }) => {
+      await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const current = await state(scope);
+      const line = current.selected_lines[0];
+      await call('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        session,
+        scope,
+        line.id,
+        line.classification_id,
+        current.selected_session.config_generation,
+        line.version,
+      ]);
+      await db.query('reset role');
+      await db.query(
+        `update public.aps_reconciliation_lines set accountant_inbound=null,accountant_outbound=null,accountant_ytd_inbound=null,accountant_ytd_outbound=null,accountant_year_opening=null,v2_recorded_by=null,v2_recorded_at=null where id=$1`,
+        [line.id],
+      );
+      await db.query('set local role authenticated');
+      assert.equal(
+        (await call('select public.aps_can_delete_reconciliation_session_v3($1) as ok', [session]))
+          .ok,
+        false,
+      );
+      await reject('22023', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+    });
+  });
+
+  await test('APS v3 delete functions restrict execution to intended roles', async () => {
+    for (const name of [
+      'aps_can_delete_reconciliation_session_v3',
+      'aps_delete_reconciliation_session_v3',
+      'aps_delete_reconciliation_scope_v3',
+    ]) {
+      for (const role of ['anon', 'service_role', 'authenticated']) {
+        const result = await db.query('select has_function_privilege($1,$2,$3) as allowed', [
+          role,
+          `public.${name}(uuid)`,
+          'EXECUTE',
+        ]);
+        assert.equal(result.rows[0].allowed, role === 'authenticated', `${name} ${role}`);
+      }
+    }
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      const result = await db.query(
+        "select has_function_privilege($1,'public.aps_reconciliation_v3_session_is_deletable(uuid)','EXECUTE') as allowed",
+        [role],
+      );
+      assert.equal(result.rows[0].allowed, false);
+    }
+  });
+
+  await test('APS v3 deletion rolls back audit and data on a downstream failure', async () => {
+    await withScopedV3Transaction(async ({ f, call, reject, scope, settings }) => {
+      await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      await db.query('reset role');
+      await db.query(
+        "create function pg_temp.prevent_reconciliation_delete() returns trigger language plpgsql as $$begin raise exception 'test rollback' using errcode='P0001'; end$$",
+      );
+      await db.query(
+        'create trigger audit_delete_test before delete on public.aps_reconciliation_sessions for each row execute function pg_temp.prevent_reconciliation_delete()',
+      );
+      await db.query('set local role authenticated');
+      await reject('P0001', 'select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await db.query('reset role');
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_sessions where id=$1',
+            [session],
+          )
+        ).rows[0].n,
+        1,
+      );
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_lines where session_id=$1',
+            [session],
+          )
+        ).rows[0].n,
+        1,
+      );
+      assert.equal(
+        (
+          await db.query(
+            "select count(*)::int as n from public.audit_logs where entity_id=$1 and metadata->>'operation'='delete_empty_session'",
+            [session],
+          )
+        ).rows[0].n,
+        0,
+      );
+      await db.query('drop trigger audit_delete_test on public.aps_reconciliation_sessions');
+      await db.query('set local role authenticated');
+    });
+  });
+
+  await test('APS v3 delete and record serialize in both orders', async () => {
+    const f = await seedApsReconciliation();
+    const c1 = await connect(),
+      c2 = await connect();
+    const sessions = [],
+      revisions = [];
+    const call = (sql, args = []) =>
+      asRole('authenticated', A, (c) => c.query(sql, args)).then((r) => r.rows[0]);
+    const begin = async (c) => {
+      await c.query('begin');
+      await c.query('set local role authenticated');
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)", [A]);
+      await c.query("select set_config('request.jwt.claim.role','authenticated',true)");
+    };
+    const blocked = async (promise) =>
+      assert.equal(
+        await Promise.race([
+          promise.then(
+            () => 'resolved',
+            () => 'rejected',
+          ),
+          new Promise((resolve) => setTimeout(() => resolve('blocked'), 100)),
+        ]),
+        'blocked',
+      );
+    try {
+      const scope = (
+        await call('select public.aps_get_reconciliation_scopes_v3() as data')
+      ).data.find((s) => s.is_default).id;
+      revisions.push(
+        (
+          await call('select public.aps_set_reconciliation_settings_v3($1,$2::uuid[],$3) as id', [
+            scope,
+            [f.parent],
+            null,
+          ])
+        ).id,
+      );
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      sessions.push(session);
+      const state = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month2.id,
+          scope,
+        ])
+      ).data;
+      revisions.push(state.selected_session.settings_revision_id);
+      const line = state.selected_lines[0];
+      await begin(c1);
+      await begin(c2);
+      await c1.query('select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)', [
+        session,
+        scope,
+        line.id,
+        line.classification_id,
+        state.selected_session.config_generation,
+        line.version,
+      ]);
+      const pendingDelete = c2.query('select public.aps_delete_reconciliation_session_v3($1)', [
+        session,
+      ]);
+      await blocked(pendingDelete);
+      await c1.query('commit');
+      await expectCode('22023', () => pendingDelete);
+      await c2.query('rollback');
+      assert.equal(
+        (
+          await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+            f.month2.id,
+            scope,
+          ])
+        ).data.selected_lines[0].monthly.accountant_inbound,
+        '0.00',
+      );
+      const session2 = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month1.id, scope])
+      ).id;
+      sessions.push(session2);
+      const state2 = (
+        await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+          f.month1.id,
+          scope,
+        ])
+      ).data;
+      revisions.push(state2.selected_session.settings_revision_id);
+      await begin(c1);
+      await begin(c2);
+      await c1.query('select public.aps_delete_reconciliation_session_v3($1)', [session2]);
+      const line2 = state2.selected_lines[0];
+      const pendingRecord = c2.query(
+        'select public.aps_record_reconciliation_v3($1,$2,$3,$4,$5,$6,0,0,0,0,null)',
+        [
+          session2,
+          scope,
+          line2.id,
+          line2.classification_id,
+          state2.selected_session.config_generation,
+          line2.version,
+        ],
+      );
+      await blocked(pendingRecord);
+      await c1.query('commit');
+      await expectCode('40001', () => pendingRecord);
+      await c2.query('rollback');
+      assert.equal(
+        (
+          await call('select public.aps_get_reconciliation_state_v3($1,$2) as data', [
+            f.month1.id,
+            scope,
+          ])
+        ).data.selected_session,
+        null,
+      );
+    } finally {
+      await c1.query('rollback').catch(() => {});
+      await c2.query('rollback').catch(() => {});
+      await c1.end();
+      await c2.end();
+      await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
+        sessions,
+      ]);
+      await db.query(
+        'delete from public.aps_reconciliation_settings_current where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings_members where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings where revision_id=any($1::uuid[])',
+        [revisions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_settings_revisions where id=any($1::uuid[])',
+        [revisions],
+      );
+      await cleanApsReconciliation(f, [], []);
+    }
   });
 
   await test('APS v3 closing and source invalidation remain isolated by scope and month', async () => {

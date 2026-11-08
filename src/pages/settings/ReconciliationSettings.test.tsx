@@ -216,3 +216,71 @@ describe('v3 scope management', () => {
     expect(leaf).toHaveProperty('checked', true);
   });
 });
+
+describe('safe scope deletion', () => {
+  it('hides delete for the default scope, asks for confirmation and deletes a non-default scope', async () => {
+    let scopes = [
+      { id: 'scope', name: 'النطاق', is_default: true, is_active: true },
+      { id: 'other', name: 'آخر', is_default: false, is_active: true },
+    ];
+    rpc.mockImplementation(async (name, args = {}) => {
+      await Promise.resolve();
+      if (name === 'aps_get_reconciliation_scopes_v3')
+        return { data: structuredClone(scopes), error: null };
+      if (name === 'aps_get_reconciliation_settings_v3')
+        return {
+          data: {
+            scope_id: args.p_scope_id,
+            revision_id: null,
+            classifications: classes,
+            selected: [],
+          },
+          error: null,
+        };
+      if (name === 'aps_delete_reconciliation_scope_v3') {
+        scopes = scopes.filter((s) => s.id !== args.p_scope_id);
+        return { data: null, error: null };
+      }
+      throw new Error(name);
+    });
+    const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mount();
+    const select = await screen.findByLabelText('النطاق');
+    expect(screen.queryByRole('button', { name: 'حذف النطاق' })).toBeNull();
+    fireEvent.change(select, { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حذف النطاق' }));
+    expect(confirmation).toHaveBeenCalledWith('هل أنت متأكد من حذف هذا النطاق نهائياً؟');
+    expect(rpc).not.toHaveBeenCalledWith('aps_delete_reconciliation_scope_v3', expect.anything());
+    confirmation.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'حذف النطاق' }));
+    await waitFor(() =>
+      expect(rpc).toHaveBeenCalledWith('aps_delete_reconciliation_scope_v3', {
+        p_scope_id: 'other',
+      }),
+    );
+    expect(await screen.findByText('تم حذف النطاق وتأكيد ذلك.')).toBeTruthy();
+    confirmation.mockRestore();
+  });
+  it('explains historical-scope rejection and recommends archiving', async () => {
+    const original = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (name, args) => {
+      if (name === 'aps_get_reconciliation_scopes_v3')
+        return {
+          data: [
+            { id: 'scope', name: 'النطاق', is_default: true, is_active: true },
+            { id: 'other', name: 'آخر', is_default: false, is_active: true },
+          ],
+          error: null,
+        };
+      if (name === 'aps_delete_reconciliation_scope_v3')
+        return { data: null, error: { code: '23503' } };
+      return original(name, args);
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    fireEvent.change(await screen.findByLabelText('النطاق'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'حذف النطاق' }));
+    expect(await screen.findByText(/استخدم الأرشفة بدلاً من ذلك/)).toBeTruthy();
+    confirm.mockRestore();
+  });
+});

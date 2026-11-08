@@ -3,6 +3,7 @@ import {
   createReconciliationScope,
   renameReconciliationScope,
   archiveReconciliationScope,
+  deleteReconciliationScope,
   setReconciliationSettings,
   useReconciliationSettings,
   useReconciliationScopes,
@@ -13,6 +14,7 @@ import type {
   ReconciliationClassification,
   ReconciliationSettings as Settings,
 } from '@/lib/apsReconciliation';
+import { ReconciliationError } from '@/lib/apsReconciliation';
 import { useUnsavedChangesRegistration } from './unsavedChanges';
 
 const button =
@@ -40,6 +42,29 @@ export default function ReconciliationSettings() {
       setName('');
     } catch {
       setMessage(t('aps.recon.v3.scopeError'));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function removeScope(id: string) {
+    if (busy || !window.confirm(t('aps.recon.v3.deleteScopeConfirm'))) return;
+    if (dirty && !window.confirm(t('aps.recon.v3.settingsDiscardConfirm'))) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      await deleteReconciliationScope(id);
+      const result = await scopes.refetch();
+      if (result.isError || !result.data || result.data.some((s) => s.id === id))
+        throw new Error('unconfirmed');
+      setChosen('');
+      setDirty(false);
+      setMessage(t('aps.recon.v3.deleteScopeSuccess'));
+    } catch (e) {
+      setMessage(
+        e instanceof ReconciliationError && e.code === '23503'
+          ? t('aps.recon.v3.deleteScopeHistory')
+          : t('aps.recon.v3.scopeError'),
+      );
     } finally {
       setBusy(false);
     }
@@ -105,6 +130,16 @@ export default function ReconciliationSettings() {
       >
         {t('aps.recon.v3.scopeArchive')}
       </button>
+      {scope && !scope.is_default && (
+        <button
+          type="button"
+          className={button}
+          disabled={busy}
+          onClick={() => void removeScope(scope.id)}
+        >
+          {t('aps.recon.v3.deleteScope')}
+        </button>
+      )}
       {message && <p role="alert">{message}</p>}
       {scope && query.isPending && <p>{t('aps.recon.loading')}</p>}
       {query.isError && (
