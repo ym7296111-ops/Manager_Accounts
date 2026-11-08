@@ -1,6 +1,6 @@
+import type { TranslationKey } from '@/i18n/locales/ar';
 import { ModalShell } from '@/components/ui/ModalShell';
 import { useI18n } from '@/i18n/I18nContext';
-import type { TranslationKey } from '@/i18n/locales/ar';
 import {
   formatReconciliationAmount,
   type ReconciliationLine,
@@ -21,15 +21,52 @@ export function Amount({ value }: { value: string | null }) {
     </span>
   );
 }
-const columns: { key: keyof ReconciliationLine['monthly']; label: TranslationKey }[] = [
-  { key: 'book_inbound', label: 'aps.recon.v2.bookInbound' },
-  { key: 'accountant_inbound', label: 'aps.recon.v2.accountantInbound' },
-  { key: 'book_outbound', label: 'aps.recon.v2.bookOutbound' },
-  { key: 'accountant_outbound', label: 'aps.recon.v2.accountantOutbound' },
-  { key: 'book_balance', label: 'aps.recon.v2.bookBalance' },
-  { key: 'accountant_balance', label: 'aps.recon.v2.accountantBalance' },
-  { key: 'balance_difference', label: 'aps.recon.difference' },
+const columns: (keyof ReconciliationLine['monthly'])[] = [
+  'book_inbound',
+  'accountant_inbound',
+  'book_outbound',
+  'accountant_outbound',
+  'book_balance',
+  'accountant_balance',
+  'balance_difference',
 ];
+function GroupedHeader() {
+  const { t } = useI18n();
+  return (
+    <thead>
+      <tr>
+        <th rowSpan={2} scope="col" className="p-3 text-start">
+          {t('aps.recon.classification')}
+        </th>
+        <th colSpan={2} scope="colgroup" className="p-3">
+          {t('aps.recon.v3.inbound')}
+        </th>
+        <th colSpan={2} scope="colgroup" className="p-3">
+          {t('aps.recon.v3.outbound')}
+        </th>
+        <th colSpan={2} scope="colgroup" className="p-3">
+          {t('aps.recon.v3.balance')}
+        </th>
+        <th rowSpan={2} scope="col" className="p-3">
+          {t('aps.recon.difference')}
+        </th>
+        <th rowSpan={2} scope="col" className="p-3">
+          {t('aps.recon.rowStatus')}
+        </th>
+      </tr>
+      <tr>
+        {(['in', 'out', 'balance'] as const).flatMap((group) => [
+          <th key={`${group}-book`} scope="col" className="p-3">
+            {t('aps.recon.v3.costs')}
+          </th>,
+          <th key={`${group}-accountant`} scope="col" className="p-3">
+            {t('aps.recon.v3.accounts')}
+          </th>,
+        ])}
+      </tr>
+    </thead>
+  );
+}
 export function ReconciliationTables({
   lines,
   readOnly,
@@ -44,109 +81,103 @@ export function ReconciliationTables({
   const { t } = useI18n();
   return (
     <div className="space-y-5">
-      <section
-        aria-label={t('aps.recon.v2.monthly')}
-        className="bg-card border-border overflow-x-auto rounded-xl border"
-      >
-        <h2 className="p-3 font-semibold">{t('aps.recon.v2.monthly')}</h2>
-        <table className="w-full min-w-[1000px] text-sm">
-          <thead>
-            <tr>
-              <th className="p-3 text-start">{t('aps.recon.classification')}</th>
-              {columns.map((c) => (
-                <th key={c.key} className="p-3 text-start">
-                  {t(c.label)}
-                </th>
-              ))}
-              <th className="p-3 text-start">{t('aps.recon.rowStatus')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((line) => (
-              <tr key={line.id} className="border-border border-t">
-                <th scope="row" className="p-3 text-start break-words">
-                  {line.classification_name}
-                </th>
-                {columns.map((c) => (
-                  <td key={c.key} className="p-3">
-                    <Amount value={line.monthly[c.key]} />
-                  </td>
-                ))}
-                <td className="p-3">
-                  {draftIds.has(line.id) && <p>{t('aps.recon.v2.pendingDraft')}</p>}
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={readOnly}
-                    onClick={() => onEdit(line)}
-                  >
-                    {t('aps.recon.v2.edit', { name: line.classification_name })}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!lines.length && <p className="p-3">{t('aps.recon.noLines')}</p>}
-      </section>
-      <details className="bg-card border-border rounded-xl border">
-        <summary className="cursor-pointer p-3 font-semibold">{t('aps.recon.v2.ytd')}</summary>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1200px] text-sm">
-            <thead>
-              <tr>
-                {(
-                  [
-                    'aps.recon.classification',
-                    'aps.recon.v2.bookOpening',
-                    'aps.recon.v2.accountantOpening',
-                    'aps.recon.v2.bookInbound',
-                    'aps.recon.v2.accountantInbound',
-                    'aps.recon.v2.bookOutbound',
-                    'aps.recon.v2.accountantOutbound',
-                    'aps.recon.v2.bookClosing',
-                    'aps.recon.v2.accountantClosing',
-                    'aps.recon.difference',
-                  ] as TranslationKey[]
-                ).map((key) => (
-                  <th className="p-3 text-start" key={key}>
-                    {t(key)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((line) => (
-                <tr key={line.id} className="border-border border-t">
-                  <th scope="row" className="p-3 text-start break-words">
-                    {line.classification_name}
-                  </th>
-                  <td className="p-3">
-                    <Amount value={line.ytd.book_opening} />
-                  </td>
-                  <td className="p-3">
-                    <Amount value={line.ytd.accountant_opening} />
-                    <p className="text-muted-foreground text-xs">
-                      {t(
-                        line.ytd.accountant_opening_source === 'manual'
-                          ? 'aps.recon.v2.openingManual'
-                          : line.ytd.accountant_opening_source === 'trusted_system'
-                            ? 'aps.recon.v2.openingSystem'
-                            : 'aps.recon.v2.openingMissing',
-                      )}
-                    </p>
-                  </td>
-                  {columns.map((c) => (
-                    <td key={c.key} className="p-3">
-                      <Amount value={line.ytd[c.key]} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
+      {(['monthly', 'ytd'] as const).map((period) => {
+        const table = (
+          <div className="overflow-x-auto">
+            <table
+              className="w-full min-w-[1000px] text-sm"
+              aria-label={t(period === 'monthly' ? 'aps.recon.v2.monthly' : 'aps.recon.v2.ytd')}
+            >
+              <GroupedHeader />
+              <tbody>
+                {lines.map((line) => {
+                  const value = line[period];
+                  const incomplete =
+                    value.book_inbound === null ||
+                    value.book_outbound === null ||
+                    value.accountant_inbound === null ||
+                    value.accountant_outbound === null ||
+                    (period === 'ytd' && line.ytd.book_opening === null);
+                  const mismatch =
+                    !incomplete &&
+                    [
+                      value.inbound_difference,
+                      value.outbound_difference,
+                      value.balance_difference,
+                    ].some((v) => v !== '0.00');
+                  return (
+                    <tr key={line.id} className="border-border border-t">
+                      <th scope="row" className="p-3 text-start break-words">
+                        {line.classification_name}
+                        {period === 'ytd' && (
+                          <div className="text-xs font-normal">
+                            <p>
+                              {t('aps.recon.v2.bookOpening')}:{' '}
+                              <Amount value={line.ytd.book_opening} />
+                            </p>
+                            <p>
+                              {t('aps.recon.v2.accountantOpening')}:{' '}
+                              <Amount value={line.ytd.accountant_opening} />
+                            </p>
+                            <p>
+                              {t(
+                                line.ytd.accountant_opening_source === 'manual'
+                                  ? 'aps.recon.v2.openingManual'
+                                  : line.ytd.accountant_opening_source === 'trusted_system'
+                                    ? 'aps.recon.v2.openingSystem'
+                                    : 'aps.recon.v2.openingMissing',
+                              )}
+                            </p>
+                          </div>
+                        )}
+                      </th>
+                      {columns.map((key) => (
+                        <td key={key} className="p-3">
+                          <Amount value={value[key]} />
+                        </td>
+                      ))}
+                      <td className="p-3">
+                        <p>
+                          {t(
+                            incomplete
+                              ? 'aps.recon.v3.rowIncomplete'
+                              : mismatch
+                                ? 'aps.recon.v3.rowMismatch'
+                                : 'aps.recon.v3.rowMatched',
+                          )}
+                        </p>
+                        {draftIds.has(line.id) && <p>{t('aps.recon.v2.pendingDraft')}</p>}
+                        {period === 'monthly' && (
+                          <button
+                            type="button"
+                            className={button}
+                            disabled={readOnly}
+                            onClick={() => onEdit(line)}
+                          >
+                            {t('aps.recon.v2.edit', { name: line.classification_name })}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!lines.length && <p className="p-3">{t('aps.recon.noLines')}</p>}
+          </div>
+        );
+        return period === 'monthly' ? (
+          <section key={period} className="bg-card border-border rounded-xl border">
+            <h2 className="p-3 font-semibold">{t('aps.recon.v2.monthly')}</h2>
+            {table}
+          </section>
+        ) : (
+          <details key={period} className="bg-card border-border rounded-xl border">
+            <summary className="cursor-pointer p-3 font-semibold">{t('aps.recon.v2.ytd')}</summary>
+            {table}
+          </details>
+        );
+      })}
     </div>
   );
 }

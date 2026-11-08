@@ -21,10 +21,20 @@ export interface ReconciliationOptions {
   can_close: boolean;
   can_reopen_as_owner: boolean;
 }
+export interface ReconciliationScope {
+  id: string;
+  name: string;
+  is_active: boolean;
+  is_default: boolean;
+}
 export interface ReconciliationSession {
   id: string;
   status: 'open' | 'closed';
   flow_type: 'screen_v2';
+  scope_id: string;
+  scope_name_snapshot: string | null;
+  source_config_revision_id: string | null;
+  config_generation: string;
   settings_revision_id: string;
   needs_review: boolean;
   review_reason: string | null;
@@ -55,6 +65,8 @@ export interface ReconciliationLine {
   };
 }
 export interface ReconciliationState {
+  current_config_revision_id: string | null;
+  historical_overlap: boolean;
   fiscal_month: { id: string; is_active: boolean; is_fiscal_closed: boolean };
   selected_session: ReconciliationSession | null;
   selected_lines: ReconciliationLine[];
@@ -64,7 +76,12 @@ export interface ReconciliationState {
     missing_system_opening_count: number;
   };
   pagination: { offset: number; limit: number; has_more: boolean };
-  flags: { can_close_now: boolean; close_blocked_reason: string | null };
+  flags: {
+    can_close_now: boolean;
+    close_blocked_reason: string | null;
+    settings_changed: boolean | null;
+    can_sync_from_settings: boolean;
+  };
 }
 export interface ReconciliationClassification {
   id: string;
@@ -74,6 +91,7 @@ export interface ReconciliationClassification {
   is_active: boolean;
 }
 export interface ReconciliationSettings {
+  scope_id: string;
   revision_id: string | null;
   classifications: ReconciliationClassification[];
   selected: string[];
@@ -177,7 +195,27 @@ export function parseReconciliationOptions(value: unknown): ReconciliationOption
     can_reopen_as_owner: bool(o.can_reopen_as_owner),
   };
 }
-export function parseReconciliationSettings(value: unknown): ReconciliationSettings {
+export function parseReconciliationScopes(value: unknown): ReconciliationScope[] {
+  const scopes = list(value).map((item) => {
+    const x = obj(item);
+    return {
+      id: str(x.id),
+      name: str(x.name),
+      is_active: bool(x.is_active),
+      is_default: bool(x.is_default),
+    };
+  });
+  if (
+    new Set(scopes.map((s) => s.id)).size !== scopes.length ||
+    scopes.filter((s) => s.is_default).length !== 1
+  )
+    invalid();
+  return scopes;
+}
+export function parseReconciliationSettings(
+  value: unknown,
+  scopeId: string,
+): ReconciliationSettings {
   const o = obj(value);
   const classifications = list(o.classifications).map((v) => {
     const c = obj(v);
@@ -196,12 +234,19 @@ export function parseReconciliationSettings(value: unknown): ReconciliationSetti
     selected.some((id) => !classifications.some((c) => c.id === id))
   )
     invalid();
-  return { revision_id: nullableString(o.revision_id), classifications, selected };
+  if (str(o.scope_id) !== scopeId) invalid();
+  return {
+    scope_id: scopeId,
+    revision_id: nullableString(o.revision_id),
+    classifications,
+    selected,
+  };
 }
 export function parseReconciliationState(
   value: unknown,
   monthId: string,
   offset: number,
+  scopeId: string,
 ): ReconciliationState {
   const r = obj(value),
     month = obj(r.fiscal_month),
@@ -218,8 +263,13 @@ export function parseReconciliationState(
   if (r.selected_session !== null) {
     const s = obj(r.selected_session);
     if ((s.status !== 'open' && s.status !== 'closed') || s.flow_type !== 'screen_v2') invalid();
+    if (str(s.scope_id) !== scopeId) invalid();
     session = {
       id: str(s.id),
+      scope_id: scopeId,
+      scope_name_snapshot: nullableString(s.scope_name_snapshot),
+      source_config_revision_id: nullableString(s.source_config_revision_id),
+      config_generation: version(s.config_generation),
       status: s.status,
       flow_type: s.flow_type,
       settings_revision_id: str(s.settings_revision_id),
@@ -255,6 +305,8 @@ export function parseReconciliationState(
   )
     invalid();
   return {
+    current_config_revision_id: nullableString(r.current_config_revision_id),
+    historical_overlap: bool(r.historical_overlap),
     fiscal_month: {
       id: monthId,
       is_active: bool(month.is_active),
@@ -271,6 +323,8 @@ export function parseReconciliationState(
     flags: {
       can_close_now: bool(f.can_close_now),
       close_blocked_reason: nullableString(f.close_blocked_reason),
+      settings_changed: f.settings_changed === null ? null : bool(f.settings_changed),
+      can_sync_from_settings: bool(f.can_sync_from_settings),
     },
   };
 }
