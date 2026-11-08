@@ -18,7 +18,7 @@ describe('reconciliation financial values', () => {
     );
   });
   it('rejects malformed server data rather than treating it as empty', () => {
-    expect(() => parseReconciliationState({}, 'month', 0)).toThrow();
+    expect(() => parseReconciliationState({}, 'month', 0, 'scope')).toThrow();
   });
 });
 
@@ -35,9 +35,15 @@ describe('v2 read contract', () => {
     balance_difference: null,
   });
   const payload = () => ({
+    current_config_revision_id: 'revision',
+    historical_overlap: false,
     fiscal_month: { id: 'month', is_active: true, is_fiscal_closed: false },
     selected_session: {
       id: 'session',
+      scope_id: 'scope',
+      scope_name_snapshot: 'Scope',
+      source_config_revision_id: 'revision',
+      config_generation: '1',
       status: 'open',
       flow_type: 'screen_v2',
       settings_revision_id: 'revision',
@@ -67,10 +73,15 @@ describe('v2 read contract', () => {
       missing_system_opening_count: 1,
     },
     pagination: { offset: 0, limit: 50, has_more: false },
-    flags: { can_close_now: false, close_blocked_reason: 'missing_system_opening' },
+    flags: {
+      can_close_now: false,
+      close_blocked_reason: 'missing_system_opening',
+      settings_changed: null,
+      can_sync_from_settings: false,
+    },
   });
   it('retains decimal text, null, and bigint versions as strings', () => {
-    const result = parseReconciliationState(payload(), 'month', 0);
+    const result = parseReconciliationState(payload(), 'month', 0, 'scope');
     expect(result.selected_lines[0]?.ytd.book_opening).toBeNull();
     expect(result.selected_lines[0]?.monthly.book_inbound).toBe('0.00');
     expect(result.selected_lines[0]?.version).toBe('1234567890123456789');
@@ -79,6 +90,6 @@ describe('v2 read contract', () => {
     const value = payload();
     const line = value.selected_lines[0]!;
     (line.monthly as { book_inbound: unknown }).book_inbound = 1;
-    expect(() => parseReconciliationState(value, 'month', 0)).toThrow('invalidResponse');
+    expect(() => parseReconciliationState(value, 'month', 0, 'scope')).toThrow('invalidResponse');
   });
 });

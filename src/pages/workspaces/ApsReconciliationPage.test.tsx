@@ -14,7 +14,8 @@ const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')
 const month = id(1),
   session = id(2),
   classification = id(3),
-  lineId = id(4);
+  lineId = id(4),
+  scope = id(6);
 const options = () => ({
   months: [{ id: month, label: 'يناير 2027', is_active: true, is_fiscal_closed: false }],
   stations: [{ id: id(999), label: 'ignored' }],
@@ -34,9 +35,15 @@ const movement = () => ({
   balance_difference: null as string | null,
 });
 const state = () => ({
+  current_config_revision_id: id(5),
+  historical_overlap: false,
   fiscal_month: { id: month, is_active: true, is_fiscal_closed: false },
   selected_session: {
     id: session,
+    scope_id: scope,
+    scope_name_snapshot: 'النطاق',
+    source_config_revision_id: id(5),
+    config_generation: '1',
     status: 'open' as 'open' | 'closed',
     flow_type: 'screen_v2',
     settings_revision_id: id(5),
@@ -66,7 +73,12 @@ const state = () => ({
     missing_system_opening_count: 0,
   },
   pagination: { offset: 0, limit: 50, has_more: false },
-  flags: { can_close_now: false, close_blocked_reason: 'incomplete' as string | null },
+  flags: {
+    can_close_now: false,
+    close_blocked_reason: 'incomplete' as string | null,
+    settings_changed: false as boolean | null,
+    can_sync_from_settings: true,
+  },
 });
 let current: ReturnType<typeof state>,
   opts: ReturnType<typeof options>,
@@ -83,11 +95,16 @@ function setup() {
       await Promise.resolve();
       if (name === 'aps_get_reconciliation_options')
         return { data: structuredClone(opts), error: null };
-      if (name === 'aps_get_reconciliation_state_v2')
+      if (name === 'aps_get_reconciliation_scopes_v3')
+        return {
+          data: [{ id: scope, name: 'النطاق', is_default: true, is_active: true }],
+          error: null,
+        };
+      if (name === 'aps_get_reconciliation_state_v3')
         return readFail
           ? { data: null, error: { code: 'network' } }
           : { data: structuredClone(current), error: null };
-      if (name === 'aps_record_reconciliation_v2') {
+      if (name === 'aps_record_reconciliation_v3') {
         if (writeFail) return { data: null, error: { code: '40001' } };
         if (!noCommit) {
           const l = current.selected_lines[0]!;
@@ -156,13 +173,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
-describe('global v2 reconciliation', () => {
-  it('reads v2 without a station, renders both tables and distinguishes null', async () => {
+describe('v3 reconciliation', () => {
+  it('reads v3 without a station, renders both tables and distinguishes null', async () => {
     mount();
     expect((await screen.findAllByText('حديد')).length).toBe(2);
     expect(from).not.toHaveBeenCalled();
-    expect(rpc).toHaveBeenCalledWith('aps_get_reconciliation_state_v2', {
+    expect(rpc).toHaveBeenCalledWith('aps_get_reconciliation_state_v3', {
       p_month_id: month,
+      p_scope_id: scope,
       p_offset: 0,
       p_limit: 50,
     });
@@ -170,7 +188,7 @@ describe('global v2 reconciliation', () => {
     expect(screen.getAllByText('غير مدخل').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText('التراكمي منذ بداية السنة'));
     expect(screen.getByText('مرجع النظام، ليس تأكيداً مستقلاً')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       true,
     );
@@ -181,8 +199,11 @@ describe('global v2 reconciliation', () => {
     fill(dialog);
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
-      expect(rpc).toHaveBeenCalledWith('aps_record_reconciliation_v2', {
+      expect(rpc).toHaveBeenCalledWith('aps_record_reconciliation_v3', {
         p_session_id: session,
+        p_scope_id: scope,
+        p_line_id: lineId,
+        p_expected_generation: '1',
         p_classification_id: classification,
         p_accountant_inbound: '9999999999999999.99',
         p_accountant_outbound: '20.00',
@@ -194,7 +215,7 @@ describe('global v2 reconciliation', () => {
     );
     expect(await screen.findByText('تم حفظ السطر وتأكيد القيم من الخادم.')).toBeTruthy();
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toBeNull(),
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toBeNull(),
     );
   });
   it('saves a manual opening with all four independent movements', async () => {
@@ -208,7 +229,7 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
       expect(rpc).toHaveBeenCalledWith(
-        'aps_record_reconciliation_v2',
+        'aps_record_reconciliation_v3',
         expect.objectContaining({
           p_accountant_year_opening: '45.25',
           p_accountant_ytd_inbound: '130.00',
@@ -223,11 +244,11 @@ describe('global v2 reconciliation', () => {
     mount();
     const dialog = await edit();
     fireEvent.click(within(dialog).getByRole('button', { name: 'إلغاء' }));
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       false,
     );
-    expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toBeNull();
+    expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toBeNull();
   });
   it('preserves a manual opening on later edits', async () => {
     const l = current.selected_lines[0]!;
@@ -244,7 +265,7 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
       expect(rpc).toHaveBeenCalledWith(
-        'aps_record_reconciliation_v2',
+        'aps_record_reconciliation_v3',
         expect.objectContaining({
           p_accountant_year_opening: '45.00',
           p_accountant_ytd_inbound: '130.00',
@@ -260,11 +281,11 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     expect(await within(dialog).findByText(/تعذّر تأكيد الحفظ/)).toBeTruthy();
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain(
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain(
         '9999999999999999.99',
       ),
     );
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       true,
     );
@@ -275,14 +296,14 @@ describe('global v2 reconciliation', () => {
     fireEvent.change(within(dialog).getByLabelText('وارد المحاسب'), { target: { value: '-1' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     expect(within(dialog).getByRole('alert')).toBeTruthy();
-    expect(rpc.mock.calls.filter(([name]) => name === 'aps_record_reconciliation_v2')).toHaveLength(
+    expect(rpc.mock.calls.filter(([name]) => name === 'aps_record_reconciliation_v3')).toHaveLength(
       0,
     );
     fill(dialog);
     writeFail = true;
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain(
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain(
         '9999999999999999.99',
       ),
     );
@@ -290,7 +311,7 @@ describe('global v2 reconciliation', () => {
   it('automatically rereads a 40001 conflict, keeps even an identical rejected draft, and requires review before retry', async () => {
     const original = rpc.getMockImplementation()!;
     rpc.mockImplementation(async (name, args) => {
-      if (name === 'aps_record_reconciliation_v2' && args.p_expected_version === '1') {
+      if (name === 'aps_record_reconciliation_v3' && args.p_expected_version === '1') {
         const line = current.selected_lines[0]!;
         line.monthly.accountant_inbound = '9999999999999999.99';
         line.monthly.accountant_outbound = '20.00';
@@ -308,7 +329,7 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
       expect(
-        rpc.mock.calls.filter(([name]) => name === 'aps_get_reconciliation_state_v2').length,
+        rpc.mock.calls.filter(([name]) => name === 'aps_get_reconciliation_state_v3').length,
       ).toBeGreaterThan(1),
     );
     expect((await within(dialog).findAllByText(/تغيّر السطر أو الجلسة/)).length).toBeGreaterThan(0);
@@ -318,7 +339,7 @@ describe('global v2 reconciliation', () => {
     );
     expect(within(dialog).getByRole('button', { name: 'حفظ' })).toHaveProperty('disabled', true);
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain(
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain(
         '"conflicted":true',
       ),
     );
@@ -330,7 +351,7 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     await waitFor(() =>
       expect(rpc).toHaveBeenCalledWith(
-        'aps_record_reconciliation_v2',
+        'aps_record_reconciliation_v3',
         expect.objectContaining({ p_expected_version: '2' }),
       ),
     );
@@ -354,7 +375,7 @@ describe('global v2 reconciliation', () => {
     expect(await screen.findByText(/تُحفظ المسودات لهذا التبويب فقط/)).toBeTruthy();
     await waitFor(() =>
       expect(
-        sessionStorage.getItem('aps-reconciliation-v2-drafts:user-one:session-fallback'),
+        sessionStorage.getItem('aps-reconciliation-v3-drafts:user-one:session-fallback'),
       ).toContain('123.45'),
     );
     view.unmount();
@@ -413,7 +434,7 @@ describe('global v2 reconciliation', () => {
     fireEvent.click(screen.getByText('التراكمي منذ بداية السنة'));
     expect(screen.getByText('افتتاح مستقل أدخله المحاسب')).toBeTruthy();
     expect(screen.getByText(/غياب افتتاح النظام/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       true,
     );
@@ -427,7 +448,7 @@ describe('global v2 reconciliation', () => {
     mount();
     await screen.findAllByText('حديد');
     expect(screen.getByText(/حتى إذا كان صافي الفرق صفراً/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       true,
     );
@@ -439,7 +460,7 @@ describe('global v2 reconciliation', () => {
       target: { value: '123.45' },
     });
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain('123.45'),
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain('123.45'),
     );
     view.unmount();
     mount();
@@ -453,7 +474,7 @@ describe('global v2 reconciliation', () => {
     ) => Promise<unknown>;
     rpc.mockImplementation(async (name: string, args: Record<string, unknown>) => {
       const result: unknown = await original(name, args);
-      if (name === 'aps_record_reconciliation_v2') readFail = true;
+      if (name === 'aps_record_reconciliation_v3') readFail = true;
       return result;
     });
     mount();
@@ -461,14 +482,14 @@ describe('global v2 reconciliation', () => {
     fill(dialog);
     fireEvent.click(within(dialog).getByRole('button', { name: 'حفظ' }));
     expect(await within(dialog).findByText(/تعذّر تأكيد الحفظ/)).toBeTruthy();
-    expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain(
+    expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain(
       '9999999999999999.99',
     );
     readFail = false;
     fireEvent.click(within(dialog).getByRole('button', { name: 'إعادة قراءة البيانات' }));
     expect(await screen.findByText('تم حفظ السطر وتأكيد القيم من الخادم.')).toBeTruthy();
     await waitFor(() =>
-      expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toBeNull(),
+      expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toBeNull(),
     );
   });
   it('detects snapshot changes between paginated reads and blocks writes', async () => {
@@ -478,7 +499,7 @@ describe('global v2 reconciliation', () => {
     ) => Promise<unknown>;
     current.pagination.has_more = true;
     rpc.mockImplementation((name: string, args: Record<string, unknown>) => {
-      if (name === 'aps_get_reconciliation_state_v2' && args.p_offset === 50) {
+      if (name === 'aps_get_reconciliation_state_v3' && args.p_offset === 50) {
         const next = structuredClone(current);
         next.pagination = { offset: 50, limit: 50, has_more: false };
         next.selected_session.snapshot_version = '2';
@@ -496,9 +517,173 @@ describe('global v2 reconciliation', () => {
       'disabled',
       true,
     );
-    expect(screen.getByRole('button', { name: 'إغلاق جلسات الشهر' })).toHaveProperty(
+    expect(screen.getByRole('button', { name: 'إغلاق النطاق للشهر' })).toHaveProperty(
       'disabled',
       true,
     );
+  });
+});
+
+describe('v3 scope and sync safeguards', () => {
+  it('renders both grouped headers with opening outside the columns', async () => {
+    mount();
+    await screen.findAllByText('حديد');
+    const tables = screen.getAllByRole('table', { hidden: true });
+    expect(tables).toHaveLength(2);
+    for (const table of tables) {
+      const rows = table.querySelectorAll('thead tr');
+      expect(rows).toHaveLength(2);
+      expect(
+        [...rows[0]!.querySelectorAll('th')].map((h) => [h.textContent, h.rowSpan, h.colSpan]),
+      ).toEqual([
+        ['التصنيف', 2, 1],
+        ['وارد', 1, 2],
+        ['منصرف', 1, 2],
+        ['الرصيد', 1, 2],
+        ['الفرق', 2, 1],
+        ['حالة السطر', 2, 1],
+      ]);
+      expect([...rows[1]!.querySelectorAll('th')].map((h) => h.textContent)).toEqual([
+        'تكاليف',
+        'حسابات',
+        'تكاليف',
+        'حسابات',
+        'تكاليف',
+        'حسابات',
+      ]);
+    }
+  });
+  it('shows sync only for an open eligible changed session and sends concurrency tokens', async () => {
+    current.flags.settings_changed = true;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    const button = await screen.findByRole('button', { name: 'تحديث الجلسة من الضبط' });
+    expect(screen.getByText(/التحديث سيعيد بناء السطور/)).toBeTruthy();
+    fireEvent.click(button);
+    expect(confirm).toHaveBeenCalled();
+    await waitFor(() =>
+      expect(rpc).toHaveBeenCalledWith('aps_sync_empty_reconciliation_v3', {
+        p_session_id: session,
+        p_scope_id: scope,
+        p_expected_snapshot_version: '1',
+        p_expected_generation: '1',
+        p_expected_config_revision: id(5),
+      }),
+    );
+  });
+  it('never enables sync with a local draft and preserves that draft', async () => {
+    current.flags.settings_changed = true;
+    mount();
+    const dialog = await edit();
+    fireEvent.change(within(dialog).getByLabelText('وارد المحاسب'), {
+      target: { value: '123.45' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'إلغاء' }));
+    expect(screen.getByRole('button', { name: 'تحديث الجلسة من الضبط' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(screen.getByText(/التحديث غير متاح لوجود مسودة/)).toBeTruthy();
+    expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain('123.45');
+  });
+  it.each([
+    [null, true, 'open'],
+    [false, true, 'open'],
+    [true, false, 'open'],
+    [true, true, 'closed'],
+  ] as const)(
+    'does not offer sync for flags %s, %s and status %s',
+    async (changed, canSync, status) => {
+      current.flags.settings_changed = changed;
+      current.flags.can_sync_from_settings = canSync;
+      current.selected_session.status = status;
+      mount();
+      await screen.findAllByText('حديد');
+      expect(screen.queryByRole('button', { name: 'تحديث الجلسة من الضبط' })).toBeNull();
+      if (changed === null) expect(screen.getByText(/تعذر تحديد ما إذا تغيّر الضبط/)).toBeTruthy();
+    },
+  );
+  it('keeps old v2 drafts accessible and blocks sync until explicitly removed', async () => {
+    current.flags.settings_changed = true;
+    const key = `${month}:${session}:${lineId}`;
+    localStorage.setItem(
+      'aps-reconciliation-v2-drafts:user-one',
+      JSON.stringify({
+        [key]: {
+          version: '1',
+          monthlyInbound: '123.45',
+          monthlyOutbound: '',
+          ytdInbound: '',
+          ytdOutbound: '',
+          opening: '',
+          manual: false,
+        },
+      }),
+    );
+    mount();
+    expect(await screen.findByText(/توجد مسودات قديمة محفوظة/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'تحديث الجلسة من الضبط' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(localStorage.getItem('aps-reconciliation-v2-drafts:user-one')).toContain('123.45');
+  });
+  it('warns on historical overlap', async () => {
+    current.historical_overlap = true;
+    mount();
+    expect(await screen.findByText(/تداخل تاريخي/)).toBeTruthy();
+  });
+});
+
+describe('scope isolation', () => {
+  it('queries the selected scope and retains drafts separately across scopes', async () => {
+    const second = id(20);
+    const original = rpc.getMockImplementation() as (
+      name: string,
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
+    rpc.mockImplementation(async (name, args) => {
+      if (name === 'aps_get_reconciliation_scopes_v3')
+        return {
+          data: [
+            { id: scope, name: 'النطاق', is_default: true, is_active: true },
+            { id: second, name: 'آخر', is_default: false, is_active: true },
+          ],
+          error: null,
+        };
+      if (name === 'aps_get_reconciliation_state_v3' && args.p_scope_id === second) {
+        const result = structuredClone(current);
+        result.selected_session.scope_id = second;
+        result.selected_session.id = id(21);
+        result.selected_lines[0]!.id = id(22);
+        return { data: result, error: null };
+      }
+      return original(name, args);
+    });
+    mount();
+    const dialog = await edit();
+    fireEvent.change(within(dialog).getByLabelText('وارد المحاسب'), {
+      target: { value: '777.12' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'إلغاء' }));
+    fireEvent.change(screen.getByLabelText('النطاق'), { target: { value: second } });
+    await waitFor(() =>
+      expect(rpc).toHaveBeenCalledWith(
+        'aps_get_reconciliation_state_v3',
+        expect.objectContaining({ p_scope_id: second, p_month_id: month }),
+      ),
+    );
+    const nextDialog = await edit();
+    expect(within(nextDialog).getByLabelText('وارد المحاسب')).toHaveProperty('value', '');
+    fireEvent.click(within(nextDialog).getByRole('button', { name: 'إلغاء' }));
+    fireEvent.change(screen.getByLabelText('النطاق'), { target: { value: scope } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'إدخال المحاسب — حديد' })).toHaveProperty(
+        'disabled',
+        false,
+      ),
+    );
+    const restored = await edit();
+    expect(within(restored).getByLabelText('وارد المحاسب')).toHaveProperty('value', '777.12');
   });
 });

@@ -10,6 +10,8 @@ import {
   reopenReconciliation,
   useReconciliationOptions,
   useReconciliationState,
+  useReconciliationScopes,
+  syncReconciliation,
 } from '@/hooks/useApsReconciliation';
 import { useI18n } from '@/i18n/I18nContext';
 import { createDraftStorage } from '@/lib/reconciliationDraftStorage';
@@ -36,6 +38,8 @@ function consistent(pages: ReconciliationState[]) {
       (p) =>
         p.selected_session?.id === first?.id &&
         p.selected_session?.snapshot_version === first?.snapshot_version &&
+        p.selected_session?.config_generation === first?.config_generation &&
+        p.current_config_revision_id === pages[0]?.current_config_revision_id &&
         p.selected_session?.status === first?.status,
     ) && new Set(lines.map((l) => l.id)).size === lines.length
   );
@@ -73,14 +77,26 @@ function Page({ actor }: { actor: string }) {
       : requested === null
         ? (options.months.find((m) => m.is_active)?.id ?? '')
         : requested;
-  const query = useReconciliationState(month || null);
+  const scopesQuery = useReconciliationScopes();
+  const requestedScope = params.get('scope');
+  const scope =
+    requestedScope === null
+      ? (scopesQuery.data?.find((s) => s.is_default)?.id ?? '')
+      : scopesQuery.data?.some((s) => s.id === requestedScope)
+        ? requestedScope
+        : '';
+  const query = useReconciliationState(month || null, scope || null);
   const pages = query.data?.pages ?? [],
     first = pages[0],
     session = first?.selected_session;
   const lines = pages.flatMap((p) => p.selected_lines),
     inconsistent = !consistent(pages);
-  const storageKey = `aps-reconciliation-v2-drafts:${actor}`;
+  const storageKey = `aps-reconciliation-v3-drafts:${actor}`;
   const [storage] = useState(() => createDraftStorage(storageKey));
+  const [legacyStorage] = useState(() =>
+    createDraftStorage(`aps-reconciliation-v2-drafts:${actor}`),
+  );
+  const [legacyDrafts, setLegacyDrafts] = useState(() => legacyStorage.initial);
   const storageMode = useSyncExternalStore(storage.subscribe, storage.getMode, storage.getMode);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => storage.initial);
   const [editing, setEditing] = useState<string | null>(null),
@@ -91,10 +107,17 @@ function Page({ actor }: { actor: string }) {
   const [operation, setOperation] = useState<'close' | 'reopen' | null>(null),
     [reason, setReason] = useState('');
   const locked = useRef(false);
-  const draftKey = (id: string) => `${month}:${session?.id ?? ''}:${id}`;
+  const draftKey = (id: string) => `${scope}:${month}:${session?.id ?? ''}:${id}`;
   const monthDrafts = Object.keys(drafts).filter((k) =>
-    k.startsWith(`${month}:${session?.id ?? ''}:`),
+    k.startsWith(`${scope}:${month}:${session?.id ?? ''}:`),
   );
+  const isDefault = scopesQuery.data?.find((s) => s.id === scope)?.is_default;
+  const legacyKeys = isDefault
+    ? Object.keys(legacyDrafts).filter((k) => k.startsWith(`${month}:${session?.id ?? ''}:`))
+    : [];
+  const hasDrafts = monthDrafts.length > 0 || legacyKeys.length > 0 || editing !== null;
+  const hasAnyDrafts =
+    Object.keys(drafts).length > 0 || Object.keys(legacyDrafts).length > 0 || editing !== null;
   const draftIds = new Set(monthDrafts.map((k) => k.slice(k.lastIndexOf(':') + 1)));
   const selectedLine = lines.find((l) => l.id === editing);
   const readOnly =
@@ -126,7 +149,9 @@ function Page({ actor }: { actor: string }) {
     setError(
       e instanceof ReconciliationError && e.code === '42501'
         ? t('aps.recon.forbidden')
-        : t('aps.recon.requestError'),
+        : e instanceof ReconciliationError && e.code === '40001'
+          ? t('aps.recon.v3.concurrentChange')
+          : t('aps.recon.requestError'),
     );
   }
   async function reload(confirmDrafts = true): Promise<ReconciliationState[] | null> {
@@ -141,7 +166,7 @@ function Page({ actor }: { actor: string }) {
     setDrafts((old) => {
       const next = { ...old };
       for (const line of currentLines) {
-        const key = `${month}:${current?.id ?? ''}:${line.id}`;
+        const key = `${scope}:${month}:${current?.id ?? ''}:${line.id}`;
         const draft = next[key];
         if (confirmDrafts && draft && confirmed(line, draft)) delete next[key];
       }
@@ -199,7 +224,15 @@ function Page({ actor }: { actor: string }) {
     setError(null);
     setNotice(null);
     try {
-      await recordReconciliation(session.id, line.classification_id, amounts, draft.version);
+      await recordReconciliation(
+        session.id,
+        scope,
+        line.id,
+        line.classification_id,
+        session.config_generation,
+        amounts,
+        draft.version,
+      );
       const latest = await reload();
       const fresh = latest?.flatMap((p) => p.selected_lines).find((l) => l.id === line.id);
       if (fresh && confirmed(fresh, submitted)) {
@@ -272,7 +305,7 @@ function Page({ actor }: { actor: string }) {
     <div className="space-y-5">
       <header>
         <h1 className="text-xl font-bold">{t('aps.recon.title')}</h1>
-        <p className="text-muted-foreground text-sm">{t('aps.recon.v2.v2Description')}</p>
+        <p className="text-muted-foreground text-sm">{t('aps.recon.v3.treeWarning')}</p>
       </header>
       {storageMode !== 'local' && (
         <p role="status" className="text-sm text-amber-700 dark:text-amber-300">
@@ -291,6 +324,41 @@ function Page({ actor }: { actor: string }) {
             {t('aps.recon.retry')}
           </button>
         </div>
+      )}
+      {scopesQuery.isError && (
+        <div role="alert">
+          {t('aps.recon.requestError')}
+          <button className={button} onClick={() => void scopesQuery.refetch()}>
+            {t('aps.recon.retry')}
+          </button>
+        </div>
+      )}
+      {scopesQuery.data && (
+        <label className="grid max-w-sm gap-1 text-sm font-semibold">
+          {t('aps.recon.v3.scope')}
+          <select
+            value={scope}
+            disabled={busy}
+            onChange={(e) => {
+              const next = new URLSearchParams(params);
+              next.set('scope', e.target.value);
+              next.delete('station');
+              setParams(next);
+              setEditing(null);
+              setError(null);
+              setNotice(null);
+              setMustRefresh(false);
+            }}
+          >
+            <option value="">{t('aps.recon.v3.scopeChoose')}</option>
+            {scopesQuery.data.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {!s.is_active ? ` (${t('aps.recon.v3.scopeArchived')})` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       {options && (
         <label className="grid max-w-sm gap-1 text-sm font-semibold">
@@ -321,7 +389,7 @@ function Page({ actor }: { actor: string }) {
       )}
       {invalidMonth && <p role="alert">{t('aps.recon.v2.v2Select')}</p>}
       {options && !options.months.length && <p>{t('aps.recon.v2.v2Empty')}</p>}
-      {month && query.isPending && <p>{t('aps.recon.loading')}</p>}
+      {month && scope && query.isPending && <p>{t('aps.recon.loading')}</p>}
       {query.isError && (
         <div role="alert">
           <p>{t('aps.recon.requestError')}</p>
@@ -365,9 +433,12 @@ function Page({ actor }: { actor: string }) {
                 mustRefresh ||
                 inconsistent ||
                 !options?.can_manage ||
-                !!session
+                !!session ||
+                !scopesQuery.data?.find((s) => s.id === scope)?.is_active
               }
-              onClick={() => void run(() => openReconciliation(month), t('aps.recon.openSuccess'))}
+              onClick={() =>
+                void run(() => openReconciliation(month, scope), t('aps.recon.openSuccess'))
+              }
             >
               {t('aps.recon.v2.v2Open')}
             </button>
@@ -384,7 +455,7 @@ function Page({ actor }: { actor: string }) {
                   !options?.can_manage
                 }
                 onClick={() =>
-                  void run(() => refreshReconciliation(session.id), t('aps.recon.updated'))
+                  void run(() => refreshReconciliation(session.id, scope), t('aps.recon.updated'))
                 }
               >
                 {t('aps.recon.v2.refreshSnapshot')}
@@ -399,7 +470,7 @@ function Page({ actor }: { actor: string }) {
                 query.isFetching ||
                 mustRefresh ||
                 inconsistent ||
-                !!monthDrafts.length ||
+                hasDrafts ||
                 !options?.can_close ||
                 !first.flags.can_close_now
               }
@@ -408,7 +479,7 @@ function Page({ actor }: { actor: string }) {
                 setReason('');
               }}
             >
-              {t('aps.recon.closeMonth')}
+              {t('aps.recon.v3.closeScope')}
             </button>
             {options?.can_reopen_as_owner && session?.status === 'closed' && (
               <button
@@ -420,7 +491,7 @@ function Page({ actor }: { actor: string }) {
                   query.isFetching ||
                   mustRefresh ||
                   inconsistent ||
-                  !!monthDrafts.length
+                  hasDrafts
                 }
                 onClick={() => {
                   setOperation('reopen');
@@ -431,6 +502,100 @@ function Page({ actor }: { actor: string }) {
               </button>
             )}
           </div>
+          {first.historical_overlap && <p role="alert">{t('aps.recon.v3.historicalOverlap')}</p>}
+          {session && first.flags.settings_changed === null && (
+            <p>{t('aps.recon.v3.unknownSettings')}</p>
+          )}
+          {session?.status === 'open' &&
+            first.flags.can_sync_from_settings === true &&
+            first.flags.settings_changed === true && (
+              <div>
+                <p>{t('aps.recon.v3.syncWarning')}</p>
+                {hasAnyDrafts && <p role="alert">{t('aps.recon.v3.syncDraft')}</p>}
+                <button
+                  type="button"
+                  className={button}
+                  disabled={
+                    hasAnyDrafts ||
+                    busy ||
+                    query.isFetching ||
+                    query.isError ||
+                    mustRefresh ||
+                    inconsistent
+                  }
+                  onClick={() => {
+                    if (hasAnyDrafts || !window.confirm(t('aps.recon.v3.syncWarning'))) return;
+                    void run(
+                      () =>
+                        syncReconciliation(
+                          session.id,
+                          scope,
+                          session.snapshot_version,
+                          session.config_generation,
+                          first.current_config_revision_id,
+                        ),
+                      t('aps.recon.v3.syncDone'),
+                    );
+                  }}
+                >
+                  {t('aps.recon.v3.sync')}
+                </button>
+              </div>
+            )}
+          {Object.keys(drafts).filter((key) => !lines.some((line) => draftKey(line.id) === key))
+            .length > 0 && (
+            <section>
+              <p role="alert">{t('aps.recon.v3.orphanDraft')}</p>
+              {Object.keys(drafts)
+                .filter((key) => !lines.some((line) => draftKey(line.id) === key))
+                .map((key) => (
+                  <div key={key}>
+                    <pre className="whitespace-pre-wrap">
+                      {key}: {JSON.stringify(drafts[key], null, 2)}
+                    </pre>
+                    <button
+                      type="button"
+                      className={button}
+                      onClick={() => {
+                        if (!window.confirm(t('aps.recon.v3.legacyDeleteConfirm'))) return;
+                        setDrafts((old) => {
+                          const next = { ...old };
+                          delete next[key];
+                          return next;
+                        });
+                      }}
+                    >
+                      {t('aps.recon.v3.legacyDelete')}
+                    </button>
+                  </div>
+                ))}
+            </section>
+          )}
+          {Object.keys(legacyDrafts).length > 0 && (
+            <section>
+              <p role="alert">{t('aps.recon.v3.legacyDraft')}</p>
+              {Object.keys(legacyDrafts).map((key) => (
+                <div key={key}>
+                  <pre className="whitespace-pre-wrap">
+                    {key}: {JSON.stringify(legacyDrafts[key], null, 2)}
+                  </pre>
+                  <button
+                    type="button"
+                    className={button}
+                    onClick={() => {
+                      if (!window.confirm(t('aps.recon.v3.legacyDeleteConfirm'))) return;
+                      const next = { ...legacyDrafts };
+                      delete next[key];
+                      legacyStorage.persist(next);
+                      setLegacyDrafts(next);
+                    }}
+                  >
+                    {t('aps.recon.v3.legacyDelete')}
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
           {session?.needs_review && <p role="alert">{t('aps.recon.v2.needsReview')}</p>}
           {inconsistent && <p role="alert">{t('aps.recon.v2.inconsistent')}</p>}
           {mustRefresh && <p role="alert">{t('aps.recon.v2.draftUnconfirmed')}</p>}
@@ -507,7 +672,7 @@ function Page({ actor }: { actor: string }) {
           <div className="mt-4 space-y-4">
             <p>
               {t(
-                operation === 'close' ? 'aps.recon.v2.v2CloseScope' : 'aps.recon.v2.v2ReopenScope',
+                operation === 'close' ? 'aps.recon.v3.closeConfirm' : 'aps.recon.v3.reopenConfirm',
               )}
             </p>
             <label className="grid gap-1">
@@ -532,8 +697,8 @@ function Page({ actor }: { actor: string }) {
                 void run(
                   () =>
                     op === 'close'
-                      ? closeReconciliation(month, reason.trim())
-                      : reopenReconciliation(month, reason.trim()),
+                      ? closeReconciliation(month, scope, reason.trim())
+                      : reopenReconciliation(month, scope, reason.trim()),
                   t(op === 'close' ? 'aps.recon.closeSuccess' : 'aps.recon.reopenSuccess'),
                 );
               }}

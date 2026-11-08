@@ -1952,6 +1952,52 @@ export const en: Record<TranslationKey, string> = {
 
   /* ------------------------------------------------------------- common */
   'common.loading': 'Loading...',
+  'aps.recon.v3.closeScope': 'Close scope for month',
+  'aps.recon.v3.closeConfirm': 'Only this scope for this month will be closed.',
+  'aps.recon.v3.reopenConfirm':
+    'Only this scope’s session for this month will be reopened for review.',
+  'aps.recon.v3.orphanDraft':
+    'Saved drafts exist for lines not currently visible; copy the values before proceeding.',
+  'aps.recon.v3.settingsDiscardConfirm':
+    'You have unsaved settings changes. Continue and discard them?',
+  'aps.recon.v3.concurrentChange':
+    'Settings or the session changed concurrently. Reload and review; your drafts were retained.',
+  'aps.recon.v3.scope': 'Scope',
+  'aps.recon.v3.scopeChoose': 'Choose a scope',
+  'aps.recon.v3.inbound': 'Inbound',
+  'aps.recon.v3.outbound': 'Outbound',
+  'aps.recon.v3.balance': 'Balance',
+  'aps.recon.v3.costs': 'Costs',
+  'aps.recon.v3.accounts': 'Accounts',
+  'aps.recon.v3.rowIncomplete': 'Incomplete',
+  'aps.recon.v3.rowMismatch': 'Differences',
+  'aps.recon.v3.rowMatched': 'Matched',
+  'aps.recon.v3.sync': 'Update session from settings',
+  'aps.recon.v3.syncWarning':
+    'Updating rebuilds the lines from the new settings and will discard unsaved changes.',
+  'aps.recon.v3.syncDraft': 'Updating is disabled because there is an unsaved local draft.',
+  'aps.recon.v3.syncDone': 'Session updated from settings.',
+  'aps.recon.v3.unknownSettings': 'Whether settings changed for this session is unknown.',
+  'aps.recon.v3.treeWarning': 'Classification tree changes may not appear as settings changes.',
+  'aps.recon.v3.historicalOverlap': 'Warning: historical scope overlap exists for this month.',
+  'aps.recon.v3.scopes': 'Reconciliation scopes',
+  'aps.recon.v3.scopeName': 'Scope name',
+  'aps.recon.v3.scopeCreate': 'Add scope',
+  'aps.recon.v3.scopeRename': 'Rename',
+  'aps.recon.v3.scopeArchive': 'Archive scope',
+  'aps.recon.v3.scopeArchived': 'Archived',
+  'aps.recon.v3.scopeError': 'Operation failed; check permissions and conflicts.',
+  'aps.recon.v3.scopeConflict':
+    'Classifications overlap another scope or settings changed; review your choices.',
+  'aps.recon.v3.scopeOwners': 'Used by another scope',
+  'aps.recon.v3.scopeBranches':
+    'Previously selected branches remain unchanged; they are not converted to leaves automatically.',
+  'aps.recon.v3.legacyDelete': 'Delete old draft',
+  'aps.recon.v3.legacyDeleteConfirm':
+    'Have you copied the old draft and want to delete it permanently?',
+  'aps.recon.v3.legacyDraft':
+    'Old drafts are preserved. Review and copy their values before updating.',
+  'aps.recon.v3.noScope': 'Choose a scope and month to view reconciliation.',
   'aps.recon.v2.settingsTab': 'Reconciliation settings',
   'aps.recon.v2.settingsIntro':
     'Select reconciliation classifications. A branch includes all its leaves, including inactive leaves with historical data. A branch and its descendants cannot both be selected. Changes apply to new sessions only.',
