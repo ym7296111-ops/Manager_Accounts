@@ -687,3 +687,95 @@ describe('scope isolation', () => {
     expect(within(restored).getByLabelText('وارد المحاسب')).toHaveProperty('value', '777.12');
   });
 });
+
+describe('safe session deletion', () => {
+  it('offers delete only when server confirms eligibility; cancellation does not call delete', async () => {
+    const original = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (name, args) =>
+      name === 'aps_can_delete_reconciliation_session_v3'
+        ? { data: true, error: null }
+        : original(name, args),
+    );
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    mount();
+    const del = await screen.findByRole('button', { name: 'حذف الجلسة' });
+    fireEvent.click(del);
+    expect(confirm).toHaveBeenCalledWith('هل أنت متأكد من إلغاء هذه الجلسة؟');
+    expect(rpc).not.toHaveBeenCalledWith('aps_delete_reconciliation_session_v3', expect.anything());
+  });
+  it.each(['ineligible', 'closed', 'no-permission', 'eligibility-error'] as const)(
+    'does not offer delete for %s',
+    async (scenario) => {
+      if (scenario === 'ineligible') current.selected_lines[0]!.ytd.accountant_inbound = '0.00';
+      if (scenario === 'closed') current.selected_session.status = 'closed';
+      if (scenario === 'no-permission') opts.can_manage = false;
+      const original = rpc.getMockImplementation()!;
+      rpc.mockImplementation(async (name, args) =>
+        name === 'aps_can_delete_reconciliation_session_v3'
+          ? { data: false, error: scenario === 'eligibility-error' ? { code: 'network' } : null }
+          : original(name, args),
+      );
+      mount();
+      await screen.findAllByText('حديد');
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'حذف الجلسة' })).toBeNull());
+    },
+  );
+  it('disables delete while any draft is present', async () => {
+    const original = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (name, args) =>
+      name === 'aps_can_delete_reconciliation_session_v3'
+        ? { data: true, error: null }
+        : original(name, args),
+    );
+    mount();
+    await screen.findByRole('button', { name: 'حذف الجلسة' });
+    const dialog = await edit();
+    fireEvent.change(within(dialog).getByLabelText('وارد المحاسب'), { target: { value: '8.00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'إلغاء' }));
+    expect(screen.getByRole('button', { name: 'حذف الجلسة' })).toHaveProperty('disabled', true);
+    expect(localStorage.getItem('aps-reconciliation-v3-drafts:user-one')).toContain('8.00');
+  });
+  it('deletes only after confirmation and verifies the new state', async () => {
+    let deleted = false;
+    const original = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (name, args) => {
+      if (name === 'aps_can_delete_reconciliation_session_v3') return { data: true, error: null };
+      if (name === 'aps_delete_reconciliation_session_v3') {
+        deleted = true;
+        return { data: null, error: null };
+      }
+      if (name === 'aps_get_reconciliation_state_v3' && deleted)
+        return {
+          data: { ...structuredClone(current), selected_session: null, selected_lines: [] },
+          error: null,
+        };
+      return original(name, args);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'حذف الجلسة' }));
+    await waitFor(() =>
+      expect(rpc).toHaveBeenCalledWith('aps_delete_reconciliation_session_v3', {
+        p_session_id: session,
+      }),
+    );
+    expect(await screen.findByText('تم حذف الجلسة وتأكيد ذلك.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'حذف الجلسة' })).toBeNull();
+  });
+  it('does not claim success when the server rejects a concurrent recording', async () => {
+    const original = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (name, args) => {
+      if (name === 'aps_can_delete_reconciliation_session_v3') return { data: true, error: null };
+      if (name === 'aps_delete_reconciliation_session_v3')
+        return { data: null, error: { code: '22023' } };
+      return original(name, args);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'حذف الجلسة' }));
+    expect(
+      await screen.findByText('تعذرت العملية أو الاتصال. راجع الحالة قبل إعادة المحاولة.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('تم حذف الجلسة وتأكيد ذلك.')).toBeNull();
+  });
+});

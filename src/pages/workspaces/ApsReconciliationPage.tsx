@@ -12,6 +12,8 @@ import {
   useReconciliationState,
   useReconciliationScopes,
   syncReconciliation,
+  useCanDeleteReconciliationSession,
+  deleteReconciliationSession,
 } from '@/hooks/useApsReconciliation';
 import { useI18n } from '@/i18n/I18nContext';
 import { createDraftStorage } from '@/lib/reconciliationDraftStorage';
@@ -89,6 +91,11 @@ function Page({ actor }: { actor: string }) {
   const pages = query.data?.pages ?? [],
     first = pages[0],
     session = first?.selected_session;
+  const deleteEligibility = useCanDeleteReconciliationSession(
+    session?.id ?? null,
+    session?.snapshot_version ?? null,
+    !!options?.can_manage && session?.status === 'open',
+  );
   const lines = pages.flatMap((p) => p.selected_lines),
     inconsistent = !consistent(pages);
   const storageKey = `aps-reconciliation-v3-drafts:${actor}`;
@@ -185,6 +192,40 @@ function Page({ actor }: { actor: string }) {
       await action();
       const latest = await reload();
       setNotice(latest ? success : t('aps.recon.v2.draftUnconfirmed'));
+    } catch (e) {
+      showError(e);
+      setMustRefresh(true);
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
+  }
+  async function removeSession() {
+    if (
+      !session ||
+      locked.current ||
+      busy ||
+      hasAnyDrafts ||
+      query.isError ||
+      query.isFetching ||
+      mustRefresh ||
+      inconsistent ||
+      deleteEligibility.data !== true ||
+      deleteEligibility.isFetching
+    )
+      return;
+    if (!window.confirm(t('aps.recon.v3.deleteSessionConfirm'))) return;
+    locked.current = true;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await deleteReconciliationSession(session.id);
+      const latest = await reload(false);
+      if (!latest || latest[0]?.selected_session?.id === session.id) {
+        setMustRefresh(true);
+        setError(t('aps.recon.v2.draftUnconfirmed'));
+      } else setNotice(t('aps.recon.v3.deleteSessionSuccess'));
     } catch (e) {
       showError(e);
       setMustRefresh(true);
@@ -481,6 +522,26 @@ function Page({ actor }: { actor: string }) {
             >
               {t('aps.recon.v3.closeScope')}
             </button>
+            {session?.status === 'open' &&
+              options?.can_manage &&
+              deleteEligibility.data === true && (
+                <button
+                  type="button"
+                  className={button}
+                  disabled={
+                    busy ||
+                    query.isError ||
+                    query.isFetching ||
+                    mustRefresh ||
+                    inconsistent ||
+                    hasAnyDrafts ||
+                    deleteEligibility.isFetching
+                  }
+                  onClick={() => void removeSession()}
+                >
+                  {t('aps.recon.v3.deleteSession')}
+                </button>
+              )}
             {options?.can_reopen_as_owner && session?.status === 'closed' && (
               <button
                 type="button"

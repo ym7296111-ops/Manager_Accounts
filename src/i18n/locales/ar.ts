@@ -1877,6 +1877,14 @@ export const ar = {
   'aps.recon.v3.settingsDiscardConfirm': 'لديك تغييرات ضبط غير محفوظة. هل تريد المتابعة وفقدها؟',
   'aps.recon.v3.concurrentChange':
     'تغيّر الضبط أو الجلسة بالتزامن. أعد قراءة البيانات وراجعها؛ لم تُحذف مسوداتك.',
+  'aps.recon.v3.deleteScope': 'حذف النطاق',
+  'aps.recon.v3.deleteScopeConfirm': 'هل أنت متأكد من حذف هذا النطاق نهائياً؟',
+  'aps.recon.v3.deleteScopeSuccess': 'تم حذف النطاق وتأكيد ذلك.',
+  'aps.recon.v3.deleteScopeHistory':
+    'لا يمكن حذف نطاق له تاريخ جلسات؛ استخدم الأرشفة بدلاً من ذلك.',
+  'aps.recon.v3.deleteSession': 'حذف الجلسة',
+  'aps.recon.v3.deleteSessionConfirm': 'هل أنت متأكد من إلغاء هذه الجلسة؟',
+  'aps.recon.v3.deleteSessionSuccess': 'تم حذف الجلسة وتأكيد ذلك.',
   'aps.recon.v3.scope': 'النطاق',
   'aps.recon.v3.scopeChoose': 'اختر نطاقاً',
   'aps.recon.v3.inbound': 'وارد',
