@@ -2,6 +2,14 @@
 -- are reused with an explicit operation to avoid changing the audit enum.
 -- All writers share the existing reconciliation advisory lock.
 
+-- Existing lines must survive accidental parent deletion; only explicit,
+-- authorized deletion can remove them after a durable audit snapshot.
+alter table public.aps_reconciliation_lines
+  drop constraint aps_reconciliation_lines_session_id_fkey;
+alter table public.aps_reconciliation_lines
+  add constraint aps_reconciliation_lines_session_id_fkey
+  foreign key (session_id) references public.aps_reconciliation_sessions(id) on delete restrict;
+
 create index aps_reconciliation_v3_scope_session_audit_idx
   on public.audit_logs ((metadata->>'scope_id'))
   where entity='aps_reconciliation_sessions' and action in
@@ -64,7 +72,8 @@ begin
       jsonb_build_object('operation','delete_empty_session','scope_id',s.scope_id,
         'fiscal_month_id',s.fiscal_month_id,'session',to_jsonb(s),'lines',v_lines,'sync_history',v_history));
   delete from public.aps_reconciliation_sync_history where session_id=s.id;
-  delete from public.aps_reconciliation_sessions where id=s.id; -- lines cascade
+  delete from public.aps_reconciliation_lines where session_id=s.id;
+  delete from public.aps_reconciliation_sessions where id=s.id;
 end $$;
 revoke all on function public.aps_delete_reconciliation_session_v3(uuid) from public,anon,authenticated,service_role;
 grant execute on function public.aps_delete_reconciliation_session_v3(uuid) to authenticated;

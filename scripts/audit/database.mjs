@@ -6124,6 +6124,11 @@ try {
       await db.query('delete from public.letters where id=any($1::uuid[])', [letterIds]);
     }
     await db.query(
+      `delete from public.aps_reconciliation_lines where session_id in
+       (select id from public.aps_reconciliation_sessions where id=any($1::uuid[]) or station_id=any($2::uuid[]))`,
+      [sessionIds, [fixture.stationId, fixture.otherStationId]],
+    );
+    await db.query(
       'delete from public.aps_reconciliation_sessions where id=any($1::uuid[]) or station_id=any($2::uuid[])',
       [sessionIds, [fixture.stationId, fixture.otherStationId]],
     );
@@ -6292,6 +6297,10 @@ try {
         ).rows.map((r) => r.settings_revision_id),
       );
       await db.query('delete from public.letters where id=any($1::uuid[])', [letters]);
+      await db.query(
+        'delete from public.aps_reconciliation_lines where session_id=any($1::uuid[])',
+        [sessions],
+      );
       await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
         sessions,
       ]);
@@ -6607,6 +6616,55 @@ try {
         '2',
         next,
       ]);
+    });
+  });
+
+  await test('APS v3 session lines foreign key restricts parent deletion', async () => {
+    const result = await db.query(`select confdeltype from pg_constraint
+      where conrelid='public.aps_reconciliation_lines'::regclass and conname='aps_reconciliation_lines_session_id_fkey'`);
+    assert.equal(result.rows[0]?.confdeltype, 'r');
+    await withScopedV3Transaction(async ({ f, call, scope, settings, state }) => {
+      await settings(scope, [f.parent]);
+      const session = (
+        await call('select public.aps_open_reconciliation_v3($1,$2) as id', [f.month2.id, scope])
+      ).id;
+      const line = (await state(scope)).selected_lines[0].id;
+      await db.query('reset role');
+      await db.query('savepoint direct_delete');
+      await expectCode('23503', () =>
+        db.query('delete from public.aps_reconciliation_sessions where id=$1', [session]),
+      );
+      await db.query('rollback to savepoint direct_delete');
+      await db.query('release savepoint direct_delete');
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_lines where id=$1',
+            [line],
+          )
+        ).rows[0].n,
+        1,
+      );
+      await db.query('set local role authenticated');
+      await call('select public.aps_delete_reconciliation_session_v3($1)', [session]);
+      await db.query('reset role');
+      assert.equal(
+        (
+          await db.query(
+            'select count(*)::int as n from public.aps_reconciliation_lines where id=$1',
+            [line],
+          )
+        ).rows[0].n,
+        0,
+      );
+      const audit = (
+        await db.query(
+          "select metadata from public.audit_logs where entity_id=$1 and metadata->>'operation'='delete_empty_session'",
+          [session],
+        )
+      ).rows[0];
+      assert.equal(audit.metadata.lines[0].id, line);
+      await db.query('set local role authenticated');
     });
   });
 
@@ -6996,6 +7054,10 @@ try {
       await c2.query('rollback').catch(() => {});
       await c1.end();
       await c2.end();
+      await db.query(
+        'delete from public.aps_reconciliation_lines where session_id=any($1::uuid[])',
+        [sessions],
+      );
       await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
         sessions,
       ]);
@@ -7351,6 +7413,10 @@ try {
       await c2.end();
       await db.query(
         'delete from public.aps_reconciliation_sync_history where session_id=any($1::uuid[])',
+        [sessions],
+      );
+      await db.query(
+        'delete from public.aps_reconciliation_lines where session_id=any($1::uuid[])',
         [sessions],
       );
       await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
@@ -9005,7 +9071,11 @@ try {
       );
       assert.equal(invisible.rows[0].n, 0);
 
-      await db.query('delete from public.aps_reconciliation_sessions where id=$1', [first.id]);
+      // RESTRICT keeps historical line rows even if a privileged caller
+      // attempts to delete their parent directly.
+      await expectCode('23503', () =>
+        db.query('delete from public.aps_reconciliation_sessions where id=$1', [first.id]),
+      );
       assert.equal(
         (
           await db.query(
@@ -9013,9 +9083,10 @@ try {
             [line.id],
           )
         ).rows[0].n,
-        0,
-        'deleting a session cascades to its lines',
+        1,
       );
+      await db.query('delete from public.aps_reconciliation_lines where session_id=$1', [first.id]);
+      await db.query('delete from public.aps_reconciliation_sessions where id=$1', [first.id]);
     } finally {
       await cleanApsReconciliation(fixture, [], sessionIds);
     }
@@ -9985,7 +10056,11 @@ try {
         );
       });
     } finally {
-      // Cascaded session rows must go before removing their classifications.
+      // Remove test fixture lines explicitly before restricted parent rows.
+      await db.query(
+        'delete from public.aps_reconciliation_lines where session_id=any($1::uuid[])',
+        [sessionIds],
+      );
       await db.query('delete from public.aps_reconciliation_sessions where id=any($1::uuid[])', [
         sessionIds,
       ]);
